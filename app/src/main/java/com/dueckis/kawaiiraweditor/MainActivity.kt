@@ -183,7 +183,7 @@ fun RawImagePicker(modifier: Modifier = Modifier) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
+                        .height(200.dp)
                 ) {
                     Text("Rotate")
                     Slider(
@@ -216,93 +216,100 @@ fun RawImagePicker(modifier: Modifier = Modifier) {
                     }
                     Spacer(Modifier.height(8.dp))
 
-                    when (adjustSubTab) {
-                        AdjustSubTab.LIGHT -> {
-                            Column(modifier = Modifier.fillMaxWidth()) {
-                                val ev = sliderPosition
-                                Text("Brightness: ${if (ev >= 0) "+" else ""}${"%.1f".format(ev)} EV")
-                                Slider(
-                                    value = sliderPosition,
-                                    onValueChange = { newValue -> sliderPosition = newValue },
-                                    valueRange = -20f..20f,
-                                )
-                                Spacer(Modifier.height(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(160.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        when (adjustSubTab) {
+                            AdjustSubTab.LIGHT -> {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    val ev = sliderPosition
+                                    Text("Brightness: ${if (ev >= 0) "+" else ""}${"%.1f".format(ev)} EV")
+                                    Slider(
+                                        value = sliderPosition,
+                                        onValueChange = { newValue -> sliderPosition = newValue },
+                                        valueRange = -20f..20f,
+                                    )
+                                    Spacer(Modifier.height(8.dp))
 
-                                Text("Contrast (coming soon)")
-                                Slider(
-                                    value = contrast,
-                                    onValueChange = { contrast = it },
-                                    valueRange = -100f..100f,
-                                    enabled = false
-                                )
+                                    Text("Contrast (coming soon)")
+                                    Slider(
+                                        value = contrast,
+                                        onValueChange = { contrast = it },
+                                        valueRange = -100f..100f,
+                                        enabled = false
+                                    )
 
-                                Text("Whites (coming soon)")
-                                Slider(
-                                    value = whites,
-                                    onValueChange = { whites = it },
-                                    valueRange = -100f..100f,
-                                    enabled = false
-                                )
+                                    Text("Whites (coming soon)")
+                                    Slider(
+                                        value = whites,
+                                        onValueChange = { whites = it },
+                                        valueRange = -100f..100f,
+                                        enabled = false
+                                    )
 
-                                Text("Blacks (coming soon)")
-                                Slider(
-                                    value = blacks,
-                                    onValueChange = { blacks = it },
-                                    valueRange = -100f..100f,
-                                    enabled = false
-                                )
+                                    Text("Blacks (coming soon)")
+                                    Slider(
+                                        value = blacks,
+                                        onValueChange = { blacks = it },
+                                        valueRange = -100f..100f,
+                                        enabled = false
+                                    )
 
-                                Text("Highlights (coming soon)")
-                                Slider(
-                                    value = highlights,
-                                    onValueChange = { highlights = it },
-                                    valueRange = -100f..100f,
-                                    enabled = false
-                                )
+                                    Text("Highlights (coming soon)")
+                                    Slider(
+                                        value = highlights,
+                                        onValueChange = { highlights = it },
+                                        valueRange = -100f..100f,
+                                        enabled = false
+                                    )
 
-                                Text("Shadows (coming soon)")
-                                Slider(
-                                    value = shadows,
-                                    onValueChange = { shadows = it },
-                                    valueRange = -100f..100f,
-                                    enabled = false
-                                )
+                                    Text("Shadows (coming soon)")
+                                    Slider(
+                                        value = shadows,
+                                        onValueChange = { shadows = it },
+                                        valueRange = -100f..100f,
+                                        enabled = false
+                                    )
+                                }
                             }
-                        }
-                        AdjustSubTab.COLOR -> {
-                            Column(modifier = Modifier.fillMaxWidth()) {
-                                Text("Temperature (coming soon)")
-                                Slider(
-                                    value = temperature,
-                                    onValueChange = { temperature = it },
-                                    valueRange = -100f..100f,
-                                    enabled = false
-                                )
-                                Text("Tint (coming soon)")
-                                Slider(
-                                    value = tint,
-                                    onValueChange = { tint = it },
-                                    valueRange = -100f..100f,
-                                    enabled = false
-                                )
-                                Text("Saturation (coming soon)")
-                                Slider(
-                                    value = saturation,
-                                    onValueChange = { saturation = it },
-                                    valueRange = -100f..100f,
-                                    enabled = false
-                                )
-                                Text("Vibrance (coming soon)")
-                                Slider(
-                                    value = vibrance,
-                                    onValueChange = { vibrance = it },
-                                    valueRange = -100f..100f,
-                                    enabled = false
-                                )
+                            AdjustSubTab.COLOR -> {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Text("Temperature (coming soon)")
+                                    Slider(
+                                        value = temperature,
+                                        onValueChange = { temperature = it },
+                                        valueRange = -100f..100f,
+                                        enabled = false
+                                    )
+                                    Text("Tint (coming soon)")
+                                    Slider(
+                                        value = tint,
+                                        onValueChange = { tint = it },
+                                        valueRange = -100f..100f,
+                                        enabled = false
+                                    )
+                                    Text("Saturation (coming soon)")
+                                    Slider(
+                                        value = saturation,
+                                        onValueChange = { saturation = it },
+                                        valueRange = -100f..100f,
+                                        enabled = false
+                                    )
+                                    Text("Vibrance (coming soon)")
+                                    Slider(
+                                        value = vibrance,
+                                        onValueChange = { vibrance = it },
+                                        valueRange = -100f..100f,
+                                        enabled = false
+                                    )
+                                }
                             }
-                        }
-                        AdjustSubTab.EFFECTS -> {
-                            Text("Effects coming soon")
+                            AdjustSubTab.EFFECTS -> {
+                                Text("Effects coming soon")
+                            }
                         }
                     }
                 }
