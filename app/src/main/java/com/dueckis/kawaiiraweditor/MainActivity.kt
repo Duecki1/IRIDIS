@@ -1,7 +1,6 @@
 package com.dueckis.kawaiiraweditor
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -23,14 +22,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.ui.theme.KawaiiRawEditorTheme
-import com.homesoft.photo.libraw.LibRaw
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.lang.reflect.Field
-import java.nio.Buffer
-import java.nio.ByteBuffer
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,8 +50,7 @@ fun RawImagePicker(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    // This buffer is allocated only once and then reused.
-    var reusableBuffer by remember { mutableStateOf<ByteBuffer?>(null) }
+    var originalRawBytes by remember { mutableStateOf<ByteArray?>(null) }
     var displayedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
@@ -69,18 +63,14 @@ fun RawImagePicker(modifier: Modifier = Modifier) {
             coroutineScope.launch {
                 isLoading = true
                 error = null
-                reusableBuffer = null
+                originalRawBytes = null
                 displayedBitmap = null
                 try {
                     val rawBytes = withContext(Dispatchers.IO) {
                         context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                     }
                     if (rawBytes != null) {
-                        // Allocate the expensive buffer only ONCE.
-                        reusableBuffer = ByteBuffer.allocateDirect(rawBytes.size).apply {
-                            put(rawBytes)
-                            flip()
-                        }
+                        originalRawBytes = rawBytes
                         sliderPosition = 1.0f
                         debouncedExposure = 1.0f
                     } else {
@@ -101,16 +91,18 @@ fun RawImagePicker(modifier: Modifier = Modifier) {
         debouncedExposure = sliderPosition
     }
 
-    LaunchedEffect(reusableBuffer, debouncedExposure) {
-        val buffer = reusableBuffer ?: return@LaunchedEffect
+    LaunchedEffect(originalRawBytes, debouncedExposure) {
+        val rawBytes = originalRawBytes ?: return@LaunchedEffect
+
         isLoading = true
+        // Call our new JNI-powered decoder
         val newBitmap = withContext(Dispatchers.Default) {
-            decodeFromBuffer(buffer, debouncedExposure)
+            LibRawDecoder.decode(rawBytes, debouncedExposure)
         }
         if (newBitmap != null) {
             displayedBitmap = newBitmap
         } else {
-            error = "Failed to decode image with new exposure."
+            error = "Failed to decode image with new exposure. Check Logcat for JNI errors."
         }
         isLoading = false
     }
@@ -128,19 +120,26 @@ fun RawImagePicker(modifier: Modifier = Modifier) {
             modifier = Modifier.weight(1f),
             contentAlignment = Alignment.Center
         ) {
-            if (displayedBitmap != null) {
+            // Read the state variable into a local immutable variable
+            val currentBitmap = displayedBitmap
+            val currentError = error
+
+            if (currentBitmap != null) {
                 Image(
-                    bitmap = displayedBitmap!!.asImageBitmap(),
+                    bitmap = currentBitmap.asImageBitmap(),
                     contentDescription = "RAW Image",
                     modifier = Modifier.fillMaxSize()
                 )
-            } else error?.let { Text(text = it, color = androidx.compose.ui.graphics.Color.Red) }
+            } else if (currentError != null) {
+                // Use the local variable here
+                Text(text = currentError, color = androidx.compose.ui.graphics.Color.Red)
+            }
             if (isLoading) {
                 CircularProgressIndicator()
             }
         }
 
-        if (reusableBuffer != null) {
+        if (originalRawBytes != null) {
             Spacer(Modifier.height(16.dp))
             Text("Exposure: ${"%.2f".format(debouncedExposure)}")
             Slider(
@@ -149,43 +148,6 @@ fun RawImagePicker(modifier: Modifier = Modifier) {
                 valueRange = 0.25f..4.0f,
             )
         }
-    }
-}
-
-fun getDirectBufferAddress(buffer: ByteBuffer): Long {
-    val addressField: Field = Buffer::class.java.getDeclaredField("address")
-    addressField.isAccessible = true
-    return addressField.getLong(buffer)
-}
-
-fun decodeFromBuffer(buffer: ByteBuffer, exposure: Float): Bitmap? {
-    return try {
-        // CRITICAL: Rewind the buffer before each use to reset its position to 0.
-        buffer.rewind()
-        val address = getDirectBufferAddress(buffer)
-
-        val options = BitmapFactory.Options().apply {
-            inMutable = true
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
-
-        try {
-            val rawOptions = IntArray(5)
-            rawOptions[0] = 1
-            rawOptions[1] = 0
-            rawOptions[2] = 3
-            rawOptions[3] = 0
-            rawOptions[4] = (exposure * 1000).toInt()
-            val field = options.javaClass.getField("inRawOptions")
-            field.set(options, rawOptions)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        LibRaw.decodeBitmap(address, buffer.capacity(), options)
-    } catch (e: Exception) {
-        e.printStackTrace()
-        null
     }
 }
 
