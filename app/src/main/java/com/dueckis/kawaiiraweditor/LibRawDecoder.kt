@@ -8,4 +8,5 @@ object LibRawDecoder {
     }
 
     external fun decode(rawData: ByteArray, exposure: Float): Bitmap?
+    external fun decodeFullRes(rawData: ByteArray, exposure: Float): Bitmap?
 }
