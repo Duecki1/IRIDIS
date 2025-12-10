@@ -33,56 +33,92 @@ static inline float srgbEncode(float linear) {
     return 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
 }
 
-// Filmic curve inspired by darktable's filmic rgb (simplified, single channel).
-static inline float toneMap(float linear) {
+// sRGB decode to linear [0,1].
+static inline float srgbDecode(float srgb) {
+    float v = std::max(0.0f, srgb);
+    if (v <= 0.04045f) {
+        return v / 12.92f;
+    }
+    return std::pow((v + 0.055f) / 1.055f, 2.4f);
+}
+
+struct ExposureShaderParams {
+    float exposure;          // multiplier derived from slider (2^EV)
+    float contrast;          // midtone contrast, from slider
+    float whites;            // whites adjustment, from slider
+    float blacks;            // blacks adjustment, from slider
+    float whitePoint;        // scene-referred white for filmic mapping
+    float toeStrength;       // protects shadows
+    float shoulderStrength;  // protects highlights
+    float shadowLift;        // prevents crushed blacks when darkening
+};
+
+static ExposureShaderParams makeExposureShaderParams(float exposure, float contrast, float whites, float blacks) {
+    // Keep exposure positive while allowing deep under/over corrections.
+    const float safeExposure = std::max(1e-5f, exposure); // supports ~ -15 EV while staying > 0
+    const float ev = std::log2(safeExposure);
+
+    ExposureShaderParams params{};
+    params.exposure = safeExposure;
+    params.contrast = std::max(0.1f, contrast); // Ensure contrast is positive
+    params.whites = whites;
+    params.blacks = blacks;
+    // More headroom when lifting exposure to keep highlights from clipping.
+    params.whitePoint = 6.0f + std::max(0.0f, ev) * 1.25f;
+    // Slightly stronger toe when pulling exposure down to keep shadow detail.
+    params.toeStrength = 0.18f + std::max(0.0f, -ev) * 0.05f;
+    // Stronger shoulder when boosting exposure to roll highlights gently.
+    params.shoulderStrength = 0.38f + std::max(0.0f, ev) * 0.10f;
+    params.shadowLift = 0.01f + std::max(0.0f, -ev) * 0.010f;
+    return params;
+}
+
+// Reinhard tone mapping operator to compress HDR and retain local contrast.
+static inline float toneMapReinhard(float linear, const ExposureShaderParams &p) {
     const float x = std::max(0.0f, linear);
-    // Parameters tuned for a gentle shoulder similar to filmic default.
-    const float blackPoint = 0.0f;  // scene-referred black
-    const float whitePoint = 8.0f;  // scene-referred white; higher = more headroom
-    const float contrast = 1.15f;   // midtone contrast
-
-    // Normalize to [0,1] scene range.
-    const float sceneNorm = (x - blackPoint) / std::max(whitePoint - blackPoint, 1e-3f);
-    const float sceneClamped = std::max(0.0f, sceneNorm);
-
-    // Toe/shoulder shaping (logistic-ish).
-    const float toeStrength = 0.20f;
-    const float shoulderStrength = 0.45f;
-    const float t = sceneClamped;
-    const float toe = (std::exp(toeStrength * t) - 1.0f) / (std::exp(toeStrength) - 1.0f);
-    const float shoulder = 1.0f - (std::exp(shoulderStrength * (1.0f - t)) - 1.0f) /
-                                     (std::exp(shoulderStrength) - 1.0f);
-    const float blended = toe * (1.0f - t) + shoulder * t;
-
-    // Apply midtone contrast.
-    const float midGrayIn = 0.18f;
-    const float midGrayOut = 0.18f;
-    const float a = std::pow(midGrayOut, contrast) / std::pow(midGrayIn, contrast);
-    const float out = a * std::pow(blended, contrast);
-    return out;
+    // Apply contrast using a power function centered around mid-gray (0.18)
+    const float midGray = 0.18f;
+    float contrasted = x;
+    if (x > 1e-5f) {
+        contrasted = std::pow(x / midGray, p.contrast) * midGray;
+    }
+    const float compressed = contrasted / (contrasted + 1.0f);
+    return compressed;
 }
 
-static float clampLibRawExposureShift(float linear_exp_shift_value) {
-    // LibRaw defines the usable range in linear scale,
-    // from 0.25 (2-stops darker) to 8.0 (3-stops lighter).
-    // The default (no shift) is 1.0.
-    const float min_shift_factor = 0.25f; // -2 EV
-    const float max_shift_factor = 8.0f;  // +3 EV
+// Custom exposure shader: apply EV multiplier, protect shadows/highlights, then filmic map.
+static inline float applyExposureShader(float linear, const ExposureShaderParams &params) {
+    float scene = std::max(0.0f, linear) * params.exposure;
 
-    // Clamp the input value within the specified boundaries.
-    return std::max(min_shift_factor, std::min(max_shift_factor, linear_exp_shift_value));
-}
+    // Whites adjustment - affects the brightest parts of the image
+    if (params.whites != 0.0f) {
+        float gain = 1.0f + params.whites * 0.1f;
+        scene *= gain;
+    }
 
-static float clampExposure(float exposureStops) {
-    const float minExposure = std::pow(2.0f, -5.0f);
-    const float maxExposure = std::pow(2.0f, 5.0f);
-    return std::max(minExposure, std::min(maxExposure, exposureStops));
-}
+    // Blacks adjustment - affects the darkest parts of the image
+    if (params.blacks != 0.0f) {
+        float lift = params.blacks * 0.01f;
+        scene = std::max(0.0f, scene + lift);
+    }
 
-static void configureExposure(LibRaw &raw, float exposureStops) {
-    raw.imgdata.params.no_auto_bright = 1;
-    raw.imgdata.params.exp_correc = 1;
-    raw.imgdata.params.exp_shift = clampExposure(exposureStops);
+    // Lift blacks slightly to keep shadow texture when darkening.
+    const float shadowLift = params.shadowLift;
+    if (shadowLift > 0.0f) {
+        const float liftMask = 1.0f - std::exp(-scene * 12.0f);
+        scene += shadowLift * liftMask;
+    }
+
+    // Soft knee before filmic shoulder to preserve highlight detail.
+    const float kneeStart = params.whitePoint * 0.82f;
+    if (scene > kneeStart) {
+        const float range = std::max(params.whitePoint - kneeStart, 1e-3f);
+        const float t = (scene - kneeStart) / range;
+        const float knee = 1.0f - std::exp(-params.shoulderStrength * t);
+        scene = kneeStart + range * knee;
+    }
+
+    return toneMapReinhard(scene, params);
 }
 
 static void configureWhiteBalance(LibRaw &raw) {
@@ -96,6 +132,14 @@ static void configureOutput(LibRaw &raw, bool halfSizeForSpeed) {
     raw.imgdata.params.output_bps = 16;
     raw.imgdata.params.gamm[0] = 1.0f;
     raw.imgdata.params.gamm[1] = 1.0f;
+}
+
+static void configureProcessing(LibRaw &raw, bool halfSizeForSpeed) {
+    // Keep LibRaw neutral; exposure is handled by our custom shader.
+    raw.imgdata.params.no_auto_bright = 1;
+    raw.imgdata.params.exp_correc = 0;
+    raw.imgdata.params.exp_shift = 1.0f;
+    configureOutput(raw, halfSizeForSpeed);
 }
 
 static void throwIfJavaException(JNIEnv *env, const char *context) {
@@ -136,15 +180,9 @@ static jobject createArgb8888Bitmap(JNIEnv *env, uint32_t width, uint32_t height
     return bitmap;
 }
 
-static void applyExposureToBitmap(JNIEnv *env, jobject bitmap, float exposure) {
+static void applyExposureToBitmap(JNIEnv *env, jobject bitmap, float exposure, float contrast, float whites, float blacks) {
     if (!bitmap) {
         throw std::runtime_error("Bitmap is null");
-    }
-    if (exposure <= 0.f) {
-        exposure = 0.f;
-    }
-    if (exposure == 1.0f) {
-        return;
     }
 
     AndroidBitmapInfo info{};
@@ -160,15 +198,23 @@ static void applyExposureToBitmap(JNIEnv *env, jobject bitmap, float exposure) {
         throw std::runtime_error("Failed to lock bitmap pixels");
     }
 
+    const ExposureShaderParams shader = makeExposureShaderParams(exposure, contrast, whites, blacks);
     auto *dst = static_cast<uint8_t *>(pixels);
-    const float multiplier = exposure;
     for (uint32_t y = 0; y < info.height; ++y) {
         uint8_t *row = dst + y * info.stride;
         for (uint32_t x = 0; x < info.width; ++x) {
             uint8_t *px = row + x * 4;
-            px[0] = clampToByte(px[0] * multiplier);
-            px[1] = clampToByte(px[1] * multiplier);
-            px[2] = clampToByte(px[2] * multiplier);
+            const float rLin = srgbDecode(static_cast<float>(px[0]) / 255.0f);
+            const float gLin = srgbDecode(static_cast<float>(px[1]) / 255.0f);
+            const float bLin = srgbDecode(static_cast<float>(px[2]) / 255.0f);
+
+            const float rTone = applyExposureShader(rLin, shader);
+            const float gTone = applyExposureShader(gLin, shader);
+            const float bTone = applyExposureShader(bLin, shader);
+
+            px[0] = clampToByte(srgbEncode(rTone) * 255.0f);
+            px[1] = clampToByte(srgbEncode(gTone) * 255.0f);
+            px[2] = clampToByte(srgbEncode(bTone) * 255.0f);
         }
     }
 
@@ -182,6 +228,9 @@ static jobject createBitmapFromRgbData(JNIEnv *env,
                                        uint32_t channels,
                                        uint32_t bitsPerChannel,
                                        float exposure,
+                                       float contrast,
+                                       float whites,
+                                       float blacks,
                                        uint32_t maxWidth,
                                        uint32_t maxHeight) {
     if (!src) {
@@ -221,6 +270,7 @@ static jobject createBitmapFromRgbData(JNIEnv *env,
     const float invScale = 1.0f / scale;
     if (bitsPerChannel == 8) {
         const uint8_t *srcBytes = static_cast<const uint8_t *>(src);
+        const ExposureShaderParams shader = makeExposureShaderParams(exposure, contrast, whites, blacks);
         for (uint32_t y = 0; y < outH; ++y) {
             const uint32_t srcY = std::min(height - 1, static_cast<uint32_t>(y * invScale));
             const uint8_t *srcRow = srcBytes + srcY * width * channels;
@@ -230,13 +280,13 @@ static jobject createBitmapFromRgbData(JNIEnv *env,
                 const uint8_t *srcPixel = srcRow + srcX * channels;
                 uint8_t *dstPixel = dstRow + x * 4;
 
-                const float rLin = (static_cast<float>(srcPixel[0]) / 255.0f) * exposure;
-                const float gLin = (static_cast<float>(srcPixel[1]) / 255.0f) * exposure;
-                const float bLin = (static_cast<float>(srcPixel[2]) / 255.0f) * exposure;
+                const float rLin = static_cast<float>(srcPixel[0]) / 255.0f;
+                const float gLin = static_cast<float>(srcPixel[1]) / 255.0f;
+                const float bLin = static_cast<float>(srcPixel[2]) / 255.0f;
 
-                const float rTone = toneMap(rLin);
-                const float gTone = toneMap(gLin);
-                const float bTone = toneMap(bLin);
+                const float rTone = applyExposureShader(rLin, shader);
+                const float gTone = applyExposureShader(gLin, shader);
+                const float bTone = applyExposureShader(bLin, shader);
 
                 dstPixel[0] = clampToByte(srgbEncode(rTone) * 255.0f);
                 dstPixel[1] = clampToByte(srgbEncode(gTone) * 255.0f);
@@ -246,6 +296,7 @@ static jobject createBitmapFromRgbData(JNIEnv *env,
         }
     } else if (bitsPerChannel == 16) {
         const uint16_t *srcWords = static_cast<const uint16_t *>(src);
+        const ExposureShaderParams shader = makeExposureShaderParams(exposure, contrast, whites, blacks);
         for (uint32_t y = 0; y < outH; ++y) {
             const uint32_t srcY = std::min(height - 1, static_cast<uint32_t>(y * invScale));
             const uint16_t *srcRow = srcWords + srcY * width * channels;
@@ -255,13 +306,13 @@ static jobject createBitmapFromRgbData(JNIEnv *env,
                 const uint16_t *srcPixel = srcRow + srcX * channels;
                 uint8_t *dstPixel = dstRow + x * 4;
 
-                const float rLin = (static_cast<float>(srcPixel[0]) / 65535.0f) * exposure;
-                const float gLin = (static_cast<float>(srcPixel[1]) / 65535.0f) * exposure;
-                const float bLin = (static_cast<float>(srcPixel[2]) / 65535.0f) * exposure;
+                const float rLin = static_cast<float>(srcPixel[0]) / 65535.0f;
+                const float gLin = static_cast<float>(srcPixel[1]) / 65535.0f;
+                const float bLin = static_cast<float>(srcPixel[2]) / 65535.0f;
 
-                const float rTone = toneMap(rLin);
-                const float gTone = toneMap(gLin);
-                const float bTone = toneMap(bLin);
+                const float rTone = applyExposureShader(rLin, shader);
+                const float gTone = applyExposureShader(gLin, shader);
+                const float bTone = applyExposureShader(bLin, shader);
 
                 dstPixel[0] = clampToByte(srgbEncode(rTone) * 255.0f);
                 dstPixel[1] = clampToByte(srgbEncode(gTone) * 255.0f);
@@ -280,7 +331,10 @@ static jobject createBitmapFromRgbData(JNIEnv *env,
 
 static jobject decodeJpegPreview(JNIEnv *env,
                                  const libraw_processed_image_t *image,
-                                 float exposure) {
+                                 float exposure,
+                                 float contrast,
+                                 float whites,
+                                 float blacks) {
     if (!image || !image->data || image->data_size == 0) {
         throw std::runtime_error("Invalid JPEG preview buffer");
     }
@@ -344,14 +398,17 @@ static jobject decodeJpegPreview(JNIEnv *env,
         throw std::runtime_error("BitmapFactory returned null for preview");
     }
 
-    applyExposureToBitmap(env, bitmap, exposure);
+    applyExposureToBitmap(env, bitmap, exposure, contrast, whites, blacks);
     return bitmap;
 }
 
 static jobject decodePreview(JNIEnv *env,
                              const uint8_t *raw_bytes,
                              size_t raw_size,
-                             float exposure) {
+                             float exposure,
+                             float contrast,
+                             float whites,
+                             float blacks) {
     LibRaw RawProcessor;
     libraw_processed_image_t *preview = nullptr;
 
@@ -375,7 +432,7 @@ static jobject decodePreview(JNIEnv *env,
 
         jobject bitmap = nullptr;
         if (preview->type == LIBRAW_IMAGE_JPEG) {
-            bitmap = decodeJpegPreview(env, preview, exposure);
+            bitmap = decodeJpegPreview(env, preview, exposure, contrast, whites, blacks);
         } else if (preview->type == LIBRAW_IMAGE_BITMAP &&
                    (preview->bits == 8 || preview->bits == 16) &&
                    preview->colors >= 3) {
@@ -387,6 +444,9 @@ static jobject decodePreview(JNIEnv *env,
                     preview->colors,
                     preview->bits,
                     exposure,
+                    contrast,
+                    whites,
+                    blacks,
                     1920,
                     1080);
         } else {
@@ -417,6 +477,9 @@ static jobject decodeFullRaw(JNIEnv *env,
                              const uint8_t *raw_bytes,
                              size_t raw_size,
                              float exposure,
+                             float contrast,
+                             float whites,
+                             float blacks,
                              bool halfSizeForSpeed,
                              uint32_t maxWidth,
                              uint32_t maxHeight) {
@@ -431,9 +494,8 @@ static jobject decodeFullRaw(JNIEnv *env,
             throw std::runtime_error(RawProcessor.strerror(ret));
         }
 
-        configureExposure(RawProcessor, exposure);
+        configureProcessing(RawProcessor, halfSizeForSpeed);
         //configureWhiteBalance(RawProcessor);
-        configureOutput(RawProcessor, halfSizeForSpeed);
 
         ret = RawProcessor.unpack();
         if (ret != LIBRAW_SUCCESS) {
@@ -471,7 +533,10 @@ static jobject decodeFullRaw(JNIEnv *env,
                 image->height,
                 image->colors,
                 image->bits,
-                1.0f /* exposure already applied inside LibRaw */,
+                exposure,
+                contrast,
+                whites,
+                blacks,
                 maxWidth,
                 maxHeight);
 
@@ -492,7 +557,10 @@ Java_com_dueckis_kawaiiraweditor_LibRawDecoder_decode(
         JNIEnv *env,
         jobject /* this */,
         jbyteArray raw_data,
-        jfloat exposure) {
+        jfloat exposure,
+        jfloat contrast,
+        jfloat whites,
+        jfloat blacks) {
 
     jbyte *raw_bytes_ptr = env->GetByteArrayElements(raw_data, nullptr);
     if (!raw_bytes_ptr) {
@@ -510,10 +578,10 @@ Java_com_dueckis_kawaiiraweditor_LibRawDecoder_decode(
     try {
         // Preview path: fast (half-size) with 1080p cap.
         try {
-            bitmap = decodeFullRaw(env, raw_bytes.data(), raw_size, exposure, true, 1920, 1080);
+            bitmap = decodeFullRaw(env, raw_bytes.data(), raw_size, exposure, contrast, whites, blacks, true, 1920, 1080);
         } catch (const std::exception &fullError) {
             LOGE("Full RAW decode failed: %s", fullError.what());
-            bitmap = decodePreview(env, raw_bytes.data(), raw_size, exposure);
+            bitmap = decodePreview(env, raw_bytes.data(), raw_size, exposure, contrast, whites, blacks);
         }
     } catch (const std::exception &fatalError) {
         LOGE("Decoding failed: %s", fatalError.what());
@@ -528,7 +596,10 @@ Java_com_dueckis_kawaiiraweditor_LibRawDecoder_decodeFullRes(
         JNIEnv *env,
         jobject /* this */,
         jbyteArray raw_data,
-        jfloat exposure) {
+        jfloat exposure,
+        jfloat contrast,
+        jfloat whites,
+        jfloat blacks) {
 
     jbyte *raw_bytes_ptr = env->GetByteArrayElements(raw_data, nullptr);
     if (!raw_bytes_ptr) {
@@ -543,7 +614,7 @@ Java_com_dueckis_kawaiiraweditor_LibRawDecoder_decodeFullRes(
 
     jobject bitmap = nullptr;
     try {
-        bitmap = decodeFullRaw(env, raw_bytes.data(), raw_size, exposure, false, 0, 0);
+        bitmap = decodeFullRaw(env, raw_bytes.data(), raw_size, exposure, contrast, whites, blacks, false, 0, 0);
     } catch (const std::exception &fatalError) {
         LOGE("Full-res decoding failed: %s", fatalError.what());
         bitmap = nullptr;

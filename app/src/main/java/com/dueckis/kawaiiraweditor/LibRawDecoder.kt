@@ -7,6 +7,6 @@ object LibRawDecoder {
         System.loadLibrary("kawaiiraweditor")
     }
 
-    external fun decode(rawData: ByteArray, exposure: Float): Bitmap?
-    external fun decodeFullRes(rawData: ByteArray, exposure: Float): Bitmap?
+    external fun decode(rawData: ByteArray, exposure: Float, contrast: Float, whites: Float, blacks: Float): Bitmap?
+    external fun decodeFullRes(rawData: ByteArray, exposure: Float, contrast: Float, whites: Float, blacks: Float): Bitmap?
 }

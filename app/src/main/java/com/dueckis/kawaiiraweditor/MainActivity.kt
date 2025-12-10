@@ -74,15 +74,18 @@ fun RawImagePicker(modifier: Modifier = Modifier) {
     var isLoading by remember { mutableStateOf(false) }
     var isExporting by remember { mutableStateOf(false) }
 
-    // Slider is in EV stops (Lightroom-like). 0 = neutral, range -5..+5.
+    // Slider is in EV stops (Lightroom-like). 0 = neutral, range -15..+15.
     var sliderPosition by remember { mutableStateOf(0.0f) }
     var debouncedExposureMultiplier by remember { mutableStateOf(1.0f) }
     var rotateDegrees by remember { mutableStateOf(0f) }
 
-    // Placeholder states for upcoming adjustments (not yet applied)
-    var contrast by remember { mutableStateOf(0f) }
-    var whites by remember { mutableStateOf(0f) }
-    var blacks by remember { mutableStateOf(0f) }
+        // Placeholder states for upcoming adjustments (not yet applied)
+    var contrastSliderPosition by remember { mutableStateOf(0f) }
+    var debouncedContrast by remember { mutableStateOf(1.0f) }
+    var whitesSliderPosition by remember { mutableStateOf(0f) }
+    var debouncedWhites by remember { mutableStateOf(0f) }
+    var blacksSliderPosition by remember { mutableStateOf(0f) }
+    var debouncedBlacks by remember { mutableStateOf(0f) }
     var highlights by remember { mutableStateOf(0f) }
     var shadows by remember { mutableStateOf(0f) }
     var temperature by remember { mutableStateOf(0f) }
@@ -108,6 +111,12 @@ fun RawImagePicker(modifier: Modifier = Modifier) {
                         originalRawBytes = rawBytes
                         sliderPosition = 0.0f
                         debouncedExposureMultiplier = 1.0f
+                        contrastSliderPosition = 0f
+                        debouncedContrast = 1.0f
+                        whitesSliderPosition = 0f
+                        debouncedWhites = 0f
+                        blacksSliderPosition = 0f
+                        debouncedBlacks = 0f
                     } else {
                         error = "Could not read file."
                         isLoading = false
@@ -127,13 +136,29 @@ fun RawImagePicker(modifier: Modifier = Modifier) {
         debouncedExposureMultiplier = 2.0f.pow(sliderPosition)
     }
 
-    LaunchedEffect(originalRawBytes, debouncedExposureMultiplier) {
+    LaunchedEffect(contrastSliderPosition) {
+        delay(200)
+        // Map slider 0..100 to contrast 1.0..2.0
+        debouncedContrast = 1.0f + contrastSliderPosition / 100.0f
+    }
+
+    LaunchedEffect(whitesSliderPosition) {
+        delay(200)
+        debouncedWhites = whitesSliderPosition / 100.0f
+    }
+
+    LaunchedEffect(blacksSliderPosition) {
+        delay(200)
+        debouncedBlacks = blacksSliderPosition / 100.0f
+    }
+
+    LaunchedEffect(originalRawBytes, debouncedExposureMultiplier, debouncedContrast, debouncedWhites, debouncedBlacks) {
         val rawBytes = originalRawBytes ?: return@LaunchedEffect
 
         isLoading = true
         // Call our new JNI-powered decoder
         val newBitmap = withContext(Dispatchers.Default) {
-            LibRawDecoder.decode(rawBytes, debouncedExposureMultiplier)
+            LibRawDecoder.decode(rawBytes, debouncedExposureMultiplier, debouncedContrast, debouncedWhites, debouncedBlacks)
         }
         if (newBitmap != null) {
             displayedBitmap = newBitmap
@@ -230,32 +255,32 @@ fun RawImagePicker(modifier: Modifier = Modifier) {
                                     Slider(
                                         value = sliderPosition,
                                         onValueChange = { newValue -> sliderPosition = newValue },
-                                        valueRange = -5f..5f,
+                                        valueRange = -15f..15f,
                                     )
                                     Spacer(Modifier.height(8.dp))
 
-                                    Text("Contrast (coming soon)")
+                                    Text("Contrast")
                                     Slider(
-                                        value = contrast,
-                                        onValueChange = { contrast = it },
-                                        valueRange = -100f..100f,
-                                        enabled = false
+                                        value = contrastSliderPosition,
+                                        onValueChange = { contrastSliderPosition = it },
+                                        valueRange = 0f..100f,
+                                        enabled = true
                                     )
 
-                                    Text("Whites (coming soon)")
+                                    Text("Whites")
                                     Slider(
-                                        value = whites,
-                                        onValueChange = { whites = it },
+                                        value = whitesSliderPosition,
+                                        onValueChange = { whitesSliderPosition = it },
                                         valueRange = -100f..100f,
-                                        enabled = false
+                                        enabled = true
                                     )
 
-                                    Text("Blacks (coming soon)")
+                                    Text("Blacks")
                                     Slider(
-                                        value = blacks,
-                                        onValueChange = { blacks = it },
+                                        value = blacksSliderPosition,
+                                        onValueChange = { blacksSliderPosition = it },
                                         valueRange = -100f..100f,
-                                        enabled = false
+                                        enabled = true
                                     )
 
                                     Text("Highlights (coming soon)")
@@ -335,7 +360,7 @@ fun RawImagePicker(modifier: Modifier = Modifier) {
                                 exportStatus = null
                                 try {
                                     val fullBitmap = withContext(Dispatchers.Default) {
-                                        LibRawDecoder.decodeFullRes(rawBytes, debouncedExposureMultiplier)
+                                        LibRawDecoder.decodeFullRes(rawBytes, debouncedExposureMultiplier, debouncedContrast, debouncedWhites, debouncedBlacks)
                                     }
                                     if (fullBitmap == null) {
                                         error = "Export failed: native decode returned null"
