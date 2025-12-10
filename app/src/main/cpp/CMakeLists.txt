@@ -6,7 +6,7 @@ project("kawaiiraweditor")
 
 # Use file(GLOB_RECURSE ...) to find all the C and C++ source files for LibRaw, including nested subdirectories.
 # This is more robust than listing them manually.
-file(GLOB_RECURSE LIBRAW_SOURCES
+file(GLOB_RECURSE LIBRAW_SOURCES CONFIGURE_DEPENDS
         "libraw/internal/*.cpp"
         "libraw/src/*.cpp"
         "libraw/src/**/*.cpp"

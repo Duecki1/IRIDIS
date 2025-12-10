@@ -74,7 +74,7 @@ fun RawImagePicker(modifier: Modifier = Modifier) {
     var isLoading by remember { mutableStateOf(false) }
     var isExporting by remember { mutableStateOf(false) }
 
-    // Slider is in EV stops (Lightroom-like). 0 = neutral, range -20..+20 for headroom.
+    // Slider is in EV stops (Lightroom-like). 0 = neutral, range -5..+5.
     var sliderPosition by remember { mutableStateOf(0.0f) }
     var debouncedExposureMultiplier by remember { mutableStateOf(1.0f) }
     var rotateDegrees by remember { mutableStateOf(0f) }
@@ -230,7 +230,7 @@ fun RawImagePicker(modifier: Modifier = Modifier) {
                                     Slider(
                                         value = sliderPosition,
                                         onValueChange = { newValue -> sliderPosition = newValue },
-                                        valueRange = -20f..20f,
+                                        valueRange = -5f..5f,
                                     )
                                     Spacer(Modifier.height(8.dp))
 

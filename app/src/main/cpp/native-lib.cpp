@@ -24,6 +24,80 @@ static inline uint8_t clampToByte(float value) {
     return static_cast<uint8_t>(value + 0.5f);
 }
 
+// Simple sRGB encode from linear [0,1].
+static inline float srgbEncode(float linear) {
+    float v = std::max(0.0f, linear);
+    if (v <= 0.0031308f) {
+        return 12.92f * v;
+    }
+    return 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
+}
+
+// Filmic curve inspired by darktable's filmic rgb (simplified, single channel).
+static inline float toneMap(float linear) {
+    const float x = std::max(0.0f, linear);
+    // Parameters tuned for a gentle shoulder similar to filmic default.
+    const float blackPoint = 0.0f;  // scene-referred black
+    const float whitePoint = 8.0f;  // scene-referred white; higher = more headroom
+    const float contrast = 1.15f;   // midtone contrast
+
+    // Normalize to [0,1] scene range.
+    const float sceneNorm = (x - blackPoint) / std::max(whitePoint - blackPoint, 1e-3f);
+    const float sceneClamped = std::max(0.0f, sceneNorm);
+
+    // Toe/shoulder shaping (logistic-ish).
+    const float toeStrength = 0.20f;
+    const float shoulderStrength = 0.45f;
+    const float t = sceneClamped;
+    const float toe = (std::exp(toeStrength * t) - 1.0f) / (std::exp(toeStrength) - 1.0f);
+    const float shoulder = 1.0f - (std::exp(shoulderStrength * (1.0f - t)) - 1.0f) /
+                                     (std::exp(shoulderStrength) - 1.0f);
+    const float blended = toe * (1.0f - t) + shoulder * t;
+
+    // Apply midtone contrast.
+    const float midGrayIn = 0.18f;
+    const float midGrayOut = 0.18f;
+    const float a = std::pow(midGrayOut, contrast) / std::pow(midGrayIn, contrast);
+    const float out = a * std::pow(blended, contrast);
+    return out;
+}
+
+static float clampLibRawExposureShift(float linear_exp_shift_value) {
+    // LibRaw defines the usable range in linear scale,
+    // from 0.25 (2-stops darker) to 8.0 (3-stops lighter).
+    // The default (no shift) is 1.0.
+    const float min_shift_factor = 0.25f; // -2 EV
+    const float max_shift_factor = 8.0f;  // +3 EV
+
+    // Clamp the input value within the specified boundaries.
+    return std::max(min_shift_factor, std::min(max_shift_factor, linear_exp_shift_value));
+}
+
+static float clampExposure(float exposureStops) {
+    const float minExposure = std::pow(2.0f, -5.0f);
+    const float maxExposure = std::pow(2.0f, 5.0f);
+    return std::max(minExposure, std::min(maxExposure, exposureStops));
+}
+
+static void configureExposure(LibRaw &raw, float exposureStops) {
+    raw.imgdata.params.no_auto_bright = 1;
+    raw.imgdata.params.exp_correc = 1;
+    raw.imgdata.params.exp_shift = clampExposure(exposureStops);
+}
+
+static void configureWhiteBalance(LibRaw &raw) {
+    raw.imgdata.params.use_camera_wb = 1;
+    raw.imgdata.params.use_auto_wb = 0;
+}
+
+static void configureOutput(LibRaw &raw, bool halfSizeForSpeed) {
+    raw.imgdata.params.highlight = 3; // reconstruct to avoid dark clipping
+    raw.imgdata.params.half_size = halfSizeForSpeed ? 1 : 0;
+    raw.imgdata.params.output_bps = 16;
+    raw.imgdata.params.gamm[0] = 1.0f;
+    raw.imgdata.params.gamm[1] = 1.0f;
+}
+
 static void throwIfJavaException(JNIEnv *env, const char *context) {
     if (env->ExceptionCheck()) {
         env->ExceptionDescribe();
@@ -156,9 +230,17 @@ static jobject createBitmapFromRgbData(JNIEnv *env,
                 const uint8_t *srcPixel = srcRow + srcX * channels;
                 uint8_t *dstPixel = dstRow + x * 4;
 
-                dstPixel[0] = clampToByte(srcPixel[0] * exposure);
-                dstPixel[1] = clampToByte(srcPixel[1] * exposure);
-                dstPixel[2] = clampToByte(srcPixel[2] * exposure);
+                const float rLin = (static_cast<float>(srcPixel[0]) / 255.0f) * exposure;
+                const float gLin = (static_cast<float>(srcPixel[1]) / 255.0f) * exposure;
+                const float bLin = (static_cast<float>(srcPixel[2]) / 255.0f) * exposure;
+
+                const float rTone = toneMap(rLin);
+                const float gTone = toneMap(gLin);
+                const float bTone = toneMap(bLin);
+
+                dstPixel[0] = clampToByte(srgbEncode(rTone) * 255.0f);
+                dstPixel[1] = clampToByte(srgbEncode(gTone) * 255.0f);
+                dstPixel[2] = clampToByte(srgbEncode(bTone) * 255.0f);
                 dstPixel[3] = 255;
             }
         }
@@ -173,13 +255,17 @@ static jobject createBitmapFromRgbData(JNIEnv *env,
                 const uint16_t *srcPixel = srcRow + srcX * channels;
                 uint8_t *dstPixel = dstRow + x * 4;
 
-                const float r = static_cast<float>(srcPixel[0]) / 257.0f;
-                const float g = static_cast<float>(srcPixel[1]) / 257.0f;
-                const float b = static_cast<float>(srcPixel[2]) / 257.0f;
+                const float rLin = (static_cast<float>(srcPixel[0]) / 65535.0f) * exposure;
+                const float gLin = (static_cast<float>(srcPixel[1]) / 65535.0f) * exposure;
+                const float bLin = (static_cast<float>(srcPixel[2]) / 65535.0f) * exposure;
 
-                dstPixel[0] = clampToByte(r * exposure);
-                dstPixel[1] = clampToByte(g * exposure);
-                dstPixel[2] = clampToByte(b * exposure);
+                const float rTone = toneMap(rLin);
+                const float gTone = toneMap(gLin);
+                const float bTone = toneMap(bLin);
+
+                dstPixel[0] = clampToByte(srgbEncode(rTone) * 255.0f);
+                dstPixel[1] = clampToByte(srgbEncode(gTone) * 255.0f);
+                dstPixel[2] = clampToByte(srgbEncode(bTone) * 255.0f);
                 dstPixel[3] = 255;
             }
         }
@@ -345,17 +431,9 @@ static jobject decodeFullRaw(JNIEnv *env,
             throw std::runtime_error(RawProcessor.strerror(ret));
         }
 
-        // Keep LibRaw baseline brightness for a closer match to embedded preview.
-        RawProcessor.imgdata.params.no_auto_bright = 0;
-        RawProcessor.imgdata.params.exp_correc = 1;
-        const float expStops = std::log2(std::max(0.001f, exposure));
-        const float clampedStops = std::max(-20.0f, std::min(20.0f, expStops));
-        RawProcessor.imgdata.params.exp_shift = clampedStops;
-        RawProcessor.imgdata.params.highlight = 3; // reconstruct to avoid dark clipping
-        RawProcessor.imgdata.params.use_camera_wb = 1;
-        RawProcessor.imgdata.params.use_auto_wb = 0;
-        RawProcessor.imgdata.params.half_size = halfSizeForSpeed ? 1 : 0;
-        RawProcessor.imgdata.params.output_bps = 16;
+        configureExposure(RawProcessor, exposure);
+        //configureWhiteBalance(RawProcessor);
+        configureOutput(RawProcessor, halfSizeForSpeed);
 
         ret = RawProcessor.unpack();
         if (ret != LIBRAW_SUCCESS) {
@@ -393,7 +471,7 @@ static jobject decodeFullRaw(JNIEnv *env,
                 image->height,
                 image->colors,
                 image->bits,
-                1.0f /* libraw already applied exp_shift */,
+                1.0f /* exposure already applied inside LibRaw */,
                 maxWidth,
                 maxHeight);
 
