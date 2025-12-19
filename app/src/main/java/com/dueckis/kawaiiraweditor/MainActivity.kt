@@ -5,9 +5,11 @@
 
 package com.dueckis.kawaiiraweditor
 
+import android.Manifest
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.PorterDuff
@@ -21,7 +23,7 @@ import android.provider.OpenableColumns
 import android.util.Base64
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -119,6 +121,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateListOf
@@ -127,6 +130,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -157,6 +161,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.zIndex
+import androidx.core.content.ContextCompat
 import com.dueckis.kawaiiraweditor.ui.theme.KawaiiRawEditorTheme
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -174,17 +179,20 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.Executors
 import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.ranges.ClosedFloatingPointRange
+import kotlinx.coroutines.flow.collect
 
 private data class GalleryItem(
     val projectId: String,
     val fileName: String,
     val thumbnail: Bitmap? = null,
-    val rating: Int = 0
+    val rating: Int = 0,
+    val tags: List<String> = emptyList()
 )
 
 private enum class Screen {
@@ -1032,15 +1040,61 @@ private fun RapidRawEditorScreen() {
     val context = LocalContext.current
     val storage = remember { ProjectStorage(context) }
     val coroutineScope = rememberCoroutineScope()
+    val tagger = remember { ClipAutoTagger(context) }
     
     var currentScreen by remember { mutableStateOf(Screen.Gallery) }
     var galleryItems by remember { mutableStateOf<List<GalleryItem>>(emptyList()) }
     var selectedItem by remember { mutableStateOf<GalleryItem?>(null) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
+    var editorDismissProgressTarget by remember { mutableFloatStateOf(0f) }
+    val editorDismissProgress = remember { Animatable(0f) }
+
+    val notificationPermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    fun maybeRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33) return
+        val granted =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    val tagBackfillQueue = remember { Channel<String>(capacity = Channel.UNLIMITED) }
+    val tagBackfillInFlight = remember { mutableStateMapOf<String, Boolean>() }
+
+    LaunchedEffect(Unit) {
+        for (projectId in tagBackfillQueue) {
+            try {
+                val tagsInStorage = withContext(Dispatchers.IO) {
+                    storage.getAllProjects().firstOrNull { it.id == projectId }?.tags
+                }
+                if (!tagsInStorage.isNullOrEmpty()) continue
+
+                val rawBytes = withContext(Dispatchers.IO) { storage.loadRawBytes(projectId) } ?: continue
+                val tags = withContext(Dispatchers.Default) {
+                    runCatching {
+                        val previewBytes =
+                            LibRawDecoder.lowdecode(rawBytes, "{}") ?: LibRawDecoder.lowlowdecode(rawBytes, "{}")
+                        val bmp = previewBytes?.decodeToBitmap()
+                        if (bmp == null) emptyList() else tagger.generateTags(bmp)
+                    }.getOrDefault(emptyList())
+                }
+                if (tags.isEmpty()) continue
+                withContext(Dispatchers.IO) { storage.setTags(projectId, tags) }
+                galleryItems =
+                    galleryItems.map { item -> if (item.projectId == projectId) item.copy(tags = tags) else item }
+            } finally {
+                tagBackfillInFlight.remove(projectId)
+            }
+        }
+    }
 
     // Load existing projects on startup and when returning from editor
     LaunchedEffect(refreshTrigger) {
-        val projects = storage.getAllProjects()
+        val projects = withContext(Dispatchers.IO) { storage.getAllProjects() }
         galleryItems = withContext(Dispatchers.IO) {
             projects.map { metadata ->
                 val thumbnailBytes = storage.loadThumbnail(metadata.id)
@@ -1051,41 +1105,137 @@ private fun RapidRawEditorScreen() {
                     projectId = metadata.id,
                     fileName = metadata.fileName,
                     thumbnail = thumbnail,
-                    rating = metadata.rating
+                    rating = metadata.rating,
+                    tags = metadata.tags ?: emptyList()
                 )
+            }
+        }
+
+        val missingTagIds = projects.filter { it.tags.isNullOrEmpty() }.map { it.id }
+        if (missingTagIds.isNotEmpty()) {
+            maybeRequestNotificationPermission()
+        }
+        missingTagIds.forEach { id ->
+            if (!tagBackfillInFlight.containsKey(id)) {
+                tagBackfillInFlight[id] = true
+                tagBackfillQueue.trySend(id)
             }
         }
     }
 
-    when (currentScreen) {
-        Screen.Gallery -> GalleryScreen(
-            items = galleryItems,
-            onOpenItem = { item ->
-                selectedItem = item
-                currentScreen = Screen.Editor
-            },
-            onAddClick = { newItem ->
-                galleryItems = galleryItems + newItem
-            },
-            onRatingChangeMany = { projectIds, rating ->
-                coroutineScope.launch {
-                    val ids = projectIds.toSet()
-                    withContext(Dispatchers.IO) {
-                        ids.forEach { id -> storage.setRating(id, rating) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { editorDismissProgressTarget.coerceIn(0f, 1f) }.collect { target ->
+            editorDismissProgress.snapTo(target)
+        }
+    }
+
+    fun requestExitEditor(animated: Boolean) {
+        if (currentScreen != Screen.Editor) return
+        coroutineScope.launch {
+            if (animated) {
+                editorDismissProgressTarget = editorDismissProgress.value
+                editorDismissProgress.animateTo(
+                    1f,
+                    animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing)
+                )
+            } else {
+                editorDismissProgress.snapTo(1f)
+            }
+            currentScreen = Screen.Gallery
+            selectedItem = null
+            refreshTrigger++
+            editorDismissProgressTarget = 0f
+            editorDismissProgress.snapTo(0f)
+        }
+    }
+
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val widthPx = with(LocalDensity.current) { maxWidth.toPx().coerceAtLeast(1f) }
+        val editorVisible = currentScreen == Screen.Editor && selectedItem != null
+        val dismissProgress = if (editorVisible) editorDismissProgress.value.coerceIn(0f, 1f) else 1f
+        val editorTranslationPx = dismissProgress * widthPx
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            GalleryScreen(
+                items = galleryItems,
+                tagger = tagger,
+                onOpenItem = { item ->
+                    if (currentScreen == Screen.Editor) return@GalleryScreen
+                    coroutineScope.launch {
+                        editorDismissProgressTarget = 0f
+                        editorDismissProgress.snapTo(1f)
+                        selectedItem = item
+                        currentScreen = Screen.Editor
+                        editorDismissProgress.animateTo(
+                            0f,
+                            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing)
+                        )
                     }
-                    galleryItems = galleryItems.map { item ->
-                        if (item.projectId !in ids) item else item.copy(rating = rating.coerceIn(0, 5))
+                },
+                onAddClick = { newItem ->
+                    galleryItems = galleryItems + newItem
+                },
+                onTagsChanged = { projectId, tags ->
+                    galleryItems =
+                        galleryItems.map { item -> if (item.projectId == projectId) item.copy(tags = tags) else item }
+                },
+                onRatingChangeMany = { projectIds, rating ->
+                    coroutineScope.launch {
+                        val ids = projectIds.toSet()
+                        withContext(Dispatchers.IO) {
+                            ids.forEach { id -> storage.setRating(id, rating) }
+                        }
+                        galleryItems = galleryItems.map { item ->
+                            if (item.projectId !in ids) item else item.copy(rating = rating.coerceIn(0, 5))
+                        }
                     }
                 }
+            )
+
+            if (editorVisible) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(editorVisible) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    event.changes.forEach { it.consume() }
+                                }
+                            }
+                        }
+                )
             }
-        )
-        Screen.Editor -> EditorScreen(
-            galleryItem = selectedItem,
-            onBackClick = {
-                currentScreen = Screen.Gallery
-                refreshTrigger++
+
+            if (editorVisible) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer(translationX = editorTranslationPx)
+                ) {
+                    EditorScreen(
+                        galleryItem = selectedItem,
+                        onBackClick = { requestExitEditor(animated = true) },
+                        onPredictiveBackProgress = { progress ->
+                            editorDismissProgressTarget = progress.coerceIn(0f, 1f)
+                        },
+                        onPredictiveBackCancelled = {
+                            coroutineScope.launch {
+                                editorDismissProgressTarget = editorDismissProgress.value
+                                editorDismissProgress.animateTo(
+                                    0f,
+                                    animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)
+                                )
+                                editorDismissProgressTarget = 0f
+                            }
+                        },
+                        onPredictiveBackCommitted = {
+                            requestExitEditor(animated = true)
+                        }
+                    )
+                }
             }
-        )
+        }
     }
 }
 
@@ -1203,8 +1353,10 @@ private fun StartupSplash(
 @Composable
 private fun GalleryScreen(
     items: List<GalleryItem>,
+    tagger: ClipAutoTagger,
     onOpenItem: (GalleryItem) -> Unit,
     onAddClick: (GalleryItem) -> Unit,
+    onTagsChanged: (String, List<String>) -> Unit,
     onRatingChangeMany: (List<String>, Int) -> Unit
 ) {
     val context = LocalContext.current
@@ -1222,6 +1374,19 @@ private fun GalleryScreen(
     }
     
     val mimeTypes = arrayOf("image/x-sony-arw", "image/*")
+    val notificationPermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    fun maybeRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33) return
+        val granted =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     val pickRaw = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         coroutineScope.launch {
@@ -1237,9 +1402,25 @@ private fun GalleryScreen(
                 val item = GalleryItem(
                     projectId = projectId,
                     fileName = name,
-                    thumbnail = null
+                    thumbnail = null,
+                    tags = emptyList()
                 )
                 onAddClick(item)
+
+                maybeRequestNotificationPermission()
+                coroutineScope.launch {
+                    val tags = withContext(Dispatchers.Default) {
+                        runCatching {
+                            val previewBytes =
+                                LibRawDecoder.lowdecode(bytes, "{}")
+                                    ?: LibRawDecoder.lowlowdecode(bytes, "{}")
+                            val bmp = previewBytes?.decodeToBitmap()
+                            if (bmp == null) emptyList() else tagger.generateTags(bmp)
+                        }.getOrDefault(emptyList())
+                    }
+                    withContext(Dispatchers.IO) { storage.setTags(projectId, tags) }
+                    onTagsChanged(projectId, tags)
+                }
             }
         }
     }
@@ -1253,6 +1434,14 @@ private fun GalleryScreen(
     val selectedItems = remember(items, selectedIds) { items.filter { it.projectId in selectedIds } }
     val uniformRating = remember(selectedItems) {
         selectedItems.map { it.rating }.distinct().singleOrNull()
+    }
+
+    var showSelectionInfo by remember { mutableStateOf(false) }
+    var selectionInfoMetadataJson by remember { mutableStateOf<String?>(null) }
+    val selectionInfoTarget = remember(selectedItems) { selectedItems.singleOrNull() }
+    val metadataDispatcher = remember { Executors.newSingleThreadExecutor().asCoroutineDispatcher() }
+    DisposableEffect(metadataDispatcher) {
+        onDispose { metadataDispatcher.close() }
     }
 
     fun startBulkExport(projectIds: List<String>) {
@@ -1528,9 +1717,125 @@ private fun GalleryScreen(
                             contentDescription = "Cycle rating"
                         )
                     }
+
+                    if (selectedIds.size == 1) {
+                        IconButton(
+                            enabled = !isBulkExporting,
+                            onClick = { showSelectionInfo = true }
+                        ) {
+                            Icon(Icons.Default.Info, contentDescription = "Selection info")
+                        }
+                    }
                 }
             }
         }
+    }
+
+    if (showSelectionInfo && selectionInfoTarget != null) {
+        LaunchedEffect(showSelectionInfo, selectionInfoTarget.projectId) {
+            if (!showSelectionInfo) return@LaunchedEffect
+            selectionInfoMetadataJson = null
+            val rawBytes = withContext(Dispatchers.IO) { storage.loadRawBytes(selectionInfoTarget.projectId) }
+            if (rawBytes == null) {
+                selectionInfoMetadataJson = ""
+                return@LaunchedEffect
+            }
+            selectionInfoMetadataJson = withContext(metadataDispatcher) {
+                val handle = runCatching { LibRawDecoder.createSession(rawBytes) }.getOrDefault(0L)
+                if (handle == 0L) return@withContext ""
+                try {
+                    runCatching { LibRawDecoder.getMetadataJsonFromSession(handle) }.getOrDefault("")
+                } finally {
+                    LibRawDecoder.releaseSession(handle)
+                }
+            }
+        }
+
+        val tags = selectionInfoTarget.tags
+        val pairs = remember(selectionInfoMetadataJson) {
+            val json = selectionInfoMetadataJson ?: return@remember emptyList()
+            if (json.isBlank()) return@remember emptyList()
+            runCatching {
+                val obj = JSONObject(json)
+                listOf(
+                    "Make" to obj.optString("make"),
+                    "Model" to obj.optString("model"),
+                    "Lens" to obj.optString("lens"),
+                    "ISO" to obj.optString("iso"),
+                    "Exposure" to obj.optString("exposureTime"),
+                    "Aperture" to obj.optString("fNumber"),
+                    "Focal Length" to obj.optString("focalLength"),
+                    "Date" to obj.optString("dateTimeOriginal"),
+                ).filter { it.second.isNotBlank() && it.second != "null" }
+            }.getOrDefault(emptyList())
+        }
+
+        AlertDialog(
+            onDismissRequest = { showSelectionInfo = false },
+            confirmButton = {
+                TextButton(onClick = { showSelectionInfo = false }) { Text("Close") }
+            },
+            title = { Text("Info") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Tags", style = MaterialTheme.typography.titleSmall)
+                        if (tags.isEmpty()) {
+                            Text(
+                                text = "No tags yet.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Text(
+                                text = tags.take(25).joinToString(" \u2022 "),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Metadata", style = MaterialTheme.typography.titleSmall)
+                        when {
+                            selectionInfoMetadataJson == null -> {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    LoadingIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text("Reading metadata\u2026")
+                                }
+                            }
+
+                            pairs.isEmpty() -> {
+                                Text(
+                                    text = "No metadata available.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            else -> {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    pairs.forEach { (k, v) ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(k, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text(v, color = MaterialTheme.colorScheme.onSurface)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        )
+    } else if (showSelectionInfo && selectionInfoTarget == null) {
+        showSelectionInfo = false
     }
 }
 
@@ -1601,12 +1906,24 @@ private fun GalleryItemCard(
                 modifier = Modifier.padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = item.fileName,
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = item.fileName,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    val tagLine = remember(item.tags) { item.tags.take(3).joinToString(" • ") }
+                    if (tagLine.isNotBlank()) {
+                        Text(
+                            text = tagLine,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
             }
         }
     }
@@ -1615,7 +1932,10 @@ private fun GalleryItemCard(
 @Composable
 private fun EditorScreen(
     galleryItem: GalleryItem?,
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    onPredictiveBackProgress: (Float) -> Unit,
+    onPredictiveBackCancelled: () -> Unit,
+    onPredictiveBackCommitted: () -> Unit
 ) {
     if (galleryItem == null) {
         onBackClick()
@@ -1645,18 +1965,29 @@ private fun EditorScreen(
     var showAiSubjectOverrideDialog by remember { mutableStateOf(false) }
     var aiSubjectOverrideTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
 
-    BackHandler {
-        when {
-            showAiSubjectOverrideDialog -> {
-                showAiSubjectOverrideDialog = false
-                aiSubjectOverrideTarget = null
+    PredictiveBackHandler {
+        try {
+            val shouldAnimate = !showAiSubjectOverrideDialog && !showMetadataDialog
+            it.collect { event ->
+                if (shouldAnimate) {
+                    onPredictiveBackProgress(event.progress)
+                }
             }
+            when {
+                showAiSubjectOverrideDialog -> {
+                    showAiSubjectOverrideDialog = false
+                    aiSubjectOverrideTarget = null
+                }
 
-            showMetadataDialog -> {
-                showMetadataDialog = false
+                showMetadataDialog -> {
+                    showMetadataDialog = false
+                }
+
+                else -> onPredictiveBackCommitted()
             }
-
-            else -> onBackClick()
+        } catch (_: CancellationException) {
+            // Gesture canceled; keep current screen state.
+            onPredictiveBackCancelled()
         }
     }
 

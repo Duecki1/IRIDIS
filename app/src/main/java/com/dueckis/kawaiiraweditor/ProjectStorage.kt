@@ -36,7 +36,8 @@ class ProjectStorage(private val context: Context) {
         val fileName: String,
         val createdAt: Long,
         val modifiedAt: Long,
-        val rating: Int = 0
+        val rating: Int = 0,
+        val tags: List<String>? = null
     )
     
     data class ProjectData(
@@ -65,11 +66,23 @@ class ProjectStorage(private val context: Context) {
             id = projectId,
             fileName = fileName,
             createdAt = System.currentTimeMillis(),
-            modifiedAt = System.currentTimeMillis()
+            modifiedAt = System.currentTimeMillis(),
+            tags = emptyList()
         )
         addToProjectIndex(metadata)
         
         return projectId
+    }
+
+    fun setTags(projectId: String, tags: List<String>) {
+        val normalized = tags.map { it.trim() }.filter { it.isNotBlank() }.distinct().take(25)
+        val projects = getAllProjects().toMutableList()
+        val index = projects.indexOfFirst { it.id == projectId }
+        if (index >= 0) {
+            projects[index] =
+                projects[index].copy(tags = normalized, modifiedAt = System.currentTimeMillis())
+            saveProjectIndex(projects)
+        }
     }
     
     /**
