@@ -1,3 +1,3 @@
 This is a kotlin android app using RapidRaws backend rust processing. 
 
-https://github.com/Duecki1/RapidRAW
+https://github.com/CyberTimon/RapidRAW
