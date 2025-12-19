@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.KawaiiRawEditor" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.KawaiiRawEditor" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/kawaii_charcoal</item>
+    </style>
+
+    <style name="Theme.KawaiiRawEditor.Launcher" parent="Theme.KawaiiRawEditor">
+        <item name="android:windowBackground">@color/kawaii_charcoal</item>
+        <item name="android:statusBarColor">@color/kawaii_charcoal</item>
+        <item name="android:navigationBarColor">@color/kawaii_charcoal</item>
+    </style>
 </resources>

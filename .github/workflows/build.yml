@@ -1,0 +1,140 @@
+name: build
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        required: true
+        type: string
+      target:
+        required: true
+        type: string
+      build-args:
+        required: false
+        type: string
+      release-id:
+        required: false
+        type: string
+      asset-prefix:
+        required: false
+        type: string
+      asset-name-pattern:
+        required: false
+        type: string
+      upload-artifacts:
+        required: false
+        type: boolean
+      repository:
+        required: false
+        type: string
+      ref:
+        required: false
+        type: string
+        default: ${{ github.ref }}
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    runs-on: ${{ inputs.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          submodules: recursive
+          submodules-depth: 1
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ''
+        if: startsWith(inputs.platform, 'macos') || startsWith(inputs.platform, 'windows')
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ inputs.platform }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install additional system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: rustup install target
+        if: ${{ inputs.target != '' }}
+        run: rustup target add ${{ inputs.target }}
+
+      - id: patch-release-name
+        shell: bash
+        if: ${{ inputs.release-id != '' }}
+        run: |
+          platform="${{ inputs.platform }}"
+          replacement="$(echo ${platform} | sed -E 's/-latest//')"
+          patched_platform=$(echo '${{ inputs.asset-name-pattern }}' | sed -E "s/\[platform\]/${replacement}/")
+          if [[ -n "${{ inputs.asset-prefix }}" ]]; then
+            patched_platform="${{ inputs.asset-prefix }}_${patched_platform}"
+          fi
+          echo "platform=${patched_platform}" >> $GITHUB_OUTPUT
+
+      - id: tauri-build
+        name: Build with tauri-action
+        # FIXME set this back to a release major version, ex. v0 . This is a commit from the `dev` branch which includes PR
+        # https://github.com/tauri-apps/tauri-action/pull/1099 , adding the assetNamePattern feature.
+        uses: tauri-apps/tauri-action@cf3eb9b18add8548a40584695215c80ab7274f31
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NO_STRIP: ${{ startsWith(inputs.platform, 'ubuntu') }}
+        with:
+          args: --verbose ${{ inputs.build-args }} ${{ inputs.target != '' && '--target' || ''  }} ${{ inputs.target }}
+          assetNamePattern: ${{ steps.patch-release-name.outputs.platform }}
+          releaseId: ${{ inputs.release-id }}
+          retryAttempts: 3
+
+      - name: Upload Windows Artifacts
+        if: ${{ startsWith(inputs.platform, 'windows') && inputs.release-id == '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.asset-prefix }}_${{ inputs.platform }}${{ inputs.target && format('_{0}', inputs.target) || '' }}_artifacts
+          path: |
+            src-tauri/target/${{ inputs.target || 'release' }}/bundle/**/*.exe
+            src-tauri/target/${{ inputs.target || 'release' }}/release/bundle/**/*.exe
+          retention-days: 7
+          compression-level: 6
+          if-no-files-found: warn
+
+      - name: Upload Linux/macOS Artifacts
+        if: ${{ !startsWith(inputs.platform, 'windows') && inputs.release-id == '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.asset-prefix }}_${{ inputs.platform }}${{ inputs.target && format('_{0}', inputs.target) || '' }}_artifacts
+          path: |
+            src-tauri/target/${{ inputs.target || 'release' }}/**/*.rpm
+            src-tauri/target/${{ inputs.target || 'release' }}/**/*.deb
+            src-tauri/target/${{ inputs.target || 'release' }}/**/*.AppImage
+            src-tauri/target/${{ inputs.target || 'release' }}/**/*.dmg
+          retention-days: 7
+          compression-level: 6
+          if-no-files-found: warn

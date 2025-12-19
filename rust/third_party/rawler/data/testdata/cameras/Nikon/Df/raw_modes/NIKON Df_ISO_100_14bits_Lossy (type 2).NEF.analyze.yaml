@@ -1,0 +1,127 @@
+---
+file:
+  fileSize: 16091700
+  fileName: NIKON Df_ISO_100_14bits_Lossy (type 2).NEF
+  digest: 1e4b808a5cbc5d609d3f4fd463832ab7
+data:
+  metadata:
+    rawParams:
+      rawWidth: 4992
+      rawHeight: 3292
+      bitDepth: 16
+      cropArea:
+        p:
+          x: 8
+          y: 6
+        d:
+          w: 4928
+          h: 3280
+      activeArea:
+        p:
+          x: 2
+          y: 0
+        d:
+          w: 4940
+          h: 3292
+      blacklevels:
+        levels:
+          - 0/1
+        cpp: 1
+        width: 1
+        height: 1
+      whitelevels:
+        - 15520
+      wbCoeffs:
+        - 1.9960938
+        - 1.0
+        - 1.5
+        - ~
+    rawMetadata:
+      exif:
+        orientation: 6
+        copyright: twitter@clennep
+        artist: "@clennep"
+        lens_spec: ~
+        exposure_time: 10/1600
+        fnumber: 56/10
+        aperture_value: ~
+        brightness_value: ~
+        iso_speed_ratings: 100
+        iso_speed: ~
+        recommended_exposure_index: ~
+        sensitivity_type: 2
+        exposure_bias: 0/6
+        date_time_original: "2017:05:07 14:30:27"
+        create_date: "2017:05:07 14:30:27"
+        modify_date: "2017:05:07 14:30:27"
+        exposure_program: 3
+        timezone_offset: ~
+        offset_time: ~
+        offset_time_original: ~
+        offset_time_digitized: ~
+        sub_sec_time: "50"
+        sub_sec_time_original: "50"
+        sub_sec_time_digitized: "50"
+        shutter_speed_value: ~
+        max_aperture_value: 0/10
+        subject_distance: ~
+        metering_mode: 2
+        light_source: 0
+        flash: 0
+        focal_length: 350/10
+        image_number: ~
+        color_space: ~
+        flash_energy: ~
+        exposure_mode: 0
+        white_balance: 0
+        scene_capture_type: 0
+        subject_distance_range: 0
+        owner_name: ~
+        serial_number: ~
+        lens_serial_number: ~
+        lens_make: ~
+        lens_model: ~
+        gps:
+          gps_version_id:
+            - 2
+            - 3
+            - 0
+            - 0
+          gps_latitude_ref: ~
+          gps_latitude: ~
+          gps_longitude_ref: ~
+          gps_longitude: ~
+          gps_altitude_ref: ~
+          gps_altitude: ~
+          gps_timestamp: ~
+          gps_satellites: ~
+          gps_status: ~
+          gps_measure_mode: ~
+          gps_dop: ~
+          gps_speed_ref: ~
+          gps_speed: ~
+          gps_track_ref: ~
+          gps_track: ~
+          gps_img_direction_ref: ~
+          gps_img_direction: ~
+          gps_map_datum: ~
+          gps_dest_latitude_ref: ~
+          gps_dest_latitude: ~
+          gps_dest_longitude_ref: ~
+          gps_dest_longitude: ~
+          gps_dest_bearing_ref: ~
+          gps_dest_bearing: ~
+          gps_dest_distance_ref: ~
+          gps_dest_distance: ~
+          gps_processing_method: ~
+          gps_area_information: ~
+          gps_date_stamp: ~
+          gps_differential: ~
+          gps_h_positioning_error: ~
+        user_comment: ~
+      model: Df
+      make: Nikon
+      lens: ~
+      unique_image_id: ~
+      rating: ~
+

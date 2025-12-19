@@ -1,0 +1,139 @@
+---
+file:
+  fileSize: 16973824
+  fileName: SLT-A55V_ISO_100_12bits_Sony ARW Compressed.ARW
+  digest: 791e707f00f5ce5cd367afd352643f99
+data:
+  metadata:
+    rawParams:
+      rawWidth: 4928
+      rawHeight: 3280
+      bitDepth: 16
+      cropArea:
+        p:
+          x: 8
+          y: 8
+        d:
+          w: 4912
+          h: 3264
+      activeArea:
+        p:
+          x: 0
+          y: 0
+        d:
+          w: 4928
+          h: 3280
+      blacklevels:
+        levels:
+          - 512/1
+          - 512/1
+          - 512/1
+          - 512/1
+        cpp: 1
+        width: 2
+        height: 2
+      whitelevels:
+        - 15360
+      wbCoeffs:
+        - 2.5195312
+        - 1.0
+        - 1.4648438
+        - ~
+    rawMetadata:
+      exif:
+        orientation: 1
+        copyright: ~
+        artist: ~
+        lens_spec: ~
+        exposure_time: 1/125
+        fnumber: 100/10
+        aperture_value: ~
+        brightness_value: 900/100
+        iso_speed_ratings: 100
+        iso_speed: ~
+        recommended_exposure_index: 100
+        sensitivity_type: 2
+        exposure_bias: 0/10
+        date_time_original: "2015:08:21 17:35:57"
+        create_date: "2015:08:21 17:35:57"
+        modify_date: "2015:08:21 17:35:57"
+        exposure_program: 2
+        timezone_offset: ~
+        offset_time: ~
+        offset_time_original: ~
+        offset_time_digitized: ~
+        sub_sec_time: ~
+        sub_sec_time_original: ~
+        sub_sec_time_digitized: ~
+        shutter_speed_value: ~
+        max_aperture_value: 400/100
+        subject_distance: ~
+        metering_mode: 5
+        light_source: 0
+        flash: 16
+        focal_length: 100/10
+        image_number: ~
+        color_space: 1
+        flash_energy: ~
+        exposure_mode: 0
+        white_balance: 0
+        scene_capture_type: 0
+        subject_distance_range: ~
+        owner_name: ~
+        serial_number: ~
+        lens_serial_number: ~
+        lens_make: ~
+        lens_model: ~
+        gps:
+          gps_version_id:
+            - 2
+            - 3
+            - 0
+            - 0
+          gps_latitude_ref: N
+          gps_latitude:
+            - 48/1
+            - 51/1
+            - 31115/1000
+          gps_longitude_ref: E
+          gps_longitude:
+            - 2/1
+            - 20/1
+            - 4547/1000
+          gps_altitude_ref: 0
+          gps_altitude: 4658/10
+          gps_timestamp:
+            - 15/1
+            - 35/1
+            - 55370/1000
+          gps_satellites: ~
+          gps_status: A
+          gps_measure_mode: "2"
+          gps_dop: 6/5
+          gps_speed_ref: K
+          gps_speed: 9/10
+          gps_track_ref: T
+          gps_track: 5082/100
+          gps_img_direction_ref: ~
+          gps_img_direction: ~
+          gps_map_datum: WGS-84
+          gps_dest_latitude_ref: ~
+          gps_dest_latitude: ~
+          gps_dest_longitude_ref: ~
+          gps_dest_longitude: ~
+          gps_dest_bearing_ref: ~
+          gps_dest_bearing: ~
+          gps_dest_distance_ref: ~
+          gps_dest_distance: ~
+          gps_processing_method: ~
+          gps_area_information: ~
+          gps_date_stamp: "2015:08:21"
+          gps_differential: 0
+          gps_h_positioning_error: ~
+        user_comment: ~
+      model: SLT-A55V
+      make: Sony
+      lens: ~
+      unique_image_id: ~
+      rating: ~
+
