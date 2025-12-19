@@ -11,24 +11,23 @@ Pretty web version: [`README.html`](README.html)
     <td>
       <img
         alt="Gallery"
-        src="github.com/user-attachments/assets/c1088104-acea-435e-a874-04b29267131b"
+        src="https://github.com/user-attachments/assets/fb5b933e-32ca-47fe-9640-b9c5cf9655ea"
         width="260"
       />
-
     </td>
     <td>
       <img
         alt="Editor"
-        src="github.com/user-attachments/assets/1c1ecd56-cca2-4bfb-adf3-5d8253ea8b00"
+        src="https://github.com/user-attachments/assets/1c1ecd56-cca2-4bfb-adf3-5d8253ea8b00"
         width="260"
       />
     </td>
     <td>
       <img
         alt="Editor (extra screenshot slot)"
-        src="ub.com/user-attachments/assets/5c6c3b5d-a7a1-4098-aece-e6ec35ed1372"
+        src="https://github.com/user-attachments/assets/5c6c3b5d-a7a1-4098-aece-e6ec35ed1372"
         width="260"
-      />  
+      />
     </td>
   </tr>
 </table>
