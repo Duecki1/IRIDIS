@@ -2,8 +2,6 @@
 
 Draft / test Android RAW editor built with Jetpack Compose + a Rust native decoder/processor.
 
-Pretty web version: [`README.html`](README.html)
-
 ## Screenshots
 
 <table>
