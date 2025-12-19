@@ -84,6 +84,7 @@ proguard/
 obj/
 .externalNativeBuild/
 .cxx/
+app/src/main/jniLibs/
 
 # Rust
 rust/target/

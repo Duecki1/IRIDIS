@@ -55,7 +55,7 @@ android {
         }
     }
 
-    sourceSets["main"].jniLibs.srcDirs("src/main/jniLibs")
+    sourceSets["main"].jniLibs.srcDirs("src/main/jniLibs", generatedJniLibsDir)
 }
 
 dependencies {
@@ -92,6 +92,7 @@ val rustAbiTargets = mapOf(
 val androidApiLevel = 26
 val rustProjectDir = rootProject.file("rust")
 val ndkRoot = File(android.sdkDirectory, "ndk/${android.ndkVersion}")
+val generatedJniLibsDir = File(buildDir, "generated/jniLibs")
 
 val buildRust = tasks.register("buildRust") {
     group = "build"
@@ -141,7 +142,7 @@ val buildRust = tasks.register("buildRust") {
 
 val copyRustLibs = tasks.register<Copy>("copyRustLibs") {
     dependsOn(buildRust)
-    into(File(projectDir, "src/main/jniLibs"))
+    into(generatedJniLibsDir)
 
     rustAbiTargets.forEach { (abi, target) ->
         from(File(rustProjectDir, "target/$target/release/libkawaiiraweditor.so")) {
