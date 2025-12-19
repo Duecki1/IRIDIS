@@ -21,6 +21,7 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Base64
+import android.view.ViewConfiguration
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.PredictiveBackHandler
@@ -65,14 +66,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
@@ -80,6 +87,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
@@ -98,12 +107,17 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.AppBarWithSearch
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.ExpandedFullScreenContainedSearchBar
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.FloatingToolbarDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SearchBarValue
+import androidx.compose.material3.SearchBarDefaults
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -111,6 +125,9 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.rememberSearchBarState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -192,7 +209,8 @@ private data class GalleryItem(
     val fileName: String,
     val thumbnail: Bitmap? = null,
     val rating: Int = 0,
-    val tags: List<String> = emptyList()
+    val tags: List<String> = emptyList(),
+    val rawMetadata: Map<String, String> = emptyMap()
 )
 
 private enum class Screen {
@@ -962,7 +980,8 @@ private data class AdjustmentControl(
 
 private data class RenderRequest(
     val version: Long,
-    val adjustmentsJson: String
+    val adjustmentsJson: String,
+    val isOriginal: Boolean = false
 )
 
 private val basicSection = listOf(
@@ -1041,6 +1060,10 @@ private fun RapidRawEditorScreen() {
     val storage = remember { ProjectStorage(context) }
     val coroutineScope = rememberCoroutineScope()
     val tagger = remember { ClipAutoTagger(context) }
+    val metadataDispatcher = remember { Executors.newSingleThreadExecutor().asCoroutineDispatcher() }
+    DisposableEffect(metadataDispatcher) {
+        onDispose { metadataDispatcher.close() }
+    }
     
     var currentScreen by remember { mutableStateOf(Screen.Gallery) }
     var galleryItems by remember { mutableStateOf<List<GalleryItem>>(emptyList()) }
@@ -1063,23 +1086,83 @@ private fun RapidRawEditorScreen() {
     }
 
     val tagBackfillQueue = remember { Channel<String>(capacity = Channel.UNLIMITED) }
+    val tagBackfillQueued = remember { mutableStateMapOf<String, Boolean>() }
     val tagBackfillInFlight = remember { mutableStateMapOf<String, Boolean>() }
+    val tagProgressById = remember { mutableStateMapOf<String, Float>() }
+    val metadataBackfillQueue = remember { Channel<String>(capacity = Channel.UNLIMITED) }
+    val metadataBackfillQueued = remember { mutableStateMapOf<String, Boolean>() }
+    val metadataBackfillInFlight = remember { mutableStateMapOf<String, Boolean>() }
+
+    fun setTaggingInFlight(projectId: String, inFlight: Boolean) {
+        if (inFlight) {
+            tagBackfillInFlight[projectId] = true
+            if (tagProgressById[projectId] == null) tagProgressById[projectId] = 0f
+        } else {
+            tagBackfillInFlight.remove(projectId)
+            tagProgressById.remove(projectId)
+        }
+    }
+
+    fun isTaggingInFlight(projectId: String): Boolean = tagBackfillInFlight[projectId] == true
+    fun tagProgressFor(projectId: String): Float? = tagProgressById[projectId]
+    fun setTagProgress(projectId: String, progress: Float) {
+        val clamped = progress.coerceIn(0f, 1f)
+        coroutineScope.launch {
+            if (!isTaggingInFlight(projectId)) return@launch
+            tagProgressById[projectId] = clamped
+        }
+    }
+
+    fun setMetadataInFlight(projectId: String, inFlight: Boolean) {
+        if (inFlight) {
+            metadataBackfillInFlight[projectId] = true
+        } else {
+            metadataBackfillInFlight.remove(projectId)
+        }
+    }
+
+    fun isMetadataInFlight(projectId: String): Boolean = metadataBackfillInFlight[projectId] == true
+
+    suspend fun computeAndPersistRawMetadata(projectId: String, rawBytes: ByteArray) {
+        val json = withContext(metadataDispatcher) {
+            val handle = runCatching { LibRawDecoder.createSession(rawBytes) }.getOrDefault(0L)
+            if (handle == 0L) return@withContext ""
+            try {
+                runCatching { LibRawDecoder.getMetadataJsonFromSession(handle) }.getOrDefault("")
+            } finally {
+                LibRawDecoder.releaseSession(handle)
+            }
+        }
+        val map = parseRawMetadataForSearch(json)
+        if (map.isEmpty()) return
+        withContext(Dispatchers.IO) { storage.setRawMetadata(projectId, map) }
+        galleryItems =
+            galleryItems.map { item -> if (item.projectId == projectId) item.copy(rawMetadata = map) else item }
+    }
 
     LaunchedEffect(Unit) {
         for (projectId in tagBackfillQueue) {
+            tagBackfillQueued.remove(projectId)
+            setTaggingInFlight(projectId, true)
             try {
-                val tagsInStorage = withContext(Dispatchers.IO) {
-                    storage.getAllProjects().firstOrNull { it.id == projectId }?.tags
-                }
-                if (!tagsInStorage.isNullOrEmpty()) continue
+                val projectMeta = withContext(Dispatchers.IO) {
+                    storage.getAllProjects().firstOrNull { it.id == projectId }
+                } ?: continue
+                if (!projectMeta.tags.isNullOrEmpty() && !projectMeta.rawMetadata.isNullOrEmpty()) continue
 
                 val rawBytes = withContext(Dispatchers.IO) { storage.loadRawBytes(projectId) } ?: continue
+
+                if (projectMeta.rawMetadata.isNullOrEmpty()) {
+                    runCatching { computeAndPersistRawMetadata(projectId, rawBytes) }
+                }
+
                 val tags = withContext(Dispatchers.Default) {
                     runCatching {
                         val previewBytes =
                             LibRawDecoder.lowdecode(rawBytes, "{}") ?: LibRawDecoder.lowlowdecode(rawBytes, "{}")
                         val bmp = previewBytes?.decodeToBitmap()
-                        if (bmp == null) emptyList() else tagger.generateTags(bmp)
+                        if (bmp == null) emptyList()
+                        else tagger.generateTags(bmp, onProgress = { p -> setTagProgress(projectId, p) })
                     }.getOrDefault(emptyList())
                 }
                 if (tags.isEmpty()) continue
@@ -1087,7 +1170,25 @@ private fun RapidRawEditorScreen() {
                 galleryItems =
                     galleryItems.map { item -> if (item.projectId == projectId) item.copy(tags = tags) else item }
             } finally {
-                tagBackfillInFlight.remove(projectId)
+                setTaggingInFlight(projectId, false)
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        for (projectId in metadataBackfillQueue) {
+            metadataBackfillQueued.remove(projectId)
+            setMetadataInFlight(projectId, true)
+            try {
+                val projectMeta = withContext(Dispatchers.IO) {
+                    storage.getAllProjects().firstOrNull { it.id == projectId }
+                } ?: continue
+                if (!projectMeta.rawMetadata.isNullOrEmpty()) continue
+
+                val rawBytes = withContext(Dispatchers.IO) { storage.loadRawBytes(projectId) } ?: continue
+                runCatching { computeAndPersistRawMetadata(projectId, rawBytes) }
+            } finally {
+                setMetadataInFlight(projectId, false)
             }
         }
     }
@@ -1106,7 +1207,8 @@ private fun RapidRawEditorScreen() {
                     fileName = metadata.fileName,
                     thumbnail = thumbnail,
                     rating = metadata.rating,
-                    tags = metadata.tags ?: emptyList()
+                    tags = metadata.tags ?: emptyList(),
+                    rawMetadata = metadata.rawMetadata ?: emptyMap()
                 )
             }
         }
@@ -1116,9 +1218,17 @@ private fun RapidRawEditorScreen() {
             maybeRequestNotificationPermission()
         }
         missingTagIds.forEach { id ->
-            if (!tagBackfillInFlight.containsKey(id)) {
-                tagBackfillInFlight[id] = true
+            if (!isTaggingInFlight(id) && tagBackfillQueued[id] != true) {
+                tagBackfillQueued[id] = true
                 tagBackfillQueue.trySend(id)
+            }
+        }
+
+        val missingMetadataIds = projects.filter { it.rawMetadata.isNullOrEmpty() }.map { it.id }
+        missingMetadataIds.forEach { id ->
+            if (!isMetadataInFlight(id) && metadataBackfillQueued[id] != true) {
+                metadataBackfillQueued[id] = true
+                metadataBackfillQueue.trySend(id)
             }
         }
     }
@@ -1159,6 +1269,16 @@ private fun RapidRawEditorScreen() {
             GalleryScreen(
                 items = galleryItems,
                 tagger = tagger,
+                isTaggingInFlight = ::isTaggingInFlight,
+                onTaggingInFlightChange = ::setTaggingInFlight,
+                tagProgressFor = ::tagProgressFor,
+                onTagProgressChange = ::setTagProgress,
+                onMetadataChanged = { projectId, rawMetadata ->
+                    galleryItems =
+                        galleryItems.map { item ->
+                            if (item.projectId == projectId) item.copy(rawMetadata = rawMetadata) else item
+                        }
+                },
                 onOpenItem = { item ->
                     if (currentScreen == Screen.Editor) return@GalleryScreen
                     coroutineScope.launch {
@@ -1354,6 +1474,11 @@ private fun StartupSplash(
 private fun GalleryScreen(
     items: List<GalleryItem>,
     tagger: ClipAutoTagger,
+    isTaggingInFlight: (String) -> Boolean,
+    onTaggingInFlightChange: (String, Boolean) -> Unit,
+    tagProgressFor: (String) -> Float?,
+    onTagProgressChange: (String, Float) -> Unit,
+    onMetadataChanged: (String, Map<String, String>) -> Unit,
     onOpenItem: (GalleryItem) -> Unit,
     onAddClick: (GalleryItem) -> Unit,
     onTagsChanged: (String, List<String>) -> Unit,
@@ -1376,6 +1501,52 @@ private fun GalleryScreen(
     val mimeTypes = arrayOf("image/x-sony-arw", "image/*")
     val notificationPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    val searchBarState = rememberSearchBarState()
+    val textFieldState = rememberTextFieldState()
+    val queryLower = remember(textFieldState.text) { textFieldState.text.toString().trim().lowercase(Locale.US) }
+    val tagCounts = remember(items) {
+        val counts = mutableMapOf<String, Int>()
+        items.flatMap { it.tags }.forEach { tag ->
+            val t = tag.trim()
+            if (t.isNotBlank()) counts[t] = (counts[t] ?: 0) + 1
+        }
+        counts.toList().sortedByDescending { it.second }.map { it.first to it.second }
+    }
+    val tagSuggestions = remember(tagCounts, queryLower) {
+        val base = tagCounts.map { it.first }
+        val filtered =
+            if (queryLower.isBlank()) base
+            else base.filter { it.lowercase(Locale.US).contains(queryLower) }
+        filtered.take(20)
+    }
+
+    fun matchesQuery(item: GalleryItem): Boolean {
+        if (queryLower.isBlank()) return true
+        if (item.fileName.lowercase(Locale.US).contains(queryLower)) return true
+        if (item.tags.any { it.lowercase(Locale.US).contains(queryLower) }) return true
+        if (item.rawMetadata.any { (k, v) ->
+                k.lowercase(Locale.US).contains(queryLower) || v.lowercase(Locale.US).contains(queryLower)
+            }
+        ) return true
+        return false
+    }
+
+    val filteredItems = remember(items, queryLower) {
+        if (queryLower.isBlank()) items else items.filter(::matchesQuery)
+    }
+
+    val scrollBehavior = SearchBarDefaults.enterAlwaysSearchBarScrollBehavior()
+    val queryText = remember(textFieldState.text) { textFieldState.text.toString() }
+
+    fun collapseSearch() {
+        coroutineScope.launch { searchBarState.animateToCollapsed() }
+    }
+
+    fun setQueryAndCollapse(text: String) {
+        textFieldState.setTextAndPlaceCursorAtEnd(text)
+        collapseSearch()
+    }
 
     fun maybeRequestNotificationPermission() {
         if (Build.VERSION.SDK_INT < 33) return
@@ -1403,23 +1574,47 @@ private fun GalleryScreen(
                     projectId = projectId,
                     fileName = name,
                     thumbnail = null,
-                    tags = emptyList()
+                    tags = emptyList(),
+                    rawMetadata = emptyMap()
                 )
                 onAddClick(item)
 
                 maybeRequestNotificationPermission()
                 coroutineScope.launch {
-                    val tags = withContext(Dispatchers.Default) {
-                        runCatching {
-                            val previewBytes =
-                                LibRawDecoder.lowdecode(bytes, "{}")
-                                    ?: LibRawDecoder.lowlowdecode(bytes, "{}")
-                            val bmp = previewBytes?.decodeToBitmap()
-                            if (bmp == null) emptyList() else tagger.generateTags(bmp)
-                        }.getOrDefault(emptyList())
+                    onTaggingInFlightChange(projectId, true)
+                    try {
+                        val meta = withContext(Dispatchers.Default) {
+                            runCatching {
+                                val handle = LibRawDecoder.createSession(bytes)
+                                if (handle == 0L) return@runCatching emptyMap<String, String>()
+                                try {
+                                    val json = LibRawDecoder.getMetadataJsonFromSession(handle)
+                                    parseRawMetadataForSearch(json)
+                                } finally {
+                                    LibRawDecoder.releaseSession(handle)
+                                }
+                            }.getOrDefault(emptyMap())
+                        }
+                        if (meta.isNotEmpty()) {
+                            withContext(Dispatchers.IO) { storage.setRawMetadata(projectId, meta) }
+                            onMetadataChanged(projectId, meta)
+                        }
+
+                        val tags = withContext(Dispatchers.Default) {
+                            runCatching {
+                                val previewBytes =
+                                    LibRawDecoder.lowdecode(bytes, "{}")
+                                        ?: LibRawDecoder.lowlowdecode(bytes, "{}")
+                                val bmp = previewBytes?.decodeToBitmap()
+                                if (bmp == null) emptyList()
+                                else tagger.generateTags(bmp, onProgress = { p -> onTagProgressChange(projectId, p) })
+                            }.getOrDefault(emptyList())
+                        }
+                        withContext(Dispatchers.IO) { storage.setTags(projectId, tags) }
+                        onTagsChanged(projectId, tags)
+                    } finally {
+                        onTaggingInFlightChange(projectId, false)
                     }
-                    withContext(Dispatchers.IO) { storage.setTags(projectId, tags) }
-                    onTagsChanged(projectId, tags)
                 }
             }
         }
@@ -1543,10 +1738,44 @@ private fun GalleryScreen(
     }
 
     Scaffold(
-        modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars),
+        modifier = Modifier
+            .fillMaxSize()
+            .nestedScroll(scrollBehavior.nestedScrollConnection)
+            .windowInsetsPadding(WindowInsets.systemBars),
         topBar = {
             Column {
-                CenterAlignedTopAppBar(title = { Text("Gallery") })
+                AppBarWithSearch(
+                    state = searchBarState,
+                    scrollBehavior = scrollBehavior,
+                    inputField = {
+                        SearchBarDefaults.InputField(
+                            textFieldState = textFieldState,
+                            searchBarState = searchBarState,
+                            onSearch = { collapseSearch() },
+                            placeholder = { Text("Search RAWs") },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                            trailingIcon = {
+                                if (queryText.isNotBlank()) {
+                                    IconButton(
+                                        onClick = {
+                                            textFieldState.setTextAndPlaceCursorAtEnd("")
+                                            collapseSearch()
+                                        }
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = "Clear search")
+                                    }
+                                } else if (searchBarState.targetValue == SearchBarValue.Expanded) {
+                                    IconButton(onClick = { collapseSearch() }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Cancel")
+                                    }
+                                }
+                            },
+                            shape = CircleShape
+                        )
+                    },
+                    actions = { }
+                )
+
                 if (isBulkExporting) {
                     LinearWavyProgressIndicator(
                         progress = { bulkExportProgressAnim.value.coerceIn(0f, 1f) },
@@ -1567,6 +1796,81 @@ private fun GalleryScreen(
             }
         }
     ) { padding ->
+        ExpandedFullScreenContainedSearchBar(
+            state = searchBarState,
+            inputField = {
+                SearchBarDefaults.InputField(
+                    textFieldState = textFieldState,
+                    searchBarState = searchBarState,
+                    onSearch = { collapseSearch() },
+                    placeholder = { Text("Search everywhere") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (queryText.isNotBlank()) {
+                            IconButton(onClick = { textFieldState.setTextAndPlaceCursorAtEnd("") }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear")
+                            }
+                        } else {
+                            IconButton(onClick = { collapseSearch() }) {
+                                Icon(Icons.Default.Close, contentDescription = "Cancel")
+                            }
+                        }
+                    },
+                    shape = CircleShape
+                )
+            }
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val chips = (tagCounts.take(24).map { it.first })
+                    items(chips.size) { idx ->
+                        val tag = chips[idx]
+                        SuggestionChip(
+                            onClick = { setQueryAndCollapse(tag) },
+                            label = { Text(tag, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            shape = CircleShape
+                        )
+                    }
+                }
+
+                LazyColumn(
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    item {
+                        Text(
+                            text = "Top tags",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 8.dp)
+                        )
+                    }
+
+                    val list = if (tagSuggestions.isNotEmpty()) tagSuggestions else tagCounts.take(12).map { it.first }
+                    items(list.size) { idx ->
+                        val tag = list[idx]
+                        Surface(
+                            onClick = { setQueryAndCollapse(tag) },
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            ListItem(
+                                headlineContent = { Text(tag, fontWeight = FontWeight.Medium) },
+                                supportingContent = { Text("Tag") },
+                                leadingContent = { Icon(Icons.Default.History, contentDescription = null) },
+                                trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null) },
+                                colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -1605,12 +1909,14 @@ private fun GalleryScreen(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(items.size) { index ->
-                            val item = items[index]
+                        items(filteredItems.size) { index ->
+                            val item = filteredItems[index]
                             val isSelected = item.projectId in selectedIds
                             GalleryItemCard(
                                 item = item,
                                 selected = isSelected,
+                                isProcessing = isTaggingInFlight(item.projectId),
+                                processingProgress = tagProgressFor(item.projectId),
                                 onClick = {
                                     if (isBulkExporting) return@GalleryItemCard
                                     if (selectedIds.isEmpty()) {
@@ -1843,6 +2149,8 @@ private fun GalleryScreen(
 private fun GalleryItemCard(
     item: GalleryItem,
     selected: Boolean,
+    isProcessing: Boolean,
+    processingProgress: Float?,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -1902,6 +2210,32 @@ private fun GalleryItemCard(
                 }
             }
 
+            if (isProcessing) {
+                if (processingProgress != null) {
+                    val smoothProgress by animateFloatAsState(
+                        targetValue = processingProgress.coerceIn(0f, 1f),
+                        animationSpec = tween(durationMillis = 650, easing = FastOutSlowInEasing),
+                        label = "tagProgress"
+                    )
+                    LinearWavyProgressIndicator(
+                        progress = { smoothProgress },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        LoadingIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+
             Row(
                 modifier = Modifier.padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -1952,7 +2286,10 @@ private fun EditorScreen(
     var sessionHandle by remember { mutableStateOf(0L) }
     var adjustments by remember { mutableStateOf(AdjustmentState()) }
     var masks by remember { mutableStateOf<List<MaskState>>(emptyList()) }
-    var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var editedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var originalBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var isComparingOriginal by remember { mutableStateOf(false) }
+    val displayBitmap = if (isComparingOriginal) (originalBitmap ?: editedBitmap) else editedBitmap
     var histogramData by remember { mutableStateOf<HistogramData?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var isGeneratingAiMask by remember { mutableStateOf(false) }
@@ -2005,7 +2342,8 @@ private fun EditorScreen(
     val strokeOrder = remember { AtomicLong(0L) }
 
     val renderVersion = remember { AtomicLong(0L) }
-    val lastPreviewVersion = remember { AtomicLong(0L) }
+    val lastEditedPreviewStamp = remember { AtomicLong(-1L) } // version*10 + quality
+    val lastOriginalPreviewStamp = remember { AtomicLong(-1L) } // version*10 + quality
     val renderRequests = remember { Channel<RenderRequest>(capacity = Channel.CONFLATED) }
     val renderDispatcher = remember { Executors.newSingleThreadExecutor().asCoroutineDispatcher() }
     DisposableEffect(renderDispatcher) {
@@ -2023,6 +2361,11 @@ private fun EditorScreen(
 
     // Load RAW file and adjustments from storage
     LaunchedEffect(galleryItem.projectId) {
+        isComparingOriginal = false
+        originalBitmap = null
+        editedBitmap = null
+        lastEditedPreviewStamp.set(-1L)
+        lastOriginalPreviewStamp.set(-1L)
         val raw = withContext(Dispatchers.IO) {
             storage.loadRawBytes(galleryItem.projectId)
         }
@@ -2275,8 +2618,8 @@ private fun EditorScreen(
         metadataJson = null
     }
 
-    LaunchedEffect(previewBitmap) {
-        val bmp = previewBitmap ?: run {
+    LaunchedEffect(displayBitmap) {
+        val bmp = displayBitmap ?: run {
             histogramData = null
             return@LaunchedEffect
         }
@@ -2287,18 +2630,31 @@ private fun EditorScreen(
         }
 
         delay(80)
-        if (previewBitmap !== bmp) {
+        if (displayBitmap !== bmp) {
             return@LaunchedEffect
         }
         histogramData = withContext(Dispatchers.Default) { calculateHistogram(bmp) }
     }
 
+    LaunchedEffect(adjustments, masks, isDraggingMaskHandle, isComparingOriginal) {
+        if (isDraggingMaskHandle) return@LaunchedEffect
+        val json = withContext(Dispatchers.Default) {
+            if (isComparingOriginal) AdjustmentState(toneMapper = adjustments.toneMapper).toJson(emptyList())
+            else adjustments.toJson(masks)
+        }
+        val version = renderVersion.incrementAndGet()
+        renderRequests.trySend(
+            RenderRequest(
+                version = version,
+                adjustmentsJson = json,
+                isOriginal = isComparingOriginal
+            )
+        )
+    }
+
     LaunchedEffect(adjustments, masks, isDraggingMaskHandle) {
         if (isDraggingMaskHandle) return@LaunchedEffect
         val json = withContext(Dispatchers.Default) { adjustments.toJson(masks) }
-        val version = renderVersion.incrementAndGet()
-        renderRequests.trySend(RenderRequest(version = version, adjustmentsJson = json))
-
         // Debounce persisting adjustments (I/O) for slider drags + mask edits.
         delay(350)
         withContext(Dispatchers.IO) {
@@ -2314,7 +2670,8 @@ private fun EditorScreen(
         renderRequests.trySend(
             RenderRequest(
                 version = renderVersion.incrementAndGet(),
-                adjustmentsJson = adjustments.toJson(masks)
+                adjustmentsJson = adjustments.toJson(masks),
+                isOriginal = false
             )
         )
 
@@ -2327,15 +2684,30 @@ private fun EditorScreen(
 
             val requestVersion = currentRequest.version
             val requestJson = currentRequest.adjustmentsJson
+            val requestIsOriginal = currentRequest.isOriginal
+
+            fun updateBitmapForRequest(version: Long, quality: Int, bitmap: Bitmap) {
+                val stamp = version * 10L + quality.coerceIn(0, 9).toLong()
+                if (requestIsOriginal) {
+                    if (stamp > lastOriginalPreviewStamp.get()) {
+                        originalBitmap = bitmap
+                        lastOriginalPreviewStamp.set(stamp)
+                    }
+                } else {
+                    if (stamp > lastEditedPreviewStamp.get()) {
+                        editedBitmap = bitmap
+                        lastEditedPreviewStamp.set(stamp)
+                    }
+                }
+            }
 
             // Stage 1: super-low quality (fast feedback while dragging).
             val superLowBitmap = withContext(renderDispatcher) {
                 val bytes = runCatching { LibRawDecoder.lowlowdecodeFromSession(handle, requestJson) }.getOrNull()
                 bytes?.decodeToBitmap()
             }
-            if (superLowBitmap != null && requestVersion > lastPreviewVersion.get()) {
-                previewBitmap = superLowBitmap
-                lastPreviewVersion.set(requestVersion)
+            if (superLowBitmap != null) {
+                updateBitmapForRequest(version = requestVersion, quality = 0, bitmap = superLowBitmap)
             }
 
             // If the user is still moving the slider, keep updating the super-low preview only.
@@ -2350,9 +2722,8 @@ private fun EditorScreen(
                 val bytes = runCatching { LibRawDecoder.lowdecodeFromSession(handle, requestJson) }.getOrNull()
                 bytes?.decodeToBitmap()
             }
-            if (lowBitmap != null && requestVersion > lastPreviewVersion.get()) {
-                previewBitmap = lowBitmap
-                lastPreviewVersion.set(requestVersion)
+            if (lowBitmap != null) {
+                updateBitmapForRequest(version = requestVersion, quality = 1, bitmap = lowBitmap)
             }
 
             // Debounce before running the expensive preview render.
@@ -2370,14 +2741,15 @@ private fun EditorScreen(
             isLoading = false
 
             if (requestVersion == renderVersion.get()) {
-                errorMessage = if (fullBitmap == null) "Failed to render preview." else null
+                if (!requestIsOriginal) {
+                    errorMessage = if (fullBitmap == null) "Failed to render preview." else null
+                }
                 if (fullBitmap != null) {
-                    previewBitmap = fullBitmap
-                    lastPreviewVersion.set(requestVersion)
+                    updateBitmapForRequest(version = requestVersion, quality = 2, bitmap = fullBitmap)
                 }
 
                 // Generate and save thumbnail only for the latest completed render.
-                fullBitmap?.let { bmp ->
+                if (!requestIsOriginal) fullBitmap?.let { bmp ->
                     withContext(Dispatchers.IO) {
                         val maxSize = 512
                         val scale = minOf(maxSize.toFloat() / bmp.width, maxSize.toFloat() / bmp.height)
@@ -2497,7 +2869,7 @@ private fun EditorScreen(
     val onLassoFinished: (List<MaskPoint>) -> Unit = onLasso@{ points ->
         val maskId = selectedMaskId ?: return@onLasso
         val subId = selectedSubMaskId ?: return@onLasso
-        val bmp = previewBitmap ?: return@onLasso
+        val bmp = editedBitmap ?: return@onLasso
         if (points.size < 3) return@onLasso
 
         coroutineScope.launch {
@@ -2545,17 +2917,17 @@ private fun EditorScreen(
                                 .fillMaxHeight()
                         ) {
                             ImagePreview(
-                                bitmap = previewBitmap,
+                                bitmap = displayBitmap,
                                 isLoading = isLoading || isGeneratingAiMask,
                                 maskOverlay = selectedMaskForOverlay,
                                 activeSubMask = selectedSubMaskForEdit,
-                                isMaskMode = isMaskMode,
-                                showMaskOverlay = showMaskOverlay,
+                                isMaskMode = isMaskMode && !isComparingOriginal,
+                                showMaskOverlay = showMaskOverlay && !isComparingOriginal,
                                 maskOverlayBlinkKey = maskOverlayBlinkKey,
-                                isPainting = isInteractiveMaskingEnabled,
+                                isPainting = isInteractiveMaskingEnabled && !isComparingOriginal,
                                 brushSize = brushSize,
-                                maskTapMode = maskTapMode,
-                                onMaskTap = onMaskTap,
+                                maskTapMode = if (isComparingOriginal) MaskTapMode.None else maskTapMode,
+                                onMaskTap = if (isComparingOriginal) null else onMaskTap,
                                 onBrushStrokeFinished = onBrushStrokeFinished,
                                 onLassoFinished = onLassoFinished,
                                 onSubMaskHandleDrag = onSubMaskHandleDrag,
@@ -2568,6 +2940,12 @@ private fun EditorScreen(
                                         showAiSubjectOverrideDialog = true
                                     }
                                 }
+                                ,
+                                enableOriginalCompareHold = !isInteractiveMaskingEnabled &&
+                                    !isDraggingMaskHandle &&
+                                    maskTapMode == MaskTapMode.None &&
+                                    !isGeneratingAiMask,
+                                onOriginalCompareHoldChanged = { isComparingOriginal = it }
                             )
                         }
 
@@ -2768,17 +3146,17 @@ private fun EditorScreen(
                             .weight(1f)
                     ) {
                         ImagePreview(
-                            bitmap = previewBitmap,
+                            bitmap = displayBitmap,
                             isLoading = isLoading || isGeneratingAiMask,
                             maskOverlay = selectedMaskForOverlay,
                             activeSubMask = selectedSubMaskForEdit,
-                            isMaskMode = isMaskMode,
-                            showMaskOverlay = showMaskOverlay,
+                            isMaskMode = isMaskMode && !isComparingOriginal,
+                            showMaskOverlay = showMaskOverlay && !isComparingOriginal,
                             maskOverlayBlinkKey = maskOverlayBlinkKey,
-                            isPainting = isInteractiveMaskingEnabled,
+                            isPainting = isInteractiveMaskingEnabled && !isComparingOriginal,
                             brushSize = brushSize,
-                            maskTapMode = maskTapMode,
-                            onMaskTap = onMaskTap,
+                            maskTapMode = if (isComparingOriginal) MaskTapMode.None else maskTapMode,
+                            onMaskTap = if (isComparingOriginal) null else onMaskTap,
                             onBrushStrokeFinished = onBrushStrokeFinished,
                             onLassoFinished = onLassoFinished,
                             onSubMaskHandleDrag = onSubMaskHandleDrag,
@@ -2791,6 +3169,12 @@ private fun EditorScreen(
                                     showAiSubjectOverrideDialog = true
                                 }
                             }
+                            ,
+                            enableOriginalCompareHold = !isInteractiveMaskingEnabled &&
+                                !isDraggingMaskHandle &&
+                                maskTapMode == MaskTapMode.None &&
+                                !isGeneratingAiMask,
+                            onOriginalCompareHoldChanged = { isComparingOriginal = it }
                         )
                     }
 
@@ -4910,7 +5294,9 @@ private fun ImagePreview(
     onLassoFinished: ((List<MaskPoint>) -> Unit)? = null,
     onSubMaskHandleDrag: ((MaskHandle, MaskPoint) -> Unit)? = null,
     onSubMaskHandleDragStateChange: ((Boolean) -> Unit)? = null,
-    onRequestAiSubjectOverride: (() -> Unit)? = null
+    onRequestAiSubjectOverride: (() -> Unit)? = null,
+    enableOriginalCompareHold: Boolean = true,
+    onOriginalCompareHoldChanged: ((Boolean) -> Unit)? = null
 ) {
     var scale by remember { mutableStateOf(1f) }
     var offsetX by remember { mutableStateOf(0f) }
@@ -4919,10 +5305,69 @@ private fun ImagePreview(
     val currentStroke = remember { mutableStateListOf<MaskPoint>() }
     val density = LocalDensity.current
     val activeSubMaskState by rememberUpdatedState(activeSubMask)
+    val latestCompareCallback by rememberUpdatedState(onOriginalCompareHoldChanged)
+    val latestCompareEnabled by rememberUpdatedState(enableOriginalCompareHold)
+    val latestBitmap by rememberUpdatedState(bitmap)
 
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
+            .then(
+                if (latestCompareCallback == null) Modifier
+                else Modifier.pointerInput(Unit) {
+                    awaitEachGesture {
+                        val callback = latestCompareCallback ?: return@awaitEachGesture
+                        if (!latestCompareEnabled) return@awaitEachGesture
+                        if (latestBitmap == null) return@awaitEachGesture
+
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        if (down.type != PointerType.Touch && down.type != PointerType.Stylus) return@awaitEachGesture
+
+                        val timeoutMs = ViewConfiguration.getLongPressTimeout().toLong().coerceAtLeast(1L)
+                        val slop = viewConfiguration.touchSlop
+                        val downPos = down.position
+                        val startTime = SystemClock.uptimeMillis()
+
+                        var longPressed = false
+                        var canceled = false
+
+                        try {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val pressed = event.changes.filter { it.pressed }
+                                if (pressed.none { it.id == down.id }) break
+
+                                if (!longPressed) {
+                                    val touchCount = pressed.count { it.type == PointerType.Touch }
+                                    if (touchCount >= 2) {
+                                        canceled = true
+                                        break
+                                    }
+                                    val change = event.changes.firstOrNull { it.id == down.id } ?: continue
+                                    val dx = change.position.x - downPos.x
+                                    val dy = change.position.y - downPos.y
+                                    if ((dx * dx + dy * dy) > slop * slop) {
+                                        canceled = true
+                                        break
+                                    }
+                                    if (SystemClock.uptimeMillis() - startTime >= timeoutMs) {
+                                        longPressed = true
+                                        callback(true)
+                                    }
+                                } else {
+                                    event.changes.forEach { it.consume() }
+                                }
+                            }
+                        } finally {
+                            if (longPressed) {
+                                callback(false)
+                            } else if (canceled) {
+                                // no-op
+                            }
+                        }
+                    }
+                }
+            )
             .let { base ->
                 if (!isMaskMode) base
                 else base.pointerInput(bitmap) {
@@ -5455,3 +5900,20 @@ private fun saveJpegToPictures(context: Context, jpegBytes: ByteArray): Uri? {
 
 private fun ByteArray.decodeToBitmap(): Bitmap? =
     BitmapFactory.decodeByteArray(this, 0, size)
+
+private fun parseRawMetadataForSearch(metadataJson: String?): Map<String, String> {
+    val json = metadataJson?.takeIf { it.isNotBlank() } ?: return emptyMap()
+    return runCatching {
+        val obj = JSONObject(json)
+        mapOf(
+            "make" to obj.optString("make"),
+            "model" to obj.optString("model"),
+            "lens" to obj.optString("lens"),
+            "iso" to obj.optString("iso"),
+            "exposure" to obj.optString("exposureTime"),
+            "aperture" to obj.optString("fNumber"),
+            "focalLength" to obj.optString("focalLength"),
+            "date" to obj.optString("dateTimeOriginal")
+        ).filterValues { it.isNotBlank() && it != "null" }
+    }.getOrDefault(emptyMap())
+}

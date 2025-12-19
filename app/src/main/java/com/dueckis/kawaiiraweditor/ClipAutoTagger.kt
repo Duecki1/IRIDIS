@@ -14,6 +14,10 @@ import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -44,12 +48,35 @@ class ClipAutoTagger(appContext: Context) {
     private val modelMutex = Mutex()
     private val tokenizerMutex = Mutex()
 
-    suspend fun generateTags(previewBitmap: Bitmap): List<String> = withContext(Dispatchers.Default) {
+    suspend fun generateTags(
+        previewBitmap: Bitmap,
+        onProgress: ((Float) -> Unit)? = null
+    ): List<String> = withContext(Dispatchers.Default) {
+        var lastProgress = 0f
+        fun setProgress(p: Float) {
+            val clamped = p.coerceIn(0f, 1f)
+            if (clamped <= lastProgress) return
+            lastProgress = clamped
+            onProgress?.invoke(clamped)
+        }
+
+        setProgress(0.02f)
         val candidates = ensureCandidates()
-        val (tokenIds, attentionMask) = ensureTokenizedCandidates(candidates)
-        val ortSession = ensureSession()
+        setProgress(0.06f)
+
+        val ortSession = ensureSession(
+            onProgress = { downloadProgress -> setProgress(0.06f + 0.42f * downloadProgress.coerceIn(0f, 1f)) }
+        )
+        setProgress(0.50f)
+
+        val (tokenIds, attentionMask) = ensureTokenizedCandidates(
+            candidates,
+            onProgress = { p -> setProgress(0.50f + 0.22f * p.coerceIn(0f, 1f)) }
+        )
+        setProgress(0.74f)
 
         val imageInput = preprocessClipImage(previewBitmap)
+        setProgress(0.80f)
         val seqLen = CLIP_MAX_TOKENS
 
         val inputNames = ortSession.inputNames.toList()
@@ -70,37 +97,57 @@ class ClipAutoTagger(appContext: Context) {
         val maskTensor = OnnxTensor.createTensor(env(), LongBuffer.wrap(attentionMask), longArrayOf(candidates.size.toLong(), seqLen.toLong()))
         val imageTensor = OnnxTensor.createTensor(env(), FloatBuffer.wrap(imageInput), longArrayOf(1L, 3L, 224L, 224L))
 
-        idsTensor.use { ids ->
-            maskTensor.use { mask ->
-                imageTensor.use { image ->
-                    val inputs = mapOf(
-                        idsName to ids,
-                        imageName to image,
-                        maskName to mask
-                    )
-                    ortSession.run(inputs).use { results ->
-                        val output = results[0] as OnnxTensor
-                        val fb = output.floatBuffer
-                        val logits = FloatArray(fb.remaining()).also { fb.get(it) }
-                        val probs = softmax(logits)
+        coroutineScope {
+            val fakeAdvanceJob = launch {
+                val start = SystemClock.elapsedRealtime()
+                val from = lastProgress.coerceAtLeast(0.80f)
+                val to = 0.975f
+                while (isActive) {
+                    val tSec = (SystemClock.elapsedRealtime() - start).toFloat() / 1000f
+                    val frac = 1f - exp(-tSec / 2.2f)
+                    setProgress(from + (to - from) * frac)
+                    delay(120)
+                }
+            }
 
-                        val scored = mutableListOf<Pair<String, Float>>()
-                        for (i in candidates.indices) {
-                            val p = probs.getOrNull(i) ?: continue
-                            if (p > 0.005f) scored += candidates[i] to p
-                        }
-                        scored.sortByDescending { it.second }
+            try {
+                idsTensor.use { ids ->
+                    maskTensor.use { mask ->
+                        imageTensor.use { image ->
+                            val inputs = mapOf(
+                                idsName to ids,
+                                imageName to image,
+                                maskName to mask
+                            )
+                            ortSession.run(inputs).use { results ->
+                                val output = results[0] as OnnxTensor
+                                val fb = output.floatBuffer
+                                val logits = FloatArray(fb.remaining()).also { fb.get(it) }
+                                val probs = softmax(logits)
+                                setProgress(0.985f)
 
-                        val initial = scored.take(10).map { it.first }
-                        val out = LinkedHashSet<String>()
-                        initial.forEach(out::add)
-                        extractColorTags(previewBitmap).forEach(out::add)
-                        initial.forEach { tag ->
-                            tagHierarchy()[tag]?.forEach(out::add)
+                                val scored = mutableListOf<Pair<String, Float>>()
+                                for (i in candidates.indices) {
+                                    val p = probs.getOrNull(i) ?: continue
+                                    if (p > 0.005f) scored += candidates[i] to p
+                                }
+                                scored.sortByDescending { it.second }
+
+                                val initial = scored.take(10).map { it.first }
+                                val out = LinkedHashSet<String>()
+                                initial.forEach(out::add)
+                                extractColorTags(previewBitmap).forEach(out::add)
+                                initial.forEach { tag ->
+                                    tagHierarchy()[tag]?.forEach(out::add)
+                                }
+                                setProgress(1f)
+                                out.toList()
+                            }
                         }
-                        out.toList()
                     }
                 }
+            } finally {
+                fakeAdvanceJob.cancel()
             }
         }
     }
@@ -109,11 +156,11 @@ class ClipAutoTagger(appContext: Context) {
         env ?: OrtEnvironment.getEnvironment().also { env = it }
     }
 
-    private suspend fun ensureSession(): OrtSession = withContext(Dispatchers.IO) {
+    private suspend fun ensureSession(onProgress: ((Float) -> Unit)? = null): OrtSession = withContext(Dispatchers.IO) {
         val existing = synchronized(lock) { session }
         if (existing != null) return@withContext existing
 
-        val modelFile = ensureModelOnDisk()
+        val modelFile = ensureModelOnDisk(onProgress = onProgress)
         val created = env().createSession(modelFile.absolutePath, OrtSession.SessionOptions())
         synchronized(lock) {
             val race = session
@@ -136,13 +183,16 @@ class ClipAutoTagger(appContext: Context) {
         }
     }
 
-    private suspend fun ensureTokenizedCandidates(candidates: List<String>): Pair<LongArray, LongArray> =
+    private suspend fun ensureTokenizedCandidates(
+        candidates: List<String>,
+        onProgress: ((Float) -> Unit)? = null
+    ): Pair<LongArray, LongArray> =
         withContext(Dispatchers.IO) {
             val idsExisting = cachedTokenIds
             val maskExisting = cachedAttentionMask
             if (idsExisting != null && maskExisting != null) return@withContext idsExisting to maskExisting
 
-            val tokenizer = ensureTokenizer()
+            val tokenizer = ensureTokenizer(onProgress = onProgress)
             val count = candidates.size
             val ids = LongArray(count * CLIP_MAX_TOKENS)
             val mask = LongArray(count * CLIP_MAX_TOKENS)
@@ -153,13 +203,17 @@ class ClipAutoTagger(appContext: Context) {
                     ids[base + i] = encoding.ids[i].toLong()
                     mask[base + i] = encoding.attentionMask[i].toLong()
                 }
+                if (idx % 20 == 0) {
+                    onProgress?.invoke(idx.toFloat() / count.toFloat())
+                }
             }
             cachedTokenIds = ids
             cachedAttentionMask = mask
+            onProgress?.invoke(1f)
             ids to mask
         }
 
-    private suspend fun ensureTokenizer(): ClipBpeTokenizer = tokenizerMutex.withLock {
+    private suspend fun ensureTokenizer(onProgress: ((Float) -> Unit)? = null): ClipBpeTokenizer = tokenizerMutex.withLock {
         withContext(Dispatchers.IO) {
             val modelDir = File(context.filesDir, "models").apply { mkdirs() }
             val tokenizerFile = File(modelDir, CLIP_TOKENIZER_FILENAME)
@@ -168,14 +222,15 @@ class ClipAutoTagger(appContext: Context) {
                     url = CLIP_TOKENIZER_URL,
                     finalDest = tokenizerFile,
                     expectedSha256 = null,
-                    notificationTitle = "Downloading AI tokenizer"
+                    notificationTitle = "Downloading AI tokenizer",
+                    onProgress = onProgress
                 )
             }
             ClipBpeTokenizer.fromFile(tokenizerFile)
         }
     }
 
-    private suspend fun ensureModelOnDisk(): File = modelMutex.withLock {
+    private suspend fun ensureModelOnDisk(onProgress: ((Float) -> Unit)? = null): File = modelMutex.withLock {
         withContext(Dispatchers.IO) {
             val dir = File(context.filesDir, "models").apply { mkdirs() }
             val dest = File(dir, CLIP_MODEL_FILENAME)
@@ -186,7 +241,8 @@ class ClipAutoTagger(appContext: Context) {
                 url = CLIP_MODEL_URL,
                 finalDest = dest,
                 expectedSha256 = CLIP_MODEL_SHA256,
-                notificationTitle = "Downloading AI model"
+                notificationTitle = "Downloading AI model",
+                onProgress = onProgress
             )
             dest
         }
@@ -257,7 +313,8 @@ class ClipAutoTagger(appContext: Context) {
         url: String,
         finalDest: File,
         expectedSha256: String?,
-        notificationTitle: String
+        notificationTitle: String,
+        onProgress: ((Float) -> Unit)? = null
     ) {
         val tmp = File(finalDest.parentFile, "${finalDest.name}.part")
         tmp.delete()
@@ -308,6 +365,9 @@ class ClipAutoTagger(appContext: Context) {
                                 totalBytes = total,
                                 indeterminate = indeterminate
                             )
+                            if (!indeterminate && total > 0L) {
+                                onProgress?.invoke((readTotal.toFloat() / total.toFloat()).coerceIn(0f, 1f))
+                            }
                         }
                     }
                 }
@@ -319,6 +379,7 @@ class ClipAutoTagger(appContext: Context) {
                     "Downloaded file hash mismatch"
                 }
             }
+            onProgress?.invoke(1f)
 
             if (finalDest.exists()) finalDest.delete()
             check(tmp.renameTo(finalDest)) { "Failed to move downloaded file into place" }

@@ -37,7 +37,8 @@ class ProjectStorage(private val context: Context) {
         val createdAt: Long,
         val modifiedAt: Long,
         val rating: Int = 0,
-        val tags: List<String>? = null
+        val tags: List<String>? = null,
+        val rawMetadata: Map<String, String>? = null
     )
     
     data class ProjectData(
@@ -67,7 +68,8 @@ class ProjectStorage(private val context: Context) {
             fileName = fileName,
             createdAt = System.currentTimeMillis(),
             modifiedAt = System.currentTimeMillis(),
-            tags = emptyList()
+            tags = emptyList(),
+            rawMetadata = emptyMap()
         )
         addToProjectIndex(metadata)
         
@@ -169,6 +171,21 @@ class ProjectStorage(private val context: Context) {
         val index = projects.indexOfFirst { it.id == projectId }
         if (index >= 0) {
             projects[index] = projects[index].copy(modifiedAt = System.currentTimeMillis())
+            saveProjectIndex(projects)
+        }
+    }
+
+    fun setRawMetadata(projectId: String, rawMetadata: Map<String, String>) {
+        val normalized =
+            rawMetadata
+                .mapValues { it.value.trim() }
+                .filterValues { it.isNotBlank() }
+                .toSortedMap()
+        val projects = getAllProjects().toMutableList()
+        val index = projects.indexOfFirst { it.id == projectId }
+        if (index >= 0) {
+            projects[index] =
+                projects[index].copy(rawMetadata = normalized, modifiedAt = System.currentTimeMillis())
             saveProjectIndex(projects)
         }
     }
