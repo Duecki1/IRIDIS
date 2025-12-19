@@ -1,4 +1,4 @@
-# KawaiiRawEditor
+# IRIDIS
 
 Draft / test Android RAW editor built with Jetpack Compose + a Rust native decoder/processor.
 
@@ -11,23 +11,24 @@ Pretty web version: [`README.html`](README.html)
     <td>
       <img
         alt="Gallery"
-        src="https://github.com/user-attachments/assets/c1088104-acea-435e-a874-04b29267131b"
+        src="github.com/user-attachments/assets/c1088104-acea-435e-a874-04b29267131b"
         width="260"
       />
+
     </td>
     <td>
       <img
         alt="Editor"
-        src="https://github.com/user-attachments/assets/f662f9fc-3bde-4c8d-8344-9ae6784a31da"
+        src="github.com/user-attachments/assets/1c1ecd56-cca2-4bfb-adf3-5d8253ea8b00"
         width="260"
       />
     </td>
     <td>
       <img
         alt="Editor (extra screenshot slot)"
-        src="https://github.com/user-attachments/assets/f662f9fc-3bde-4c8d-8344-9ae6784a31da"
+        src="ub.com/user-attachments/assets/5c6c3b5d-a7a1-4098-aece-e6ec35ed1372"
         width="260"
-      />
+      />  
     </td>
   </tr>
 </table>
@@ -48,7 +49,6 @@ Inspired by / forked from RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Color grading (shadows/midtones/highlights) + blending/balance.
 - Effects: vignette.
 - Masks: brush, linear gradient, radial, and AI subject mask (lasso-assisted).
-- Export full-resolution JPEG to `Pictures/KawaiiRawEditor`.
 
 ## License
 
