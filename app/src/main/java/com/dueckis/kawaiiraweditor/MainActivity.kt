@@ -19,7 +19,9 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Base64
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -1346,6 +1348,7 @@ private fun GalleryScreen(
 
     LaunchedEffect(bulkExportStatus) {
         if (bulkExportStatus == null) return@LaunchedEffect
+        Toast.makeText(context, bulkExportStatus, Toast.LENGTH_SHORT).show()
         delay(2500)
         bulkExportStatus = null
     }
@@ -1383,15 +1386,6 @@ private fun GalleryScreen(
             val gridBottomPadding = if (selectedIds.isNotEmpty()) 112.dp else 16.dp
 
             Column(modifier = Modifier.fillMaxSize()) {
-                bulkExportStatus?.let { msg ->
-                    Text(
-                        text = msg,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp)
-                    )
-                }
-
                 if (items.isEmpty()) {
                     Column(
                         modifier = Modifier
@@ -1650,6 +1644,21 @@ private fun EditorScreen(
     var metadataJson by remember { mutableStateOf<String?>(null) }
     var showAiSubjectOverrideDialog by remember { mutableStateOf(false) }
     var aiSubjectOverrideTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    BackHandler {
+        when {
+            showAiSubjectOverrideDialog -> {
+                showAiSubjectOverrideDialog = false
+                aiSubjectOverrideTarget = null
+            }
+
+            showMetadataDialog -> {
+                showMetadataDialog = false
+            }
+
+            else -> onBackClick()
+        }
+    }
 
     var panelTab by remember { mutableStateOf(EditorPanelTab.Adjustments) }
     var selectedMaskId by remember { mutableStateOf<String?>(null) }
