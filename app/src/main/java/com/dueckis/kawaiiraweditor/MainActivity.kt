@@ -76,7 +76,7 @@ import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.History
@@ -86,11 +86,19 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -113,6 +121,9 @@ import androidx.compose.material3.ExpandedFullScreenContainedSearchBar
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.FloatingToolbarDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SearchBarValue
@@ -128,6 +139,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.rememberSearchBarState
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -168,6 +181,7 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -533,11 +547,15 @@ private data class AiSubjectMaskParametersState(
     val softness: Float = 0.25f
 )
 
-private enum class EditorPanelTab {
-    Adjustments,
-    Color,
-    Effects,
-    Masks,
+private enum class EditorPanelTab(
+    val label: String,
+    val icon: ImageVector,
+    val iconSelected: ImageVector
+) {
+    Adjustments("Adjust", Icons.Outlined.Tune, Icons.Filled.Tune),
+    Color("Color", Icons.Outlined.Palette, Icons.Filled.Palette),
+    Effects("Effects", Icons.Outlined.AutoAwesome, Icons.Filled.AutoAwesome),
+    Masks("Masking", Icons.Outlined.Layers, Icons.Filled.Layers),
 }
 
 private fun AdjustmentState.isNeutralForMask(): Boolean {
@@ -1309,6 +1327,15 @@ private fun RapidRawEditorScreen() {
                             if (item.projectId !in ids) item else item.copy(rating = rating.coerceIn(0, 5))
                         }
                     }
+                },
+                onDeleteMany = { projectIds ->
+                    coroutineScope.launch {
+                        val ids = projectIds.toSet()
+                        withContext(Dispatchers.IO) {
+                            ids.forEach { id -> storage.deleteProject(id) }
+                        }
+                        galleryItems = galleryItems.filterNot { it.projectId in ids }
+                    }
                 }
             )
 
@@ -1482,7 +1509,8 @@ private fun GalleryScreen(
     onOpenItem: (GalleryItem) -> Unit,
     onAddClick: (GalleryItem) -> Unit,
     onTagsChanged: (String, List<String>) -> Unit,
-    onRatingChangeMany: (List<String>, Int) -> Unit
+    onRatingChangeMany: (List<String>, Int) -> Unit,
+    onDeleteMany: (List<String>) -> Unit
 ) {
     val context = LocalContext.current
     val storage = remember { ProjectStorage(context) }
@@ -1536,11 +1564,16 @@ private fun GalleryScreen(
         if (queryLower.isBlank()) items else items.filter(::matchesQuery)
     }
 
-    val scrollBehavior = SearchBarDefaults.enterAlwaysSearchBarScrollBehavior()
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val queryText = remember(textFieldState.text) { textFieldState.text.toString() }
+    val isSearchExpanded = searchBarState.targetValue == SearchBarValue.Expanded
 
     fun collapseSearch() {
         coroutineScope.launch { searchBarState.animateToCollapsed() }
+    }
+
+    fun expandSearch() {
+        coroutineScope.launch { searchBarState.animateToExpanded() }
     }
 
     fun setQueryAndCollapse(text: String) {
@@ -1632,6 +1665,7 @@ private fun GalleryScreen(
     }
 
     var showSelectionInfo by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
     var selectionInfoMetadataJson by remember { mutableStateOf<String?>(null) }
     val selectionInfoTarget = remember(selectedItems) { selectedItems.singleOrNull() }
     val metadataDispatcher = remember { Executors.newSingleThreadExecutor().asCoroutineDispatcher() }
@@ -1744,37 +1778,24 @@ private fun GalleryScreen(
             .windowInsetsPadding(WindowInsets.systemBars),
         topBar = {
             Column {
-                AppBarWithSearch(
-                    state = searchBarState,
-                    scrollBehavior = scrollBehavior,
-                    inputField = {
-                        SearchBarDefaults.InputField(
-                            textFieldState = textFieldState,
-                            searchBarState = searchBarState,
-                            onSearch = { collapseSearch() },
-                            placeholder = { Text("Search RAWs") },
-                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                            trailingIcon = {
-                                if (queryText.isNotBlank()) {
-                                    IconButton(
-                                        onClick = {
-                                            textFieldState.setTextAndPlaceCursorAtEnd("")
-                                            collapseSearch()
-                                        }
-                                    ) {
-                                        Icon(Icons.Default.Close, contentDescription = "Clear search")
-                                    }
-                                } else if (searchBarState.targetValue == SearchBarValue.Expanded) {
-                                    IconButton(onClick = { collapseSearch() }) {
-                                        Icon(Icons.Default.Close, contentDescription = "Cancel")
-                                    }
-                                }
-                            },
-                            shape = CircleShape
-                        )
-                    },
-                    actions = { }
-                )
+                if (!isSearchExpanded) {
+                    CenterAlignedTopAppBar(
+                        title = { Text("Gallery", fontWeight = FontWeight.SemiBold) },
+                        scrollBehavior = scrollBehavior,
+                        colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                            containerColor = MaterialTheme.colorScheme.background,
+                            scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        actions = {
+                            IconButton(
+                                enabled = selectedIds.isEmpty() && !isBulkExporting,
+                                onClick = { expandSearch() }
+                            ) {
+                                Icon(Icons.Default.Search, contentDescription = "Search")
+                            }
+                        }
+                    )
+                }
 
                 if (isBulkExporting) {
                     LinearWavyProgressIndicator(
@@ -1803,7 +1824,7 @@ private fun GalleryScreen(
                     textFieldState = textFieldState,
                     searchBarState = searchBarState,
                     onSearch = { collapseSearch() },
-                    placeholder = { Text("Search everywhere") },
+                    placeholder = { Text("Search RAWs") },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     trailingIcon = {
                         if (queryText.isNotBlank()) {
@@ -1849,7 +1870,8 @@ private fun GalleryScreen(
                         )
                     }
 
-                    val list = if (tagSuggestions.isNotEmpty()) tagSuggestions else tagCounts.take(12).map { it.first }
+                    val list =
+                        if (tagSuggestions.isNotEmpty()) tagSuggestions else tagCounts.take(12).map { it.first }
                     items(list.size) { idx ->
                         val tag = list[idx]
                         Surface(
@@ -1862,7 +1884,12 @@ private fun GalleryScreen(
                                 headlineContent = { Text(tag, fontWeight = FontWeight.Medium) },
                                 supportingContent = { Text("Tag") },
                                 leadingContent = { Icon(Icons.Default.History, contentDescription = null) },
-                                trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null) },
+                                trailingContent = {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowForward,
+                                        contentDescription = null
+                                    )
+                                },
                                 colors = ListItemDefaults.colors(containerColor = Color.Transparent)
                             )
                         }
@@ -2024,6 +2051,13 @@ private fun GalleryScreen(
                         )
                     }
 
+                    IconButton(
+                        enabled = !isBulkExporting,
+                        onClick = { showDeleteDialog = true }
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete selection")
+                    }
+
                     if (selectedIds.size == 1) {
                         IconButton(
                             enabled = !isBulkExporting,
@@ -2035,6 +2069,28 @@ private fun GalleryScreen(
                 }
             }
         }
+    }
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val ids = selectedIds.toList()
+                        showDeleteDialog = false
+                        showSelectionInfo = false
+                        selectedIds = emptySet()
+                        if (ids.isNotEmpty()) onDeleteMany(ids)
+                    }
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel") }
+            },
+            title = { Text("Delete ${selectedIds.size} item(s)?") },
+            text = { Text("This will remove the RAW and all edits from this device.") }
+        )
     }
 
     if (showSelectionInfo && selectionInfoTarget != null) {
@@ -2154,60 +2210,65 @@ private fun GalleryItemCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    val scale by animateFloatAsState(targetValue = if (selected) 0.95f else 1f, label = "scale")
     val borderColor = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent
-    val borderWidth = if (selected) 3.dp else 0.dp
+    val scale by animateFloatAsState(targetValue = if (selected) 0.92f else 1f, label = "scale")
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .aspectRatio(1f)
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(20.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .border(borderWidth, borderColor, RoundedCornerShape(24.dp)),
+            .border(if (selected) 3.dp else 0.dp, borderColor, RoundedCornerShape(20.dp)),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = RoundedCornerShape(20.dp),
+        elevation = CardDefaults.cardElevation(0.dp)
     ) {
-        Column {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                if (item.thumbnail != null) {
-                    Image(
-                        bitmap = item.thumbnail.asImageBitmap(),
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
+        Box(Modifier.fillMaxSize()) {
+            if (item.thumbnail != null) {
+                Image(
+                    bitmap = item.thumbnail.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
                         text = "RAW",
                         style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
 
-                if (item.rating > 0) {
-                    Surface(
-                        modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
-                        contentColor = MaterialTheme.colorScheme.primary
+            if (item.rating > 0) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                    shape = CircleShape,
+                    modifier = Modifier.align(Alignment.BottomStart).padding(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(item.rating.toString(), style = MaterialTheme.typography.labelSmall)
-                            Icon(Icons.Default.Star, contentDescription = null, modifier = Modifier.size(12.dp))
-                        }
+                        Text(item.rating.toString(), style = MaterialTheme.typography.labelSmall)
+                        Icon(Icons.Default.Star, contentDescription = null, modifier = Modifier.size(10.dp))
                     }
                 }
+            }
+
+            if (selected) {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+                )
             }
 
             if (isProcessing) {
@@ -2219,42 +2280,21 @@ private fun GalleryItemCard(
                     )
                     LinearWavyProgressIndicator(
                         progress = { smoothProgress },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.BottomCenter)
                     )
                 } else {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .align(Alignment.BottomCenter)
                             .padding(vertical = 8.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         LoadingIndicator(
                             modifier = Modifier.size(18.dp),
                             color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = item.fileName,
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    val tagLine = remember(item.tags) { item.tags.take(3).joinToString(" • ") }
-                    if (tagLine.isNotBlank()) {
-                        Text(
-                            text = tagLine,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -2902,8 +2942,27 @@ private fun EditorScreen(
         }
     }
 
-    Surface(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.fillMaxSize()) {
+    MaterialTheme(colorScheme = darkColorScheme()) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = Color(0xFF121212)
+        ) {
+            val onSelectPanelTab: (EditorPanelTab) -> Unit = { tab ->
+                when (tab) {
+                    EditorPanelTab.Masks -> {
+                        showMaskOverlay = true
+                        maskTapMode = MaskTapMode.None
+                    }
+
+                    else -> {
+                        isPaintingMask = false
+                        maskTapMode = MaskTapMode.None
+                    }
+                }
+                panelTab = tab
+            }
+
+            Box(modifier = Modifier.fillMaxSize()) {
             if (isTablet) {
                 // Tablet layout: Full screen content with top bars overlaid
                 Row(
@@ -2915,6 +2974,7 @@ private fun EditorScreen(
                             modifier = Modifier
                                 .weight(3f)
                                 .fillMaxHeight()
+                                .background(Color.Black)
                         ) {
                             ImagePreview(
                                 bitmap = displayBitmap,
@@ -2961,14 +3021,14 @@ private fun EditorScreen(
                             
                             Column(
                                 modifier = Modifier
-                                    .fillMaxSize()
+                                    .weight(1f)
+                                    .fillMaxWidth()
                                     .verticalScroll(scrollState)
                                     .padding(horizontal = 16.dp, vertical = 16.dp),
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                TabbedEditorControls(
+                                EditorControlsContent(
                                     panelTab = panelTab,
-                                    onPanelTabChange = { panelTab = it },
                                     adjustments = adjustments,
                                     onAdjustmentsChange = { adjustments = it },
                                     histogramData = histogramData,
@@ -2994,10 +3054,174 @@ private fun EditorScreen(
                                     maskTapMode = maskTapMode,
                                     onMaskTapModeChange = { maskTapMode = it }
                                 )
-                            
                             Spacer(modifier = Modifier.height(16.dp))
+
+                            errorMessage?.let {
+                                Text(
+                                    text = it,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(top = 8.dp)
+                                )
+                            }
+
+                            statusMessage?.let {
+                                Text(
+                                    text = it,
+                                    color = Color(0xFF1B5E20),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(top = 8.dp)
+                                )
+                            }
                             
-                            // Export button at bottom
+                            Spacer(modifier = Modifier.height(20.dp))
+                            }
+
+                            NavigationBar(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                tonalElevation = 0.dp,
+                                windowInsets = WindowInsets(0)
+                            ) {
+                                EditorPanelTab.values().forEach { tab ->
+                                    val selected = panelTab == tab
+                                    NavigationBarItem(
+                                        selected = selected,
+                                        onClick = { onSelectPanelTab(tab) },
+                                        icon = {
+                                            Icon(
+                                                imageVector = if (selected) tab.iconSelected else tab.icon,
+                                                contentDescription = tab.label
+                                            )
+                                        },
+                                        label = { Text(tab.label) },
+                                        colors = NavigationBarItemDefaults.colors(
+                                            indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+                                            selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 8.dp)
+                        .windowInsetsPadding(WindowInsets.statusBars),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = onBackClick,
+                        colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.White
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.4f),
+                            shape = CircleShape
+                        ) {
+                            Text(
+                                text = galleryItem.fileName,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            enabled = sessionHandle != 0L,
+                            onClick = { showMetadataDialog = true },
+                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
+                        ) {
+                            Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        ExportButton(
+                            sessionHandle = sessionHandle,
+                            adjustments = adjustments,
+                            masks = masks,
+                            isExporting = isExporting,
+                            nativeDispatcher = renderDispatcher,
+                            context = context,
+                            onExportStart = { isExporting = true },
+                            onExportComplete = { success, message ->
+                                isExporting = false
+                                if (success) {
+                                    statusMessage = message
+                                    errorMessage = null
+                                } else {
+                                    errorMessage = message
+                                    statusMessage = null
+                                }
+                            }
+                        )
+                    }
+                }
+            } else {
+                // Phone layout: fixed preview on top, fixed-height scrollable controls at bottom (like Lightroom)
+                Column(
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 8.dp)
+                            .windowInsetsPadding(WindowInsets.statusBars),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = onBackClick,
+                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = Color.White
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Surface(
+                                color = Color.Black.copy(alpha = 0.4f),
+                                shape = CircleShape
+                            ) {
+                                Text(
+                                    text = galleryItem.fileName,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = Color.White,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                enabled = sessionHandle != 0L,
+                                onClick = { showMetadataDialog = true },
+                                colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
+                            ) {
+                                Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
                             ExportButton(
                                 sessionHandle = sessionHandle,
                                 adjustments = adjustments,
@@ -3017,125 +3241,6 @@ private fun EditorScreen(
                                     }
                                 }
                             )
-                            
-                            errorMessage?.let {
-                                Text(
-                                    text = it,
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.padding(top = 8.dp)
-                                )
-                            }
-
-                            statusMessage?.let {
-                                Text(
-                                    text = it,
-                                    color = Color(0xFF1B5E20),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.padding(top = 8.dp)
-                                )
-                            }
-                            
-                                Spacer(modifier = Modifier.height(20.dp))
-                            }
-                        }
-                    }
-                
-                // Overlay status bar and top app bar on top
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    // Status bar background
-                    Spacer(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .windowInsetsTopHeight(WindowInsets.statusBars)
-                            .background(MaterialTheme.colorScheme.surface)
-                    )
-                    
-                    // Top app bar
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.surface,
-                        tonalElevation = 3.dp
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 4.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(onClick = onBackClick) {
-                                Icon(
-                                    Icons.Default.ArrowBack,
-                                    contentDescription = "Back to gallery",
-                                    tint = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                            Text(
-                                text = galleryItem.fileName,
-                                style = MaterialTheme.typography.titleLarge,
-                                modifier = Modifier.weight(1f),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            IconButton(
-                                enabled = sessionHandle != 0L,
-                                onClick = {
-                                    showMetadataDialog = true
-                                }
-                            ) {
-                                Icon(
-                                    Icons.Default.Info,
-                                    contentDescription = "Image info",
-                                    tint = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                        }
-                    }
-                }
-            } else {
-                // Phone layout: fixed preview on top, fixed-height scrollable controls at bottom (like Lightroom)
-                Column(
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    // Status bar spacer
-                    Spacer(modifier = Modifier.windowInsetsTopHeight(WindowInsets.statusBars))
-                    
-                    // Top app bar
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.surface,
-                        tonalElevation = 3.dp
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 4.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(onClick = onBackClick) {
-                                Icon(
-                                    Icons.Default.ArrowBack,
-                                    contentDescription = "Back to gallery",
-                                    tint = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                            Text(
-                                text = galleryItem.fileName,
-                                style = MaterialTheme.typography.titleLarge,
-                                modifier = Modifier.weight(1f),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            IconButton(
-                                enabled = sessionHandle != 0L,
-                                onClick = {
-                                    showMetadataDialog = true
-                                }
-                            ) {
-                                Icon(
-                                    Icons.Default.Info,
-                                    contentDescription = "Image info",
-                                    tint = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
                         }
                     }
                     
@@ -3144,6 +3249,7 @@ private fun EditorScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
+                            .background(Color.Black)
                     ) {
                         ImagePreview(
                             bitmap = displayBitmap,
@@ -3187,84 +3293,99 @@ private fun EditorScreen(
                         tonalElevation = 3.dp,
                         shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .verticalScroll(scrollState)
-                                .padding(horizontal = 16.dp, vertical = 16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            // Export button at top of controls
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(16.dp),
+                                contentAlignment = Alignment.Center
                             ) {
-                                    ExportButton(
-                                        sessionHandle = sessionHandle,
-                                        adjustments = adjustments,
-                                        masks = masks,
-                                        isExporting = isExporting,
-                                        nativeDispatcher = renderDispatcher,
-                                        context = context,
-                                        onExportStart = { isExporting = true },
-                                    onExportComplete = { success, message ->
-                                        isExporting = false
-                                        if (success) {
-                                            statusMessage = message
-                                            errorMessage = null
-                                        } else {
-                                            errorMessage = message
-                                            statusMessage = null
-                                        }
-                                    }
-                                )
-                            }
-                            
-                            errorMessage?.let {
-                                Text(
-                                    text = it,
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodySmall
+                                Box(
+                                    modifier = Modifier
+                                        .width(32.dp)
+                                        .height(4.dp)
+                                        .background(MaterialTheme.colorScheme.outlineVariant, CircleShape)
                                 )
                             }
 
-                            statusMessage?.let {
-                                Text(
-                                    text = it,
-                                    color = Color(0xFF1B5E20),
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(scrollState)
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                errorMessage?.let {
+                                    Text(
+                                        text = it,
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
 
-                            TabbedEditorControls(
-                                panelTab = panelTab,
-                                onPanelTabChange = { panelTab = it },
-                                adjustments = adjustments,
-                                onAdjustmentsChange = { adjustments = it },
-                                histogramData = histogramData,
-                                masks = masks,
-                                onMasksChange = { masks = it },
-                                selectedMaskId = selectedMaskId,
-                                onSelectedMaskIdChange = { selectedMaskId = it },
-                                selectedSubMaskId = selectedSubMaskId,
-                                onSelectedSubMaskIdChange = { selectedSubMaskId = it },
-                                isPaintingMask = isPaintingMask,
-                                onPaintingMaskChange = { isPaintingMask = it },
-                                showMaskOverlay = showMaskOverlay,
-                                onShowMaskOverlayChange = { showMaskOverlay = it },
-                                onRequestMaskOverlayBlink = { maskOverlayBlinkKey++ },
-                                brushSize = brushSize,
-                                onBrushSizeChange = { brushSize = it },
-                                brushTool = brushTool,
-                                onBrushToolChange = { brushTool = it },
-                                brushSoftness = brushSoftness,
-                                onBrushSoftnessChange = { brushSoftness = it },
-                                eraserSoftness = eraserSoftness,
-                                onEraserSoftnessChange = { eraserSoftness = it },
-                                maskTapMode = maskTapMode,
-                                onMaskTapModeChange = { maskTapMode = it }
+                                statusMessage?.let {
+                                    Text(
+                                        text = it,
+                                        color = Color(0xFF1B5E20),
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+
+                                EditorControlsContent(
+                                    panelTab = panelTab,
+                                    adjustments = adjustments,
+                                    onAdjustmentsChange = { adjustments = it },
+                                    histogramData = histogramData,
+                                    masks = masks,
+                                    onMasksChange = { masks = it },
+                                    selectedMaskId = selectedMaskId,
+                                    onSelectedMaskIdChange = { selectedMaskId = it },
+                                    selectedSubMaskId = selectedSubMaskId,
+                                    onSelectedSubMaskIdChange = { selectedSubMaskId = it },
+                                    isPaintingMask = isPaintingMask,
+                                    onPaintingMaskChange = { isPaintingMask = it },
+                                    showMaskOverlay = showMaskOverlay,
+                                    onShowMaskOverlayChange = { showMaskOverlay = it },
+                                    onRequestMaskOverlayBlink = { maskOverlayBlinkKey++ },
+                                    brushSize = brushSize,
+                                    onBrushSizeChange = { brushSize = it },
+                                    brushTool = brushTool,
+                                    onBrushToolChange = { brushTool = it },
+                                    brushSoftness = brushSoftness,
+                                    onBrushSoftnessChange = { brushSoftness = it },
+                                    eraserSoftness = eraserSoftness,
+                                    onEraserSoftnessChange = { eraserSoftness = it },
+                                    maskTapMode = maskTapMode,
+                                    onMaskTapModeChange = { maskTapMode = it }
+                                )
+                                Spacer(modifier = Modifier.height(20.dp))
+                            }
+                        }
+                    }
+
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        tonalElevation = 0.dp,
+                        windowInsets = WindowInsets(0)
+                    ) {
+                        EditorPanelTab.values().forEach { tab ->
+                            val selected = panelTab == tab
+                            NavigationBarItem(
+                                selected = selected,
+                                onClick = { onSelectPanelTab(tab) },
+                                icon = {
+                                    Icon(
+                                        imageVector = if (selected) tab.iconSelected else tab.icon,
+                                        contentDescription = tab.label
+                                    )
+                                },
+                                label = { Text(tab.label) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             )
-                            Spacer(modifier = Modifier.height(20.dp))
                         }
                     }
                 }
@@ -3278,6 +3399,7 @@ private fun EditorScreen(
                     .align(Alignment.TopCenter),
                 color = MaterialTheme.colorScheme.surface
             ) {}
+            }
         }
     }
 
@@ -3384,6 +3506,8 @@ private fun EditorScreen(
 
 @Composable
 private fun ExportButton(
+    modifier: Modifier = Modifier,
+    label: String = "Save",
     sessionHandle: Long,
     adjustments: AdjustmentState,
     masks: List<MaskState>,
@@ -3395,9 +3519,10 @@ private fun ExportButton(
 ) {
     val coroutineScope = rememberCoroutineScope()
     
-    Button(
+    FilledTonalButton(
+        modifier = modifier,
         onClick = {
-            if (isExporting || sessionHandle == 0L) return@Button
+            if (isExporting || sessionHandle == 0L) return@FilledTonalButton
             val currentAdjustments = adjustments
             val currentMasks = masks
             onExportStart()
@@ -3426,18 +3551,17 @@ private fun ExportButton(
             LoadingIndicator(
                 modifier = Modifier
                     .size(18.dp),
-                color = MaterialTheme.colorScheme.onPrimary
+                color = MaterialTheme.colorScheme.onSecondaryContainer
             )
             Spacer(modifier = Modifier.width(6.dp))
         }
-        Text("Export JPEG")
+        Text(label)
     }
 }
 
 @Composable
-private fun TabbedEditorControls(
+private fun EditorControlsContent(
     panelTab: EditorPanelTab,
-    onPanelTabChange: (EditorPanelTab) -> Unit,
     adjustments: AdjustmentState,
     onAdjustmentsChange: (AdjustmentState) -> Unit,
     histogramData: HistogramData?,
@@ -3463,46 +3587,7 @@ private fun TabbedEditorControls(
     maskTapMode: MaskTapMode,
     onMaskTapModeChange: (MaskTapMode) -> Unit
 ) {
-    val tabs = listOf(EditorPanelTab.Adjustments, EditorPanelTab.Color, EditorPanelTab.Effects, EditorPanelTab.Masks)
     val maskTabsByMaskId = remember { mutableStateMapOf<String, Int>() }
-    TabRow(selectedTabIndex = tabs.indexOf(panelTab).coerceAtLeast(0)) {
-        Tab(
-            selected = panelTab == EditorPanelTab.Adjustments,
-            onClick = {
-                onPaintingMaskChange(false)
-                onMaskTapModeChange(MaskTapMode.None)
-                onPanelTabChange(EditorPanelTab.Adjustments)
-            },
-            text = { Text("Adjust") }
-        )
-        Tab(
-            selected = panelTab == EditorPanelTab.Color,
-            onClick = {
-                onPaintingMaskChange(false)
-                onMaskTapModeChange(MaskTapMode.None)
-                onPanelTabChange(EditorPanelTab.Color)
-            },
-            text = { Text("Color") }
-        )
-        Tab(
-            selected = panelTab == EditorPanelTab.Effects,
-            onClick = {
-                onPaintingMaskChange(false)
-                onMaskTapModeChange(MaskTapMode.None)
-                onPanelTabChange(EditorPanelTab.Effects)
-            },
-            text = { Text("Effects") }
-        )
-        Tab(
-            selected = panelTab == EditorPanelTab.Masks,
-            onClick = {
-                onShowMaskOverlayChange(true)
-                onMaskTapModeChange(MaskTapMode.None)
-                onPanelTabChange(EditorPanelTab.Masks)
-            },
-            text = { Text("Mask") }
-        )
-    }
 
     when (panelTab) {
         EditorPanelTab.Adjustments -> {

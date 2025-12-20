@@ -61,3 +61,14 @@ approx = "0.5.1"
 glob = "0.3"
 rustc_version = "0.4"
 toml = "=0.8" # TODO - Updating breaks `join.rs` build script with message - Error parsing "data/cameras/apple/quicktake100.toml": message: "unexpected content, expected nothing",
+
+
+
+
+[[bench]]
+harness = false
+name = "perf"
+
+[[bench]]
+harness = false
+name = "raw_decoder"
