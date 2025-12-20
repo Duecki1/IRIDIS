@@ -206,6 +206,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -1056,7 +1060,22 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             KawaiiRawEditorTheme {
+                val context = LocalContext.current
                 var showStartupSplash by remember { mutableStateOf(true) }
+                var updateInfo by remember { mutableStateOf<StartupUpdateInfo?>(null) }
+                var didCheckForUpdates by remember { mutableStateOf(false) }
+                val currentVersionName = remember(context) { getInstalledVersionName(context) }
+
+                LaunchedEffect(showStartupSplash) {
+                    if (showStartupSplash) return@LaunchedEffect
+                    if (didCheckForUpdates) return@LaunchedEffect
+                    didCheckForUpdates = true
+                    updateInfo = fetchStartupUpdateInfo(
+                        currentVersionName = currentVersionName,
+                        githubOwner = BuildConfig.GITHUB_OWNER,
+                        githubRepo = BuildConfig.GITHUB_REPO
+                    )
+                }
 
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     Box(modifier = Modifier.fillMaxSize()) {
@@ -1066,9 +1085,116 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+
+                updateInfo?.let { info ->
+                    AlertDialog(
+                        onDismissRequest = { updateInfo = null },
+                        title = { Text("Update available") },
+                        text = {
+                            Text("Version ${info.latestVersionName} is available (you have ${info.currentVersionName}).")
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    updateInfo = null
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(info.releasePageUrl))
+                                    runCatching { context.startActivity(intent) }
+                                }
+                            ) {
+                                Text("Update")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { updateInfo = null }) { Text("Later") }
+                        }
+                    )
+                }
             }
         }
     }
+}
+
+private data class StartupUpdateInfo(
+    val currentVersionName: String,
+    val latestVersionName: String,
+    val releasePageUrl: String
+)
+
+private fun getInstalledVersionName(context: Context): String {
+    return runCatching {
+        val pm = context.packageManager
+        val pkg = context.packageName
+        @Suppress("DEPRECATION")
+        val info =
+            if (Build.VERSION.SDK_INT >= 33) pm.getPackageInfo(pkg, PackageManager.PackageInfoFlags.of(0))
+            else pm.getPackageInfo(pkg, 0)
+        info.versionName ?: ""
+    }.getOrDefault("")
+}
+
+private suspend fun fetchStartupUpdateInfo(
+    currentVersionName: String,
+    githubOwner: String,
+    githubRepo: String
+): StartupUpdateInfo? {
+    return withContext(Dispatchers.IO) {
+        runCatching {
+            if (currentVersionName.isBlank()) return@runCatching null
+
+            val apiUrl = "https://api.github.com/repos/$githubOwner/$githubRepo/tags?per_page=1"
+            val connection = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = true
+                connectTimeout = 7_500
+                readTimeout = 7_500
+                requestMethod = "GET"
+                setRequestProperty("Accept", "application/vnd.github+json")
+                setRequestProperty("User-Agent", "$githubOwner-$githubRepo-android")
+            }
+
+            val statusCode = connection.responseCode
+            if (statusCode !in 200..299) return@runCatching null
+
+            val body =
+                BufferedReader(InputStreamReader(connection.inputStream)).use { it.readText() }
+            val tags = JSONArray(body)
+            val latestTagRaw = tags.optJSONObject(0)?.optString("name").orEmpty()
+            val latestTag = latestTagRaw.trim()
+            val latestVersionName = latestTag.removePrefix("v").removePrefix("V")
+            if (latestVersionName.isBlank()) return@runCatching null
+
+            val releasePageUrl =
+                "https://github.com/$githubOwner/$githubRepo/releases/tag/${Uri.encode(latestTag)}"
+
+            val shouldUpdate = isNewerVersion(latestVersionName, currentVersionName)
+            if (!shouldUpdate) return@runCatching null
+
+            StartupUpdateInfo(
+                currentVersionName = currentVersionName,
+                latestVersionName = latestVersionName,
+                releasePageUrl = releasePageUrl
+            )
+        }.getOrNull()
+    }
+}
+
+private fun isNewerVersion(latest: String, current: String): Boolean {
+    fun parse(v: String): List<Int>? {
+        val cleaned = v.trim().removePrefix("v").removePrefix("V")
+        val match = Regex("""\d+(?:\.\d+)*""").find(cleaned) ?: return null
+        return match.value.split('.').mapNotNull { it.toIntOrNull() }
+    }
+
+    val a = parse(latest)
+    val b = parse(current)
+    if (a == null || b == null) return false
+
+    val max = maxOf(a.size, b.size)
+    for (i in 0 until max) {
+        val ai = a.getOrElse(i) { 0 }
+        val bi = b.getOrElse(i) { 0 }
+        if (ai != bi) return ai > bi
+    }
+    return false
 }
 
 @Composable
@@ -1770,6 +1896,8 @@ private fun GalleryScreen(
         bulkExportStatus = null
     }
 
+    var showInfoDialog by remember { mutableStateOf(false) }
+
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
@@ -1779,12 +1907,17 @@ private fun GalleryScreen(
             Column {
                 if (!isSearchExpanded) {
                     CenterAlignedTopAppBar(
-                        title = { Text("Gallery", fontWeight = FontWeight.SemiBold) },
+                        title = { Text("IRIDIS", fontWeight = FontWeight.SemiBold) },
                         scrollBehavior = scrollBehavior,
                         colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
                             containerColor = MaterialTheme.colorScheme.background,
                             scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
                         ),
+                        navigationIcon = {
+                            IconButton(onClick = { showInfoDialog = true }) {
+                                Icon(Icons.Default.Info, contentDescription = "App Info")
+                            }
+                        },
                         actions = {
                             IconButton(
                                 enabled = selectedIds.isEmpty() && !isBulkExporting,
@@ -1816,6 +1949,46 @@ private fun GalleryScreen(
             }
         }
     ) { padding ->
+        if (showInfoDialog) {
+            val versionName = try {
+                BuildConfig.VERSION_NAME
+            } catch (_: Exception) { "?" }
+            AlertDialog(
+                onDismissRequest = { showInfoDialog = false },
+                title = { Text("About IRIDIS") },
+                text = {
+                    Column {
+                        Text(
+                            "Android app by Duecki1 using image processing from RapidRaw by CyberTimon.\n\nIRIDIS is an open-source RAW photo editor for Android, leveraging the RapidRaw engine for fast and high-quality image processing."
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text("Version: $versionName", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showInfoDialog = false }) {
+                        Text("OK")
+                    }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(onClick = {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Duecki1/IRIDIS"))
+                            context.startActivity(intent)
+                        }) {
+                            Text("IRIDIS GitHub")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(onClick = {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/CyberTimon/RapidRaw"))
+                            context.startActivity(intent)
+                        }) {
+                            Text("RapidRaw GitHub")
+                        }
+                    }
+                }
+            )
+        }
         ExpandedFullScreenContainedSearchBar(
             state = searchBarState,
             inputField = {
