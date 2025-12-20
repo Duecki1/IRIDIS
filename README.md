@@ -9,21 +9,21 @@ Draft / test Android RAW editor built with Jetpack Compose + a Rust native decod
     <td>
       <img
         alt="Gallery"
-        src="https://github.com/user-attachments/assets/fb5b933e-32ca-47fe-9640-b9c5cf9655ea"
+        src="https://github.com/user-attachments/assets/30c52607-c961-4265-b8c5-a9610407d063"
         width="260"
       />
     </td>
     <td>
       <img
         alt="Editor"
-        src="https://github.com/user-attachments/assets/1c1ecd56-cca2-4bfb-adf3-5d8253ea8b00"
+        src="https://github.com/user-attachments/assets/658364d8-d192-4952-8e16-11425abdc404"
         width="260"
       />
     </td>
     <td>
       <img
         alt="Editor (extra screenshot slot)"
-        src="https://github.com/user-attachments/assets/5c6c3b5d-a7a1-4098-aece-e6ec35ed1372"
+        src="https://github.com/user-attachments/assets/c943ccd0-989e-4354-b7d8-e794b39ee2ff"
         width="260"
       />
     </td>
