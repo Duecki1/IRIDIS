@@ -2,6 +2,8 @@
 
 Draft / test Android RAW editor built with Jetpack Compose + a Rust native decoder/processor.
 
+If you are interested in this Project and want it to be continued, let me know by giving this repo a star :)
+
 ## Screenshots
 
 <table>
