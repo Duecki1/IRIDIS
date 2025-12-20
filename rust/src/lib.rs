@@ -977,9 +977,14 @@ struct BrushEvent {
     points: Vec<(f32, f32)>,
 }
 
-fn generate_brush_mask(sub_masks: &[SubMaskPayload], width: u32, height: u32) -> Vec<u8> {
-    let len = (width * height) as usize;
-    let mut mask = vec![0u8; len];
+fn apply_brush_submask(target: &mut [u8], sub_mask: &SubMaskPayload, width: u32, height: u32) {
+    if sub_mask.mask_type != "brush" || !sub_mask.visible {
+        return;
+    }
+    if target.len() != (width * height) as usize {
+        return;
+    }
+
     let w_f = width as f32;
     let h_f = height as f32;
     let base_dim = width.min(height) as f32;
@@ -993,47 +998,41 @@ fn generate_brush_mask(sub_masks: &[SubMaskPayload], width: u32, height: u32) ->
         }
     }
 
+    let params: BrushMaskParameters = serde_json::from_value(sub_mask.parameters.clone()).unwrap_or_default();
     let mut events: Vec<BrushEvent> = Vec::new();
 
-    for sub_mask in sub_masks.iter().filter(|s| s.visible) {
-        if sub_mask.mask_type != "brush" {
+    for line in params.lines {
+        if line.points.is_empty() {
             continue;
         }
 
-        let params: BrushMaskParameters = serde_json::from_value(sub_mask.parameters.clone()).unwrap_or_default();
-        for line in params.lines {
-            if line.points.is_empty() {
-                continue;
-            }
+        let effective_mode = if line.tool == "eraser" {
+            SubMaskMode::Subtractive
+        } else {
+            sub_mask.mode
+        };
 
-            let effective_mode = if line.tool == "eraser" {
-                SubMaskMode::Subtractive
-            } else {
-                sub_mask.mode
-            };
+        let brush_size_px = if line.brush_size <= 1.5 {
+            (line.brush_size * base_dim).max(0.0)
+        } else {
+            line.brush_size
+        };
+        let radius = (brush_size_px / 2.0).max(1.0);
+        let feather = line.feather.clamp(0.0, 1.0);
 
-            let brush_size_px = if line.brush_size <= 1.5 {
-                (line.brush_size * base_dim).max(0.0)
-            } else {
-                line.brush_size
-            };
-            let radius = (brush_size_px / 2.0).max(1.0);
-            let feather = line.feather.clamp(0.0, 1.0);
+        let points: Vec<(f32, f32)> = line
+            .points
+            .into_iter()
+            .map(|p| (denorm(p.x, w_f), denorm(p.y, h_f)))
+            .collect();
 
-            let points: Vec<(f32, f32)> = line
-                .points
-                .into_iter()
-                .map(|p| (denorm(p.x, w_f), denorm(p.y, h_f)))
-                .collect();
-
-            events.push(BrushEvent {
-                order: line.order,
-                mode: effective_mode,
-                feather,
-                radius,
-                points,
-            });
-        }
+        events.push(BrushEvent {
+            order: line.order,
+            mode: effective_mode,
+            feather,
+            radius,
+            points,
+        });
     }
 
     events.sort_by_key(|e| e.order);
@@ -1053,7 +1052,7 @@ fn generate_brush_mask(sub_masks: &[SubMaskPayload], width: u32, height: u32) ->
 
         if event.points.len() == 1 {
             let (x, y) = event.points[0];
-            apply_circle(&mut mask, x, y);
+            apply_circle(target, x, y);
             continue;
         }
 
@@ -1066,12 +1065,10 @@ fn generate_brush_mask(sub_masks: &[SubMaskPayload], width: u32, height: u32) ->
             let steps = (dist / step_size).ceil() as i32;
             for i in 0..=steps {
                 let t = i as f32 / steps.max(1) as f32;
-                apply_circle(&mut mask, x1 + dx * t, y1 + dy * t);
+                apply_circle(target, x1 + dx * t, y1 + dy * t);
             }
         }
     }
-
-    mask
 }
 
 fn apply_submask_bitmap(target: &mut [u8], sub_bitmap: &[u8], mode: SubMaskMode) {
@@ -1314,16 +1311,25 @@ fn box_blur_u8(src: &[u8], width: usize, height: usize, radius: usize) -> Vec<u8
 }
 
 fn generate_mask_bitmap(sub_masks: &[SubMaskPayload], width: u32, height: u32) -> Vec<u8> {
-    let mut mask = generate_brush_mask(sub_masks, width, height);
+    let len = (width * height) as usize;
+    let mut mask = vec![0u8; len];
     for sub_mask in sub_masks.iter().filter(|s| s.visible) {
-        let sub_bitmap = match sub_mask.mask_type.as_str() {
-            "radial" => Some(generate_radial_mask(&sub_mask.parameters, width, height)),
-            "linear" => Some(generate_linear_mask(&sub_mask.parameters, width, height)),
-            "ai-subject" => generate_ai_subject_mask(&sub_mask.parameters, width, height),
-            _ => None,
-        };
-        if let Some(bitmap) = sub_bitmap {
-            apply_submask_bitmap(&mut mask, &bitmap, sub_mask.mode);
+        match sub_mask.mask_type.as_str() {
+            "brush" => apply_brush_submask(&mut mask, sub_mask, width, height),
+            "radial" => {
+                let bitmap = generate_radial_mask(&sub_mask.parameters, width, height);
+                apply_submask_bitmap(&mut mask, &bitmap, sub_mask.mode);
+            }
+            "linear" => {
+                let bitmap = generate_linear_mask(&sub_mask.parameters, width, height);
+                apply_submask_bitmap(&mut mask, &bitmap, sub_mask.mode);
+            }
+            "ai-subject" => {
+                if let Some(bitmap) = generate_ai_subject_mask(&sub_mask.parameters, width, height) {
+                    apply_submask_bitmap(&mut mask, &bitmap, sub_mask.mode);
+                }
+            }
+            _ => {}
         }
     }
     mask

@@ -304,7 +304,13 @@ private fun RapidRawEditorScreen() {
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     fun maybeRequestNotificationPermission() {
-        maybeRequestPostNotificationsPermission(context) { notificationPermissionLauncher.launch(it) }
+        if (Build.VERSION.SDK_INT < 33) return
+        val granted =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     val tagBackfillQueue = remember { Channel<String>(capacity = Channel.UNLIMITED) }
@@ -675,7 +681,13 @@ private fun GalleryScreen(
     }
 
     fun maybeRequestNotificationPermission() {
-        maybeRequestPostNotificationsPermission(context) { notificationPermissionLauncher.launch(it) }
+        if (Build.VERSION.SDK_INT < 33) return
+        val granted =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     val pickRaw = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->

@@ -516,7 +516,12 @@ private data class BrushEvent(
     val points: List<MaskPoint>
 )
 
-internal fun buildMaskOverlayBitmap(mask: MaskState, targetWidth: Int, targetHeight: Int): Bitmap {
+internal fun buildMaskOverlayBitmap(
+    mask: MaskState,
+    targetWidth: Int,
+    targetHeight: Int,
+    highlightSubMaskId: String? = null
+): Bitmap {
     val width = targetWidth.coerceAtLeast(1)
     val height = targetHeight.coerceAtLeast(1)
     val baseDim = minOf(width, height).toFloat()
@@ -558,27 +563,25 @@ internal fun buildMaskOverlayBitmap(mask: MaskState, targetWidth: Int, targetHei
         return ((1f - t).coerceIn(0f, 1f) * 255f).roundToInt()
     }
 
+    val additive = IntArray(width * height) { 0 }
+    val subtractive = IntArray(width * height) { 0 }
     val selection = IntArray(width * height) { 0 }
 
-    val events = buildList {
-        mask.subMasks.forEach { sub ->
-            if (!sub.visible) return@forEach
-            if (sub.type != SubMaskType.Brush.id) return@forEach
-            sub.lines.forEach { line ->
-                val effectiveMode =
-                    if (line.tool == "eraser") SubMaskMode.Subtractive else sub.mode
-                add(
-                    BrushEvent(
-                        order = line.order,
-                        mode = effectiveMode,
-                        brushSize = line.brushSize,
-                        feather = line.feather,
-                        points = line.points
-                    )
-                )
-            }
-        }
-    }.sortedBy { it.order }
+    fun plot(mode: SubMaskMode, idx: Int, intensity: Int) {
+        if (intensity <= 0) return
+        val target = if (mode == SubMaskMode.Subtractive) subtractive else additive
+        if (intensity > target[idx]) target[idx] = intensity
+    }
+
+    fun applyToSelection(mode: SubMaskMode, idx: Int, intensity: Int) {
+        if (intensity <= 0) return
+        selection[idx] = applyPixel(mode, selection[idx], intensity)
+    }
+
+    fun plotAndApply(mode: SubMaskMode, idx: Int, intensity: Int) {
+        plot(mode, idx, intensity)
+        applyToSelection(mode, idx, intensity)
+    }
 
     fun applyCircle(mode: SubMaskMode, cx: Float, cy: Float, radius: Float, feather: Float) {
         val x0 = (cx - radius - 1f).toInt().coerceAtLeast(0)
@@ -594,7 +597,7 @@ internal fun buildMaskOverlayBitmap(mask: MaskState, targetWidth: Int, targetHei
                 val intensity = circleIntensity(dist, radius, feather)
                 if (intensity == 0) continue
                 val idx = row + x
-                selection[idx] = applyPixel(mode, selection[idx], intensity)
+                plotAndApply(mode, idx, intensity)
             }
         }
     }
@@ -606,100 +609,6 @@ internal fun buildMaskOverlayBitmap(mask: MaskState, targetWidth: Int, targetHei
 
     fun denormPoint(p: MaskPoint): Pair<Float, Float> {
         return denorm(p.x, width) to denorm(p.y, height)
-    }
-
-    events.forEach { event ->
-        if (event.points.isEmpty()) return@forEach
-        val radius = brushRadiusPx(event.brushSize)
-        val feather = event.feather.coerceIn(0f, 1f)
-        if (event.points.size == 1) {
-            val (x, y) = denormPoint(event.points[0])
-            applyCircle(event.mode, x, y, radius, feather)
-            return@forEach
-        }
-
-        val step = (radius * 0.5f).coerceAtLeast(0.75f)
-        event.points.windowed(2, 1, false).forEach { (p0, p1) ->
-            val (x0, y0) = denormPoint(p0)
-            val (x1, y1) = denormPoint(p1)
-            val dx = x1 - x0
-            val dy = y1 - y0
-            val dist = kotlin.math.sqrt(dx * dx + dy * dy).coerceAtLeast(0.001f)
-            val steps = (dist / step).roundToInt().coerceAtLeast(1)
-            for (i in 0..steps) {
-                val t = i.toFloat() / steps.toFloat()
-                applyCircle(event.mode, x0 + dx * t, y0 + dy * t, radius, feather)
-            }
-        }
-    }
-
-    mask.subMasks.forEach { sub ->
-        if (!sub.visible) return@forEach
-        when (sub.type) {
-            SubMaskType.Radial.id -> {
-                val cx = denorm(sub.radial.centerX, width)
-                val cy = denorm(sub.radial.centerY, height)
-                val rx = lenPx(sub.radial.radiusX).coerceAtLeast(0.01f)
-                val ry = lenPx(sub.radial.radiusY).coerceAtLeast(0.01f)
-                val feather = sub.radial.feather.coerceIn(0f, 1f)
-                val innerBound = (1f - feather).coerceIn(0f, 1f)
-                val rotation = sub.radial.rotation * (Math.PI.toFloat() / 180f)
-                val cosRot = kotlin.math.cos(rotation)
-                val sinRot = kotlin.math.sin(rotation)
-
-                for (y in 0 until height) {
-                    val row = y * width
-                    for (x in 0 until width) {
-                        val dx = x + 0.5f - cx
-                        val dy = y + 0.5f - cy
-                        val rotDx = dx * cosRot + dy * sinRot
-                        val rotDy = -dx * sinRot + dy * cosRot
-                        val nx = rotDx / rx
-                        val ny = rotDy / ry
-                        val dist = kotlin.math.sqrt(nx * nx + ny * ny)
-                        val intensityF = if (dist <= innerBound) {
-                            1f
-                        } else {
-                            1f - (dist - innerBound) / (1f - innerBound).coerceAtLeast(0.01f)
-                        }
-                        val intensity = (intensityF.coerceIn(0f, 1f) * 255f).roundToInt()
-                        if (intensity == 0) continue
-                        val idx = row + x
-                        selection[idx] = applyPixel(sub.mode, selection[idx], intensity)
-                    }
-                }
-            }
-
-            SubMaskType.Linear.id -> {
-                val sx = denorm(sub.linear.startX, width)
-                val sy = denorm(sub.linear.startY, height)
-                val ex = denorm(sub.linear.endX, width)
-                val ey = denorm(sub.linear.endY, height)
-                val rangePx = lenPx(sub.linear.range).coerceAtLeast(0.01f)
-                val vx = ex - sx
-                val vy = ey - sy
-                val len = kotlin.math.sqrt(vx * vx + vy * vy)
-                if (len <= 0.01f) return@forEach
-                val invLen = 1f / len
-                val nx = -vy * invLen
-                val ny = vx * invLen
-
-                for (y in 0 until height) {
-                    val row = y * width
-                    for (x in 0 until width) {
-                        val px = x + 0.5f - sx
-                        val py = y + 0.5f - sy
-                        val distPerp = px * nx + py * ny
-                        val t = distPerp / rangePx
-                        val intensityF = (0.5f - t * 0.5f).coerceIn(0f, 1f)
-                        val intensity = (intensityF * 255f).roundToInt()
-                        if (intensity == 0) continue
-                        val idx = row + x
-                        selection[idx] = applyPixel(sub.mode, selection[idx], intensity)
-                    }
-                }
-            }
-        }
     }
 
     fun decodeMaskDataUrlToBitmap(dataUrl: String): Bitmap? {
@@ -758,32 +667,176 @@ internal fun buildMaskOverlayBitmap(mask: MaskState, targetWidth: Int, targetHei
 
     mask.subMasks.forEach { sub ->
         if (!sub.visible) return@forEach
-        if (sub.type != SubMaskType.AiSubject.id) return@forEach
-        val dataUrl = sub.aiSubject.maskDataBase64 ?: return@forEach
-        val decoded = decodeMaskDataUrlToBitmap(dataUrl) ?: return@forEach
-        val scaled = if (decoded.width != width || decoded.height != height) {
-            Bitmap.createScaledBitmap(decoded, width, height, true)
-        } else {
-            decoded
-        }
-        val pixels = IntArray(width * height)
-        scaled.getPixels(pixels, 0, width, 0, 0, width, height)
-        val maskU8 = IntArray(width * height) { i -> (pixels[i] shr 16) and 0xFF }
-        val radius = (sub.aiSubject.softness.coerceIn(0f, 1f) * 10f).roundToInt()
-        val softened = if (radius >= 1) boxBlurU8(maskU8, radius) else maskU8
-        for (i in softened.indices) {
-            val v = softened[i]
-            if (v == 0) continue
-            selection[i] = applyPixel(sub.mode, selection[i], v)
+        if (highlightSubMaskId != null && sub.id != highlightSubMaskId) return@forEach
+        when (sub.type) {
+            SubMaskType.Brush.id -> {
+                val events =
+                    sub.lines.mapNotNull { line ->
+                        if (line.points.isEmpty()) return@mapNotNull null
+                        val effectiveMode = if (line.tool == "eraser") SubMaskMode.Subtractive else sub.mode
+                        BrushEvent(
+                            order = line.order,
+                            mode = effectiveMode,
+                            brushSize = line.brushSize,
+                            feather = line.feather,
+                            points = line.points
+                        )
+                    }.sortedBy { it.order }
+
+                events.forEach { event ->
+                    if (event.points.isEmpty()) return@forEach
+                    val radius = brushRadiusPx(event.brushSize)
+                    val feather = event.feather.coerceIn(0f, 1f)
+                    if (event.points.size == 1) {
+                        val (x, y) = denormPoint(event.points[0])
+                        applyCircle(event.mode, x, y, radius, feather)
+                        return@forEach
+                    }
+
+                    val step = (radius * 0.5f).coerceAtLeast(0.75f)
+                    event.points.windowed(2, 1, false).forEach { (p0, p1) ->
+                        val (x0, y0) = denormPoint(p0)
+                        val (x1, y1) = denormPoint(p1)
+                        val dx = x1 - x0
+                        val dy = y1 - y0
+                        val dist = kotlin.math.sqrt(dx * dx + dy * dy).coerceAtLeast(0.001f)
+                        val steps = (dist / step).roundToInt().coerceAtLeast(1)
+                        for (i in 0..steps) {
+                            val t = i.toFloat() / steps.toFloat()
+                            applyCircle(event.mode, x0 + dx * t, y0 + dy * t, radius, feather)
+                        }
+                    }
+                }
+            }
+
+            SubMaskType.Radial.id -> {
+                val cx = denorm(sub.radial.centerX, width)
+                val cy = denorm(sub.radial.centerY, height)
+                val rx = lenPx(sub.radial.radiusX).coerceAtLeast(0.01f)
+                val ry = lenPx(sub.radial.radiusY).coerceAtLeast(0.01f)
+                val feather = sub.radial.feather.coerceIn(0f, 1f)
+                val innerBound = (1f - feather).coerceIn(0f, 1f)
+                val rotation = sub.radial.rotation * (Math.PI.toFloat() / 180f)
+                val cosRot = kotlin.math.cos(rotation)
+                val sinRot = kotlin.math.sin(rotation)
+
+                for (y in 0 until height) {
+                    val row = y * width
+                    for (x in 0 until width) {
+                        val dx = x + 0.5f - cx
+                        val dy = y + 0.5f - cy
+                        val rotDx = dx * cosRot + dy * sinRot
+                        val rotDy = -dx * sinRot + dy * cosRot
+                        val nx = rotDx / rx
+                        val ny = rotDy / ry
+                        val dist = kotlin.math.sqrt(nx * nx + ny * ny)
+                        val intensityF =
+                            if (dist <= innerBound) {
+                                1f
+                            } else {
+                                1f - (dist - innerBound) / (1f - innerBound).coerceAtLeast(0.01f)
+                            }
+                        val intensity = (intensityF.coerceIn(0f, 1f) * 255f).roundToInt()
+                        if (intensity == 0) continue
+                        val idx = row + x
+                        plotAndApply(sub.mode, idx, intensity)
+                    }
+                }
+            }
+
+            SubMaskType.Linear.id -> {
+                val sx = denorm(sub.linear.startX, width)
+                val sy = denorm(sub.linear.startY, height)
+                val ex = denorm(sub.linear.endX, width)
+                val ey = denorm(sub.linear.endY, height)
+                val rangePx = lenPx(sub.linear.range).coerceAtLeast(0.01f)
+                val vx = ex - sx
+                val vy = ey - sy
+                val len = kotlin.math.sqrt(vx * vx + vy * vy)
+                if (len <= 0.01f) return@forEach
+                val invLen = 1f / len
+                val nx = -vy * invLen
+                val ny = vx * invLen
+
+                for (y in 0 until height) {
+                    val row = y * width
+                    for (x in 0 until width) {
+                        val px = x + 0.5f - sx
+                        val py = y + 0.5f - sy
+                        val distPerp = px * nx + py * ny
+                        val t = distPerp / rangePx
+                        val intensityF = (0.5f - t * 0.5f).coerceIn(0f, 1f)
+                        val intensity = (intensityF * 255f).roundToInt()
+                        if (intensity == 0) continue
+                        val idx = row + x
+                        plotAndApply(sub.mode, idx, intensity)
+                    }
+                }
+            }
+
+            SubMaskType.AiSubject.id -> {
+                val dataUrl = sub.aiSubject.maskDataBase64 ?: return@forEach
+                val decoded = decodeMaskDataUrlToBitmap(dataUrl) ?: return@forEach
+                val scaled = if (decoded.width != width || decoded.height != height) {
+                    Bitmap.createScaledBitmap(decoded, width, height, true)
+                } else {
+                    decoded
+                }
+                val pixels = IntArray(width * height)
+                scaled.getPixels(pixels, 0, width, 0, 0, width, height)
+                val maskU8 = IntArray(width * height) { i -> (pixels[i] shr 16) and 0xFF }
+                val radius = (sub.aiSubject.softness.coerceIn(0f, 1f) * 10f).roundToInt()
+                val softened = if (radius >= 1) boxBlurU8(maskU8, radius) else maskU8
+                for (i in softened.indices) {
+                    val v = softened[i]
+                    if (v == 0) continue
+                    plotAndApply(sub.mode, i, v)
+                }
+            }
         }
     }
 
     val overlayPixels = IntArray(width * height)
+    val invertSelection = highlightSubMaskId == null && mask.invert
     for (i in overlayPixels.indices) {
-        val v = selection[i].coerceIn(0, 255)
-        if (v == 0) continue
-        val a = (v * 140 / 255).coerceIn(0, 255)
-        overlayPixels[i] = (a shl 24) or (255 shl 16) or (23 shl 8) or 68
+        val add = additive[i].coerceIn(0, 255)
+        val sub = subtractive[i].coerceIn(0, 255)
+        val sel = selection[i].coerceIn(0, 255).let { if (invertSelection) 255 - it else it }
+        if (add == 0 && sub == 0 && sel == 0) continue
+
+        fun argb(alpha: Int, r: Int, g: Int, b: Int): Int {
+            val a = alpha.coerceIn(0, 255)
+            return (a shl 24) or (r.coerceIn(0, 255) shl 16) or (g.coerceIn(0, 255) shl 8) or b.coerceIn(0, 255)
+        }
+
+        fun over(dst: Int, src: Int): Int {
+            val sa = (src ushr 24) and 0xFF
+            if (sa == 0) return dst
+            val da = (dst ushr 24) and 0xFF
+
+            val sr = (src ushr 16) and 0xFF
+            val sg = (src ushr 8) and 0xFF
+            val sb = src and 0xFF
+
+            val dr = (dst ushr 16) and 0xFF
+            val dg = (dst ushr 8) and 0xFF
+            val db = dst and 0xFF
+
+            val invSa = 255 - sa
+            val outA = (sa + (da * invSa + 127) / 255).coerceIn(0, 255)
+            val outR = (sr + (dr * invSa + 127) / 255).coerceIn(0, 255)
+            val outG = (sg + (dg * invSa + 127) / 255).coerceIn(0, 255)
+            val outB = (sb + (db * invSa + 127) / 255).coerceIn(0, 255)
+            return (outA shl 24) or (outR shl 16) or (outG shl 8) or outB
+        }
+
+        fun alphaFor(intensity: Int): Int = (intensity * 170 / 255).coerceIn(0, 255)
+
+        var out = 0
+        if (sel > 0) out = argb(alphaFor(sel), 255, 155, 0) // selection (also shows invert)
+        if (add > 0) out = over(out, argb(alphaFor(add), 255, 155, 0)) // additive strokes
+        if (sub > 0) out = over(out, argb(alphaFor(sub), 0, 140, 255)) // subtractive strokes
+        overlayPixels[i] = out
     }
     return Bitmap.createBitmap(overlayPixels, width, height, Bitmap.Config.ARGB_8888)
 }
