@@ -49,6 +49,12 @@ Inspired by / forked from RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Effects: vignette.
 - Masks: brush, linear gradient, radial, and AI subject mask (lasso-assisted).
 
+## Planned:
+
+- Holding down on the Preview should show the original picture until let go
+- Highlight recovery doesn't seem to be very good (?)
+- UI needs to be improved for masking. (And more)
+
 ## License
 
 AGPL-3.0 — see `LICENSE`.
