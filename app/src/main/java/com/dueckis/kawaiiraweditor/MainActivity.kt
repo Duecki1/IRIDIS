@@ -21,7 +21,6 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Base64
-import android.view.ViewConfiguration
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.PredictiveBackHandler
@@ -3000,12 +2999,6 @@ private fun EditorScreen(
                                         showAiSubjectOverrideDialog = true
                                     }
                                 }
-                                ,
-                                enableOriginalCompareHold = !isInteractiveMaskingEnabled &&
-                                    !isDraggingMaskHandle &&
-                                    maskTapMode == MaskTapMode.None &&
-                                    !isGeneratingAiMask,
-                                onOriginalCompareHoldChanged = { isComparingOriginal = it }
                             )
                         }
 
@@ -3275,12 +3268,6 @@ private fun EditorScreen(
                                     showAiSubjectOverrideDialog = true
                                 }
                             }
-                            ,
-                            enableOriginalCompareHold = !isInteractiveMaskingEnabled &&
-                                !isDraggingMaskHandle &&
-                                maskTapMode == MaskTapMode.None &&
-                                !isGeneratingAiMask,
-                            onOriginalCompareHoldChanged = { isComparingOriginal = it }
                         )
                     }
 
@@ -5379,9 +5366,7 @@ private fun ImagePreview(
     onLassoFinished: ((List<MaskPoint>) -> Unit)? = null,
     onSubMaskHandleDrag: ((MaskHandle, MaskPoint) -> Unit)? = null,
     onSubMaskHandleDragStateChange: ((Boolean) -> Unit)? = null,
-    onRequestAiSubjectOverride: (() -> Unit)? = null,
-    enableOriginalCompareHold: Boolean = true,
-    onOriginalCompareHoldChanged: ((Boolean) -> Unit)? = null
+    onRequestAiSubjectOverride: (() -> Unit)? = null
 ) {
     var scale by remember { mutableStateOf(1f) }
     var offsetX by remember { mutableStateOf(0f) }
@@ -5390,69 +5375,10 @@ private fun ImagePreview(
     val currentStroke = remember { mutableStateListOf<MaskPoint>() }
     val density = LocalDensity.current
     val activeSubMaskState by rememberUpdatedState(activeSubMask)
-    val latestCompareCallback by rememberUpdatedState(onOriginalCompareHoldChanged)
-    val latestCompareEnabled by rememberUpdatedState(enableOriginalCompareHold)
-    val latestBitmap by rememberUpdatedState(bitmap)
 
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .then(
-                if (latestCompareCallback == null) Modifier
-                else Modifier.pointerInput(Unit) {
-                    awaitEachGesture {
-                        val callback = latestCompareCallback ?: return@awaitEachGesture
-                        if (!latestCompareEnabled) return@awaitEachGesture
-                        if (latestBitmap == null) return@awaitEachGesture
-
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        if (down.type != PointerType.Touch && down.type != PointerType.Stylus) return@awaitEachGesture
-
-                        val timeoutMs = ViewConfiguration.getLongPressTimeout().toLong().coerceAtLeast(1L)
-                        val slop = viewConfiguration.touchSlop
-                        val downPos = down.position
-                        val startTime = SystemClock.uptimeMillis()
-
-                        var longPressed = false
-                        var canceled = false
-
-                        try {
-                            while (true) {
-                                val event = awaitPointerEvent()
-                                val pressed = event.changes.filter { it.pressed }
-                                if (pressed.none { it.id == down.id }) break
-
-                                if (!longPressed) {
-                                    val touchCount = pressed.count { it.type == PointerType.Touch }
-                                    if (touchCount >= 2) {
-                                        canceled = true
-                                        break
-                                    }
-                                    val change = event.changes.firstOrNull { it.id == down.id } ?: continue
-                                    val dx = change.position.x - downPos.x
-                                    val dy = change.position.y - downPos.y
-                                    if ((dx * dx + dy * dy) > slop * slop) {
-                                        canceled = true
-                                        break
-                                    }
-                                    if (SystemClock.uptimeMillis() - startTime >= timeoutMs) {
-                                        longPressed = true
-                                        callback(true)
-                                    }
-                                } else {
-                                    event.changes.forEach { it.consume() }
-                                }
-                            }
-                        } finally {
-                            if (longPressed) {
-                                callback(false)
-                            } else if (canceled) {
-                                // no-op
-                            }
-                        }
-                    }
-                }
-            )
             .let { base ->
                 if (!isMaskMode) base
                 else base.pointerInput(bitmap) {
@@ -5582,23 +5508,32 @@ private fun ImagePreview(
                 }
 
                 val shouldDrawOverlay = maskOverlay != null && (persistentOverlayVisible || overlayIsFlashing)
-                val overlayBitmap = remember(maskOverlay, shouldDrawOverlay, bitmap.width, bitmap.height) {
-                    if (!shouldDrawOverlay) {
-                        null
-                    } else {
-                        val overlayMask = requireNotNull(maskOverlay)
-                        val maxDim = 512
-                        val w = bitmap.width
-                        val h = bitmap.height
-                        val scale = if (w >= h) maxDim.toFloat() / w.coerceAtLeast(1) else maxDim.toFloat() / h.coerceAtLeast(1)
-                        val outW = (w * scale).toInt().coerceAtLeast(1)
-                        val outH = (h * scale).toInt().coerceAtLeast(1)
-                        buildMaskOverlayBitmap(overlayMask, outW, outH)
+                var overlayBitmap by remember { mutableStateOf<Bitmap?>(null) }
+                val overlayMaxDim = if (isPainting) 256 else 512
+
+                LaunchedEffect(maskOverlay, shouldDrawOverlay, bitmap.width, bitmap.height, overlayMaxDim) {
+                    val overlayMask = maskOverlay ?: run {
+                        overlayBitmap = null
+                        return@LaunchedEffect
                     }
+                    if (!shouldDrawOverlay) {
+                        overlayBitmap = null
+                        return@LaunchedEffect
+                    }
+
+                    val w = bitmap.width
+                    val h = bitmap.height
+                    val scale =
+                        if (w >= h) overlayMaxDim.toFloat() / w.coerceAtLeast(1) else overlayMaxDim.toFloat() / h.coerceAtLeast(1)
+                    val outW = (w * scale).toInt().coerceAtLeast(1)
+                    val outH = (h * scale).toInt().coerceAtLeast(1)
+                    overlayBitmap = withContext(Dispatchers.Default) { buildMaskOverlayBitmap(overlayMask, outW, outH) }
                 }
-                if (overlayBitmap != null) {
+
+                val overlayBitmapSnapshot = overlayBitmap
+                if (overlayBitmapSnapshot != null) {
                     Image(
-                        bitmap = overlayBitmap.asImageBitmap(),
+                        bitmap = overlayBitmapSnapshot.asImageBitmap(),
                         contentDescription = null,
                         contentScale = ContentScale.Fit,
                         modifier = Modifier
