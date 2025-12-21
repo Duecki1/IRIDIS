@@ -2,6 +2,8 @@
 
 Draft / test Android RAW editor built with Jetpack Compose + a Rust native decoder/processor.
 
+If you are interested in this Project and want it to be continued, let me know by giving this repo a star :)
+
 ## Screenshots
 
 <table>
@@ -46,6 +48,12 @@ Inspired by / forked from RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Color grading (shadows/midtones/highlights) + blending/balance.
 - Effects: vignette.
 - Masks: brush, linear gradient, radial, and AI subject mask (lasso-assisted).
+
+## Planned:
+
+- Holding down on the Preview should show the original picture until let go
+- Highlight recovery doesn't seem to be very good (?)
+- UI needs to be improved for masking. (And more)
 
 ## License
 
