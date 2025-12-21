@@ -394,12 +394,7 @@ private fun RapidRawEditorScreen() {
 
                 val tags = withContext(Dispatchers.Default) {
                     runCatching {
-                        val previewBytes =
-                            if (lowQualityPreviewEnabled) {
-                                LibRawDecoder.lowdecode(rawBytes, "{}") ?: LibRawDecoder.lowlowdecode(rawBytes, "{}")
-                            } else {
-                                LibRawDecoder.decode(rawBytes, "{}")
-                            }
+                        val previewBytes = decodePreviewBytesForTagging(rawBytes, lowQualityPreviewEnabled)
                         val bmp = previewBytes?.decodeToBitmap()
                         if (bmp == null) emptyList()
                         else tagger.generateTags(bmp, onProgress = { p -> setTagProgress(projectId, p) })
@@ -762,13 +757,7 @@ private fun GalleryScreen(
 
                         val tags = withContext(Dispatchers.Default) {
                             runCatching {
-                                val previewBytes =
-                                    if (lowQualityPreviewEnabled) {
-                                        LibRawDecoder.lowdecode(bytes, "{}")
-                                            ?: LibRawDecoder.lowlowdecode(bytes, "{}")
-                                    } else {
-                                        LibRawDecoder.decode(bytes, "{}")
-                                    }
+                                val previewBytes = decodePreviewBytesForTagging(bytes, lowQualityPreviewEnabled)
                                 val bmp = previewBytes?.decodeToBitmap()
                                 if (bmp == null) emptyList()
                                 else tagger.generateTags(bmp, onProgress = { p -> onTagProgressChange(projectId, p) })
