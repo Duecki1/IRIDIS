@@ -93,9 +93,11 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Palette
@@ -222,6 +224,7 @@ import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.ranges.ClosedFloatingPointRange
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -1467,6 +1470,10 @@ private fun EditorScreen(
     var metadataJson by remember { mutableStateOf<String?>(null) }
     var showAiSubjectOverrideDialog by remember { mutableStateOf(false) }
     var aiSubjectOverrideTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val editHistory = remember(galleryItem.projectId) { mutableStateListOf<EditorHistoryEntry>() }
+    var editHistoryIndex by remember(galleryItem.projectId) { mutableIntStateOf(-1) }
+    var isRestoringEditHistory by remember(galleryItem.projectId) { mutableStateOf(false) }
+    var isHistoryInteractionActive by remember(galleryItem.projectId) { mutableStateOf(false) }
 
     PredictiveBackHandler {
         try {
@@ -1507,6 +1514,58 @@ private fun EditorScreen(
     var maskOverlayBlinkKey by remember { mutableStateOf(0L) }
     val strokeOrder = remember { AtomicLong(0L) }
 
+    fun normalizeMaskSelectionForCurrentState() {
+        val selectedMask = selectedMaskId?.takeIf { id -> masks.any { it.id == id } }
+        val normalizedMaskId = selectedMask ?: masks.firstOrNull()?.id
+        if (normalizedMaskId != selectedMaskId) {
+            selectedMaskId = normalizedMaskId
+        }
+        val activeMask = masks.firstOrNull { it.id == normalizedMaskId }
+        val selectedSub = selectedSubMaskId?.takeIf { id -> activeMask?.subMasks?.any { it.id == id } == true }
+        val normalizedSubId = selectedSub ?: activeMask?.subMasks?.firstOrNull()?.id
+        if (normalizedSubId != selectedSubMaskId) {
+            selectedSubMaskId = normalizedSubId
+        }
+    }
+
+    fun applyEditHistoryEntry(entry: EditorHistoryEntry) {
+        isRestoringEditHistory = true
+        adjustments = entry.adjustments
+        masks = entry.masks
+        normalizeMaskSelectionForCurrentState()
+        isRestoringEditHistory = false
+    }
+
+    fun pushEditHistoryEntry(entry: EditorHistoryEntry) {
+        if (isRestoringEditHistory) return
+        if (editHistoryIndex < 0) return
+        if (editHistory.getOrNull(editHistoryIndex) == entry) return
+
+        while (editHistory.lastIndex > editHistoryIndex) {
+            editHistory.removeAt(editHistory.lastIndex)
+        }
+
+        editHistory.add(entry)
+        editHistoryIndex = editHistory.lastIndex
+
+        val maxEntries = 250
+        val overflow = editHistory.size - maxEntries
+        if (overflow > 0) {
+            repeat(overflow) { editHistory.removeAt(0) }
+            editHistoryIndex = (editHistoryIndex - overflow).coerceAtLeast(0)
+        }
+    }
+
+    fun beginEditInteraction() {
+        if (!isHistoryInteractionActive) isHistoryInteractionActive = true
+    }
+
+    fun endEditInteraction() {
+        if (!isHistoryInteractionActive) return
+        isHistoryInteractionActive = false
+        pushEditHistoryEntry(EditorHistoryEntry(adjustments = adjustments, masks = masks))
+    }
+
     val renderVersion = remember { AtomicLong(0L) }
     val lastEditedPreviewStamp = remember { AtomicLong(-1L) } // version*10 + quality
     val lastOriginalPreviewStamp = remember { AtomicLong(-1L) } // version*10 + quality
@@ -1527,6 +1586,15 @@ private fun EditorScreen(
 
     // Load RAW file and adjustments from storage
     LaunchedEffect(galleryItem.projectId) {
+        isRestoringEditHistory = true
+        adjustments = AdjustmentState()
+        masks = emptyList()
+        selectedMaskId = null
+        selectedSubMaskId = null
+        editHistory.clear()
+        editHistoryIndex = -1
+        isRestoringEditHistory = false
+
         isComparingOriginal = false
         originalBitmap = null
         editedBitmap = null
@@ -1778,6 +1846,12 @@ private fun EditorScreen(
                 // Keep default adjustments if parsing fails
             }
         }
+
+        isRestoringEditHistory = true
+        editHistory.clear()
+        editHistory.add(EditorHistoryEntry(adjustments = adjustments, masks = masks))
+        editHistoryIndex = 0
+        isRestoringEditHistory = false
     }
 
     LaunchedEffect(sessionHandle) {
@@ -1826,6 +1900,19 @@ private fun EditorScreen(
         withContext(Dispatchers.IO) {
             storage.saveAdjustments(galleryItem.projectId, json)
         }
+    }
+
+    LaunchedEffect(Unit) {
+        snapshotFlow { EditorHistoryEntry(adjustments = adjustments, masks = masks) }
+            .distinctUntilChanged()
+            .collect { entry ->
+                if (isHistoryInteractionActive || isDraggingMaskHandle) return@collect
+                pushEditHistoryEntry(entry)
+            }
+    }
+
+    LaunchedEffect(isDraggingMaskHandle) {
+        if (isDraggingMaskHandle) beginEditInteraction() else endEditInteraction()
     }
 
     LaunchedEffect(sessionHandle) {
@@ -2089,6 +2176,23 @@ private fun EditorScreen(
                 panelTab = tab
             }
 
+            val canUndo = editHistoryIndex > 0
+            val canRedo = editHistoryIndex in 0 until editHistory.lastIndex
+
+            fun undo() {
+                val nextIndex = editHistoryIndex - 1
+                val entry = editHistory.getOrNull(nextIndex) ?: return
+                editHistoryIndex = nextIndex
+                applyEditHistoryEntry(entry)
+            }
+
+            fun redo() {
+                val nextIndex = editHistoryIndex + 1
+                val entry = editHistory.getOrNull(nextIndex) ?: return
+                editHistoryIndex = nextIndex
+                applyEditHistoryEntry(entry)
+            }
+
             Box(modifier = Modifier.fillMaxSize()) {
             if (isTablet) {
                 // Tablet layout: Full screen content with top bars overlaid
@@ -2152,6 +2256,8 @@ private fun EditorScreen(
                                     panelTab = panelTab,
                                     adjustments = adjustments,
                                     onAdjustmentsChange = { adjustments = it },
+                                    onBeginEditInteraction = ::beginEditInteraction,
+                                    onEndEditInteraction = ::endEditInteraction,
                                     histogramData = histogramData,
                                     masks = masks,
                                     onMasksChange = { masks = it },
@@ -2264,6 +2370,22 @@ private fun EditorScreen(
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(
+                            enabled = canUndo && sessionHandle != 0L,
+                            onClick = { undo() },
+                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo", tint = Color.White)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(
+                            enabled = canRedo && sessionHandle != 0L,
+                            onClick = { redo() },
+                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo", tint = Color.White)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(
                             enabled = sessionHandle != 0L,
                             onClick = { showMetadataDialog = true },
                             colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
@@ -2334,12 +2456,28 @@ private fun EditorScreen(
                             }
                         }
 
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(
-                                enabled = sessionHandle != 0L,
-                                onClick = { showMetadataDialog = true },
-                                colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
-                            ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            enabled = canUndo && sessionHandle != 0L,
+                            onClick = { undo() },
+                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo", tint = Color.White)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(
+                            enabled = canRedo && sessionHandle != 0L,
+                            onClick = { redo() },
+                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo", tint = Color.White)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(
+                            enabled = sessionHandle != 0L,
+                            onClick = { showMetadataDialog = true },
+                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
+                        ) {
                                 Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White)
                             }
                             Spacer(modifier = Modifier.width(8.dp))
@@ -2450,6 +2588,8 @@ private fun EditorScreen(
                                     panelTab = panelTab,
                                     adjustments = adjustments,
                                     onAdjustmentsChange = { adjustments = it },
+                                    onBeginEditInteraction = ::beginEditInteraction,
+                                    onEndEditInteraction = ::endEditInteraction,
                                     histogramData = histogramData,
                                     masks = masks,
                                     onMasksChange = { masks = it },
@@ -2624,6 +2764,8 @@ private fun EditorControlsContent(
     panelTab: EditorPanelTab,
     adjustments: AdjustmentState,
     onAdjustmentsChange: (AdjustmentState) -> Unit,
+    onBeginEditInteraction: () -> Unit,
+    onEndEditInteraction: () -> Unit,
     histogramData: HistogramData?,
     masks: List<MaskState>,
     onMasksChange: (List<MaskState>) -> Unit,
@@ -2670,7 +2812,9 @@ private fun EditorControlsContent(
                                 formatter = control.formatter,
                                 onValueChange = { snapped ->
                                     onAdjustmentsChange(adjustments.withValue(control.field, snapped))
-                                }
+                                },
+                                onInteractionStart = onBeginEditInteraction,
+                                onInteractionEnd = onEndEditInteraction
                             )
                         }
                     }
@@ -2686,7 +2830,9 @@ private fun EditorControlsContent(
                 CurvesEditor(
                     adjustments = adjustments,
                     histogramData = histogramData,
-                    onAdjustmentsChange = onAdjustmentsChange
+                    onAdjustmentsChange = onAdjustmentsChange,
+                    onBeginEditInteraction = onBeginEditInteraction,
+                    onEndEditInteraction = onEndEditInteraction
                 )
             }
 
@@ -2698,7 +2844,9 @@ private fun EditorControlsContent(
                     colorGrading = adjustments.colorGrading,
                     onColorGradingChange = { updated ->
                         onAdjustmentsChange(adjustments.copy(colorGrading = updated))
-                    }
+                    },
+                    onBeginEditInteraction = onBeginEditInteraction,
+                    onEndEditInteraction = onEndEditInteraction
                 )
             }
         }
@@ -2720,7 +2868,9 @@ private fun EditorControlsContent(
                             formatter = control.formatter,
                             onValueChange = { snapped ->
                                 onAdjustmentsChange(adjustments.withValue(control.field, snapped))
-                            }
+                            },
+                            onInteractionStart = onBeginEditInteraction,
+                            onInteractionEnd = onEndEditInteraction
                         )
                     }
                 }
@@ -3344,7 +3494,11 @@ private fun EditorControlsContent(
                     Text("Brush Size: ${brushSize.roundToInt()} px", color = MaterialTheme.colorScheme.onSurface)
                     Slider(
                         value = brushSize.coerceIn(2f, 400f),
-                        onValueChange = { onBrushSizeChange(it) },
+                        onValueChange = {
+                            onBeginEditInteraction()
+                            onBrushSizeChange(it)
+                        },
+                        onValueChangeFinished = onEndEditInteraction,
                         valueRange = 2f..400f
                     )
 
@@ -3353,9 +3507,11 @@ private fun EditorControlsContent(
                     Slider(
                         value = softness.coerceIn(0f, 1f),
                         onValueChange = { newValue ->
+                            onBeginEditInteraction()
                             if (brushTool == BrushTool.Eraser) onEraserSoftnessChange(newValue.coerceIn(0f, 1f))
                             else onBrushSoftnessChange(newValue.coerceIn(0f, 1f))
                         },
+                        onValueChangeFinished = onEndEditInteraction,
                         valueRange = 0f..1f
                     )
                 }
@@ -3374,6 +3530,7 @@ private fun EditorControlsContent(
                     Slider(
                         value = selectedSubMask.aiSubject.softness.coerceIn(0f, 1f),
                         onValueChange = { newValue ->
+                            onBeginEditInteraction()
                             val updated = masks.map { m ->
                                 if (m.id != selectedMask.id) m
                                 else m.copy(
@@ -3385,6 +3542,7 @@ private fun EditorControlsContent(
                             onMasksChange(updated)
                             onShowMaskOverlayChange(true)
                         },
+                        onValueChangeFinished = onEndEditInteraction,
                         valueRange = 0f..1f
                     )
 
@@ -3418,6 +3576,7 @@ private fun EditorControlsContent(
                     Slider(
                         value = selectedSubMask.radial.radiusX.coerceIn(0.01f, 1.5f),
                         onValueChange = { newValue ->
+                            onBeginEditInteraction()
                             val updated = masks.map { m ->
                                 if (m.id != selectedMask.id) m
                                 else m.copy(
@@ -3429,6 +3588,7 @@ private fun EditorControlsContent(
                             }
                             onMasksChange(updated)
                         },
+                        onValueChangeFinished = onEndEditInteraction,
                         valueRange = 0.01f..1.5f
                     )
 
@@ -3436,6 +3596,7 @@ private fun EditorControlsContent(
                     Slider(
                         value = selectedSubMask.radial.feather.coerceIn(0f, 1f),
                         onValueChange = { newValue ->
+                            onBeginEditInteraction()
                             val updated = masks.map { m ->
                                 if (m.id != selectedMask.id) m
                                 else m.copy(
@@ -3447,6 +3608,7 @@ private fun EditorControlsContent(
                             }
                             onMasksChange(updated)
                         },
+                        onValueChangeFinished = onEndEditInteraction,
                         valueRange = 0f..1f
                     )
                 }
@@ -3476,6 +3638,7 @@ private fun EditorControlsContent(
                     Slider(
                         value = selectedSubMask.linear.range.coerceIn(0.01f, 1.5f),
                         onValueChange = { newValue ->
+                            onBeginEditInteraction()
                             val updated = masks.map { m ->
                                 if (m.id != selectedMask.id) m
                                 else m.copy(
@@ -3487,6 +3650,7 @@ private fun EditorControlsContent(
                             }
                             onMasksChange(updated)
                         },
+                        onValueChangeFinished = onEndEditInteraction,
                         valueRange = 0.01f..1.5f
                     )
                 }
@@ -3527,7 +3691,9 @@ private fun EditorControlsContent(
                         CurvesEditor(
                             adjustments = selectedMask.adjustments,
                             histogramData = histogramData,
-                            onAdjustmentsChange = ::updateSelectedMaskAdjustments
+                            onAdjustmentsChange = ::updateSelectedMaskAdjustments,
+                            onBeginEditInteraction = onBeginEditInteraction,
+                            onEndEditInteraction = onEndEditInteraction
                         )
                     }
 
@@ -3539,7 +3705,9 @@ private fun EditorControlsContent(
                             colorGrading = selectedMask.adjustments.colorGrading,
                             onColorGradingChange = { updated ->
                                 updateSelectedMaskAdjustments(selectedMask.adjustments.copy(colorGrading = updated))
-                            }
+                            },
+                            onBeginEditInteraction = onBeginEditInteraction,
+                            onEndEditInteraction = onEndEditInteraction
                         )
                     }
                 }
@@ -3565,7 +3733,9 @@ private fun EditorControlsContent(
                                         formatter = control.formatter,
                                         onValueChange = { snapped ->
                                             updateSelectedMaskAdjustments(selectedMask.adjustments.withValue(control.field, snapped))
-                                        }
+                                        },
+                                        onInteractionStart = onBeginEditInteraction,
+                                        onInteractionEnd = onEndEditInteraction
                                     )
                                 }
                             }
@@ -3709,7 +3879,9 @@ private fun CurvesState.withPoints(channel: CurveChannel, points: List<CurvePoin
 private fun CurvesEditor(
     adjustments: AdjustmentState,
     histogramData: HistogramData?,
-    onAdjustmentsChange: (AdjustmentState) -> Unit
+    onAdjustmentsChange: (AdjustmentState) -> Unit,
+    onBeginEditInteraction: () -> Unit,
+    onEndEditInteraction: () -> Unit
 ) {
     var activeChannel by remember { mutableStateOf(CurveChannel.Luma) }
     val points = adjustments.curves.pointsFor(activeChannel)
@@ -3736,8 +3908,10 @@ private fun CurvesEditor(
     val pointHitRadiusPx = with(LocalDensity.current) { 28.dp.toPx() }
     val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
     val resetChannel: () -> Unit = {
+        onBeginEditInteraction()
         val updatedCurves = latestCurves.withPoints(activeChannel, defaultCurvePoints())
         latestOnAdjustmentsChange(latestAdjustments.copy(curves = updatedCurves))
+        onEndEditInteraction()
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -3856,8 +4030,10 @@ private fun CurvesEditor(
                                         val newPoint = toCurvePoint(change.position)
                                         val newPoints = (working + newPoint).sortedBy { it.x }
                                         working = newPoints
+                                        onBeginEditInteraction()
                                         val updatedCurves = latestCurves.withPoints(activeChannel, working)
                                         latestOnAdjustmentsChange(latestAdjustments.copy(curves = updatedCurves))
+                                        onEndEditInteraction()
                                     }
                                     return@awaitEachGesture
                                 }
@@ -3874,6 +4050,7 @@ private fun CurvesEditor(
                         // User grabbed a point: capture the gesture so scrolling doesn't steal it.
                         down.consume()
 
+                        onBeginEditInteraction()
                         drag(down.id) { change ->
                             change.consume()
                             val target = toCurvePoint(change.position)
@@ -3881,6 +4058,7 @@ private fun CurvesEditor(
                             val updatedCurves = latestCurves.withPoints(activeChannel, working)
                             latestOnAdjustmentsChange(latestAdjustments.copy(curves = updatedCurves))
                         }
+                        onEndEditInteraction()
                     }
                 }
             ) {
@@ -4032,7 +4210,9 @@ private fun buildCurvePath(points: List<CurvePointState>, size: Size): Path {
 @Composable
 private fun ColorGradingEditor(
     colorGrading: ColorGradingState,
-    onColorGradingChange: (ColorGradingState) -> Unit
+    onColorGradingChange: (ColorGradingState) -> Unit,
+    onBeginEditInteraction: () -> Unit,
+    onEndEditInteraction: () -> Unit
 ) {
     val formatterInt: (Float) -> String = { it.roundToInt().toString() }
     val isWide = LocalConfiguration.current.screenWidthDp >= 600
@@ -4048,7 +4228,9 @@ private fun ColorGradingEditor(
                 modifier = Modifier.fillMaxWidth(),
                 value = colorGrading.midtones,
                 defaultValue = HueSatLumState(),
-                onValueChange = { onColorGradingChange(colorGrading.copy(midtones = it)) }
+                onValueChange = { onColorGradingChange(colorGrading.copy(midtones = it)) },
+                onBeginEditInteraction = onBeginEditInteraction,
+                onEndEditInteraction = onEndEditInteraction
             )
 
             Row(
@@ -4061,7 +4243,9 @@ private fun ColorGradingEditor(
                     modifier = Modifier.weight(1f),
                     value = colorGrading.shadows,
                     defaultValue = HueSatLumState(),
-                    onValueChange = { onColorGradingChange(colorGrading.copy(shadows = it)) }
+                    onValueChange = { onColorGradingChange(colorGrading.copy(shadows = it)) },
+                    onBeginEditInteraction = onBeginEditInteraction,
+                    onEndEditInteraction = onEndEditInteraction
                 )
                 ColorWheelControl(
                     label = "Highlights",
@@ -4069,7 +4253,9 @@ private fun ColorGradingEditor(
                     modifier = Modifier.weight(1f),
                     value = colorGrading.highlights,
                     defaultValue = HueSatLumState(),
-                    onValueChange = { onColorGradingChange(colorGrading.copy(highlights = it)) }
+                    onValueChange = { onColorGradingChange(colorGrading.copy(highlights = it)) },
+                    onBeginEditInteraction = onBeginEditInteraction,
+                    onEndEditInteraction = onEndEditInteraction
                 )
             }
 
@@ -4080,7 +4266,9 @@ private fun ColorGradingEditor(
                 step = 1f,
                 defaultValue = 50f,
                 formatter = formatterInt,
-                onValueChange = { onColorGradingChange(colorGrading.copy(blending = it)) }
+                onValueChange = { onColorGradingChange(colorGrading.copy(blending = it)) },
+                onInteractionStart = onBeginEditInteraction,
+                onInteractionEnd = onEndEditInteraction
             )
             AdjustmentSlider(
                 label = "Balance",
@@ -4089,7 +4277,9 @@ private fun ColorGradingEditor(
                 step = 1f,
                 defaultValue = 0f,
                 formatter = formatterInt,
-                onValueChange = { onColorGradingChange(colorGrading.copy(balance = it)) }
+                onValueChange = { onColorGradingChange(colorGrading.copy(balance = it)) },
+                onInteractionStart = onBeginEditInteraction,
+                onInteractionEnd = onEndEditInteraction
             )
         }
     }
@@ -4102,7 +4292,9 @@ private fun ColorWheelControl(
     modifier: Modifier = Modifier,
     value: HueSatLumState,
     defaultValue: HueSatLumState,
-    onValueChange: (HueSatLumState) -> Unit
+    onValueChange: (HueSatLumState) -> Unit,
+    onBeginEditInteraction: () -> Unit,
+    onEndEditInteraction: () -> Unit
 ) {
     val formatterInt: (Float) -> String = { it.roundToInt().toString() }
     val latestValue by rememberUpdatedState(value)
@@ -4125,7 +4317,14 @@ private fun ColorWheelControl(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                TextButton(onClick = { onValueChange(defaultValue) }, contentPadding = PaddingValues(0.dp)) {
+                TextButton(
+                    onClick = {
+                        onBeginEditInteraction()
+                        onValueChange(defaultValue)
+                        onEndEditInteraction()
+                    },
+                    contentPadding = PaddingValues(0.dp)
+                ) {
                     Text("Reset")
                 }
             }
@@ -4177,10 +4376,12 @@ private fun ColorWheelControl(
                         if (dist <= handleHitRadiusPx) {
                             // Dragging the handle: capture (prevents scroll stealing the gesture).
                             down.consume()
+                            onBeginEditInteraction()
                             drag(down.id) { change ->
                                 change.consume()
                                 latestOnValueChange(calcHueSat(change.position))
                             }
+                            onEndEditInteraction()
                         } else {
                             // Only update on a real tap (no movement beyond slop); ignore scroll swipes.
                             var movedTooMuch = false
@@ -4189,7 +4390,9 @@ private fun ColorWheelControl(
                                 val change = event.changes.firstOrNull { it.id == down.id } ?: continue
                                 if (!change.pressed) {
                                     if (!movedTooMuch) {
+                                        onBeginEditInteraction()
                                         latestOnValueChange(calcHueSat(change.position))
+                                        onEndEditInteraction()
                                     }
                                     break
                                 }

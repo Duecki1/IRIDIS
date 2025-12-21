@@ -93,7 +93,9 @@ internal fun AdjustmentSlider(
     step: Float,
     defaultValue: Float,
     formatter: (Float) -> String,
-    onValueChange: (Float) -> Unit
+    onValueChange: (Float) -> Unit,
+    onInteractionStart: (() -> Unit)? = null,
+    onInteractionEnd: (() -> Unit)? = null
 ) {
     val colors = SliderDefaults.colors(
         activeTrackColor = MaterialTheme.colorScheme.primary,
@@ -105,7 +107,13 @@ internal fun AdjustmentSlider(
             modifier = Modifier
                 .fillMaxWidth()
                 .pointerInput(label, defaultValue) {
-                    detectTapGestures(onDoubleTap = { onValueChange(defaultValue) })
+                    detectTapGestures(
+                        onDoubleTap = {
+                            onInteractionStart?.invoke()
+                            onValueChange(defaultValue)
+                            onInteractionEnd?.invoke()
+                        }
+                    )
                 },
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
@@ -125,8 +133,10 @@ internal fun AdjustmentSlider(
             value = value,
             onValueChange = { newValue ->
                 val snapped = snapToStep(newValue, step, range)
+                onInteractionStart?.invoke()
                 onValueChange(snapped)
             },
+            onValueChangeFinished = { onInteractionEnd?.invoke() },
             valueRange = range,
             colors = colors
         )
