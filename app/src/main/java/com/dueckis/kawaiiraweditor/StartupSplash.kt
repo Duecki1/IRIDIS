@@ -1,7 +1,7 @@
 package com.dueckis.kawaiiraweditor
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -56,41 +56,85 @@ internal fun StartupSplash(
 
     val blades = remember {
         listOf(
-            0f to Color(0xFFFF5252),
-            60f to Color(0xFFFFD740),
-            120f to Color(0xFF69F0AE),
-            180f to Color(0xFF40C4FF),
-            240f to Color(0xFF536DFE),
-            300f to Color(0xFFE040FB)
+            0f to Color(0xFFFF5252), // Red
+            60f to Color(0xFFFFD740), // Amber
+            120f to Color(0xFF69F0AE), // Green
+            180f to Color(0xFF40C4FF), // Light Blue
+            240f to Color(0xFF536DFE), // Indigo
+            300f to Color(0xFFE040FB)  // Purple
         )
     }
 
+    // Animation values
     val bladeTravel = remember { blades.map { Animatable(1f) } }
+    val bladeRotations = remember { blades.map { Animatable(0f) } }
     val centerScale = remember { Animatable(0f) }
+    val centerRotation = remember { Animatable(0f) }
     val overlayAlpha = remember { Animatable(1f) }
 
+    // Easing curves
+    val overshootEasing = remember { CubicBezierEasing(0.3f, 0.0f, 0.0f, 1.3f) }
+    val fastOutSlowIn = remember { CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f) }
+
     LaunchedEffect(Unit) {
+        // TIGHTER TIMINGS
+        val bladeStagger = 35L      // Delay between each blade
+        val bladeDur = 500          // Duration of blade travel
+        val centerDur = 450         // Duration of center reveal
+        val holdTime = 250L         // How long to wait before fading out
+        val fadeDur = 250           // Fade out duration
+
         coroutineScope {
             val jobs = bladeTravel.mapIndexed { idx, anim ->
                 launch {
-                    delay(idx * 60L)
-                    anim.animateTo(
-                        targetValue = 0f,
-                        animationSpec = tween(durationMillis = 650, easing = FastOutSlowInEasing)
-                    )
+                    val startDelay = idx * bladeStagger
+                    delay(startDelay)
+
+                    // Launch travel animation
+                    launch {
+                        anim.animateTo(
+                            targetValue = 0f,
+                            animationSpec = tween(durationMillis = bladeDur, easing = overshootEasing)
+                        )
+                    }
+
+                    // Launch rotation animation (simultaneous)
+                    launch {
+                        bladeRotations[idx].animateTo(
+                            targetValue = -15f,
+                            animationSpec = tween(durationMillis = bladeDur / 2, easing = fastOutSlowIn)
+                        )
+                        bladeRotations[idx].animateTo(
+                            targetValue = 0f,
+                            animationSpec = tween(durationMillis = bladeDur / 2, easing = fastOutSlowIn)
+                        )
+                    }
                 }
             }
             jobs.joinAll()
         }
 
-        centerScale.animateTo(
-            targetValue = 1f,
-            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing)
-        )
-        delay(140)
+        // Center reveal starts immediately after blades
+        coroutineScope {
+            launch {
+                centerScale.animateTo(
+                    targetValue = 1f,
+                    animationSpec = tween(durationMillis = (centerDur * 0.7).toInt(), easing = overshootEasing)
+                )
+            }
+            launch {
+                centerRotation.animateTo(
+                    targetValue = 360f, // Reduced to 1 rotation for speed
+                    animationSpec = tween(durationMillis = centerDur, easing = fastOutSlowIn)
+                )
+            }
+        }
+
+        delay(holdTime)
+
         overlayAlpha.animateTo(
             targetValue = 0f,
-            animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)
+            animationSpec = tween(durationMillis = fadeDur, easing = fastOutSlowIn)
         )
         onFinished()
     }
@@ -112,31 +156,39 @@ internal fun StartupSplash(
         contentAlignment = Alignment.Center
     ) {
         Canvas(modifier = Modifier.size(240.dp)) {
-            val scale = size.minDimension / 420f
+            val canvasScale = size.minDimension / 420f
             withTransform({
-                scale(scaleX = scale, scaleY = scale)
+                scale(scaleX = canvasScale, scaleY = canvasScale)
                 translate(left = size.width / 2f, top = size.height / 2f)
             }) {
-                blades.forEachIndexed { idx, (rotationDeg, bladeColor) ->
-                    val dist = bladeTravel[idx].value.coerceIn(0f, 1f) * 240f
-                    rotate(degrees = rotationDeg, pivot = Offset.Zero) {
+                // Draw blades
+                blades.forEachIndexed { idx, (initialRotationDeg, bladeColor) ->
+                    val dist = bladeTravel[idx].value.coerceIn(0f, 1f) * 200f
+                    val currentBladeRotation = bladeRotations[idx].value
+                    val bladePivot = Offset(0f, -40f)
+
+                    rotate(degrees = initialRotationDeg, pivot = Offset.Zero) {
                         translate(top = -dist) {
-                            drawPath(
-                                path = bladePath,
-                                color = bladeColor.copy(alpha = 0.85f)
-                            )
+                            rotate(degrees = currentBladeRotation, pivot = bladePivot) {
+                                drawPath(
+                                    path = bladePath,
+                                    color = bladeColor.copy(alpha = 0.9f)
+                                )
+                            }
                         }
                     }
                 }
 
+                // Draw center hexagon
                 val cScale = centerScale.value.coerceIn(0f, 1f)
                 if (cScale > 0.001f) {
-                    scale(scale = cScale, pivot = Offset.Zero) {
-                        drawPath(path = centerHexPath, color = Color.White)
+                    rotate(degrees = centerRotation.value, pivot = Offset.Zero) {
+                        scale(scale = cScale, pivot = Offset.Zero) {
+                            drawPath(path = centerHexPath, color = Color.White)
+                        }
                     }
                 }
             }
         }
     }
 }
-

@@ -797,7 +797,11 @@ impl CurvesRuntime {
 }
 
 fn clamp_to_u8(value: f32) -> u8 {
-    value.clamp(0.0, 255.0) as u8
+    if !value.is_finite() {
+        0
+    } else {
+        value.clamp(0.0, 255.0).round() as u8
+    }
 }
 
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
@@ -1720,7 +1724,9 @@ fn apply_color_adjustments(mut colors: [f32; 3], settings: &AdjustmentValues) ->
 }
 
 fn linear_to_srgb(linear: f32) -> f32 {
-    let v = linear.max(0.0);
+    // Match RapidRAW shader behavior: clamp linear input to display range before encoding.
+    // Prevents artifacts on blown highlights when values have headroom (> 1.0).
+    let v = linear.clamp(0.0, 1.0);
     if v <= 0.0031308 {
         12.92 * v
     } else {

@@ -23,6 +23,7 @@ import android.provider.OpenableColumns
 import android.util.Base64
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -90,6 +91,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -286,6 +288,7 @@ class MainActivity : ComponentActivity() {
 private fun RapidRawEditorScreen() {
     val context = LocalContext.current
     val storage = remember { ProjectStorage(context) }
+    val appPreferences = remember(context) { AppPreferences(context) }
     val coroutineScope = rememberCoroutineScope()
     val tagger = remember { ClipAutoTagger(context) }
     val metadataDispatcher = remember { Executors.newSingleThreadExecutor().asCoroutineDispatcher() }
@@ -299,6 +302,11 @@ private fun RapidRawEditorScreen() {
     var refreshTrigger by remember { mutableIntStateOf(0) }
     var editorDismissProgressTarget by remember { mutableFloatStateOf(0f) }
     val editorDismissProgress = remember { Animatable(0f) }
+    var lowQualityPreviewEnabled by remember { mutableStateOf(appPreferences.isLowQualityPreviewEnabled()) }
+
+    BackHandler(enabled = currentScreen == Screen.Settings) {
+        currentScreen = Screen.Gallery
+    }
 
     val notificationPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -387,7 +395,11 @@ private fun RapidRawEditorScreen() {
                 val tags = withContext(Dispatchers.Default) {
                     runCatching {
                         val previewBytes =
-                            LibRawDecoder.lowdecode(rawBytes, "{}") ?: LibRawDecoder.lowlowdecode(rawBytes, "{}")
+                            if (lowQualityPreviewEnabled) {
+                                LibRawDecoder.lowdecode(rawBytes, "{}") ?: LibRawDecoder.lowlowdecode(rawBytes, "{}")
+                            } else {
+                                LibRawDecoder.decode(rawBytes, "{}")
+                            }
                         val bmp = previewBytes?.decodeToBitmap()
                         if (bmp == null) emptyList()
                         else tagger.generateTags(bmp, onProgress = { p -> setTagProgress(projectId, p) })
@@ -497,6 +509,7 @@ private fun RapidRawEditorScreen() {
             GalleryScreen(
                 items = galleryItems,
                 tagger = tagger,
+                lowQualityPreviewEnabled = lowQualityPreviewEnabled,
                 isTaggingInFlight = ::isTaggingInFlight,
                 onTaggingInFlightChange = ::setTaggingInFlight,
                 tagProgressFor = ::tagProgressFor,
@@ -546,7 +559,8 @@ private fun RapidRawEditorScreen() {
                         }
                         galleryItems = galleryItems.filterNot { it.projectId in ids }
                     }
-                }
+                },
+                onOpenSettings = { if (currentScreen == Screen.Gallery) currentScreen = Screen.Settings }
             )
 
             if (editorVisible) {
@@ -572,6 +586,7 @@ private fun RapidRawEditorScreen() {
                 ) {
                     EditorScreen(
                         galleryItem = selectedItem,
+                        lowQualityPreviewEnabled = lowQualityPreviewEnabled,
                         onBackClick = { requestExitEditor(animated = true) },
                         onPredictiveBackProgress = { progress ->
                             editorDismissProgressTarget = progress.coerceIn(0f, 1f)
@@ -592,6 +607,17 @@ private fun RapidRawEditorScreen() {
                     )
                 }
             }
+
+            if (currentScreen == Screen.Settings) {
+                SettingsScreen(
+                    lowQualityPreviewEnabled = lowQualityPreviewEnabled,
+                    onLowQualityPreviewEnabledChange = { enabled ->
+                        lowQualityPreviewEnabled = enabled
+                        appPreferences.setLowQualityPreviewEnabled(enabled)
+                    },
+                    onBackClick = { currentScreen = Screen.Gallery }
+                )
+            }
         }
     }
 }
@@ -600,6 +626,7 @@ private fun RapidRawEditorScreen() {
 private fun GalleryScreen(
     items: List<GalleryItem>,
     tagger: ClipAutoTagger,
+    lowQualityPreviewEnabled: Boolean,
     isTaggingInFlight: (String) -> Boolean,
     onTaggingInFlightChange: (String, Boolean) -> Unit,
     tagProgressFor: (String) -> Float?,
@@ -609,7 +636,8 @@ private fun GalleryScreen(
     onAddClick: (GalleryItem) -> Unit,
     onTagsChanged: (String, List<String>) -> Unit,
     onRatingChangeMany: (List<String>, Int) -> Unit,
-    onDeleteMany: (List<String>) -> Unit
+    onDeleteMany: (List<String>) -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     val context = LocalContext.current
     val storage = remember { ProjectStorage(context) }
@@ -735,8 +763,12 @@ private fun GalleryScreen(
                         val tags = withContext(Dispatchers.Default) {
                             runCatching {
                                 val previewBytes =
-                                    LibRawDecoder.lowdecode(bytes, "{}")
-                                        ?: LibRawDecoder.lowlowdecode(bytes, "{}")
+                                    if (lowQualityPreviewEnabled) {
+                                        LibRawDecoder.lowdecode(bytes, "{}")
+                                            ?: LibRawDecoder.lowlowdecode(bytes, "{}")
+                                    } else {
+                                        LibRawDecoder.decode(bytes, "{}")
+                                    }
                                 val bmp = previewBytes?.decodeToBitmap()
                                 if (bmp == null) emptyList()
                                 else tagger.generateTags(bmp, onProgress = { p -> onTagProgressChange(projectId, p) })
@@ -870,8 +902,6 @@ private fun GalleryScreen(
         bulkExportStatus = null
     }
 
-    var showInfoDialog by remember { mutableStateOf(false) }
-
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
@@ -888,8 +918,8 @@ private fun GalleryScreen(
                             scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
                         ),
                         navigationIcon = {
-                            IconButton(onClick = { showInfoDialog = true }) {
-                                Icon(Icons.Default.Info, contentDescription = "App Info")
+                            IconButton(onClick = onOpenSettings) {
+                                Icon(Icons.Default.Settings, contentDescription = "Settings")
                             }
                         },
                         actions = {
@@ -923,46 +953,6 @@ private fun GalleryScreen(
             }
         }
     ) { padding ->
-        if (showInfoDialog) {
-            val versionName = try {
-                BuildConfig.VERSION_NAME
-            } catch (_: Exception) { "?" }
-            AlertDialog(
-                onDismissRequest = { showInfoDialog = false },
-                title = { Text("About IRIDIS") },
-                text = {
-                    Column {
-                        Text(
-                            "Android app by Duecki1 using image processing from RapidRaw by CyberTimon.\n\nIRIDIS is an open-source RAW photo editor for Android, leveraging the RapidRaw engine for fast and high-quality image processing."
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        Text("Version: $versionName", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { showInfoDialog = false }) {
-                        Text("OK")
-                    }
-                },
-                dismissButton = {
-                    Row {
-                        TextButton(onClick = {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Duecki1/IRIDIS"))
-                            context.startActivity(intent)
-                        }) {
-                            Text("IRIDIS GitHub")
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        TextButton(onClick = {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/CyberTimon/RapidRaw"))
-                            context.startActivity(intent)
-                        }) {
-                            Text("RapidRaw GitHub")
-                        }
-                    }
-                }
-            )
-        }
         ExpandedFullScreenContainedSearchBar(
             state = searchBarState,
             inputField = {
@@ -1452,6 +1442,7 @@ private fun GalleryItemCard(
 @Composable
 private fun EditorScreen(
     galleryItem: GalleryItem?,
+    lowQualityPreviewEnabled: Boolean,
     onBackClick: () -> Unit,
     onPredictiveBackProgress: (Float) -> Unit,
     onPredictiveBackCancelled: () -> Unit,
@@ -1887,36 +1878,38 @@ private fun EditorScreen(
                 }
             }
 
-            // Stage 1: super-low quality (fast feedback while dragging).
-            val superLowBitmap = withContext(renderDispatcher) {
-                val bytes = runCatching { LibRawDecoder.lowlowdecodeFromSession(handle, requestJson) }.getOrNull()
-                bytes?.decodeToBitmap()
-            }
-            if (superLowBitmap != null) {
-                updateBitmapForRequest(version = requestVersion, quality = 0, bitmap = superLowBitmap)
-            }
+            if (lowQualityPreviewEnabled) {
+                // Stage 1: super-low quality (fast feedback while dragging).
+                val superLowBitmap = withContext(renderDispatcher) {
+                    val bytes = runCatching { LibRawDecoder.lowlowdecodeFromSession(handle, requestJson) }.getOrNull()
+                    bytes?.decodeToBitmap()
+                }
+                if (superLowBitmap != null) {
+                    updateBitmapForRequest(version = requestVersion, quality = 0, bitmap = superLowBitmap)
+                }
 
-            // If the user is still moving the slider, keep updating the super-low preview only.
-            val maybeUpdatedAfterSuperLow = withTimeoutOrNull(60) { renderRequests.receive() }
-            if (maybeUpdatedAfterSuperLow != null) {
-                currentRequest = maybeUpdatedAfterSuperLow
-                continue
-            }
+                // If the user is still moving the slider, keep updating the super-low preview only.
+                val maybeUpdatedAfterSuperLow = withTimeoutOrNull(60) { renderRequests.receive() }
+                if (maybeUpdatedAfterSuperLow != null) {
+                    currentRequest = maybeUpdatedAfterSuperLow
+                    continue
+                }
 
-            // Stage 2: low quality (still fast, but clearer).
-            val lowBitmap = withContext(renderDispatcher) {
-                val bytes = runCatching { LibRawDecoder.lowdecodeFromSession(handle, requestJson) }.getOrNull()
-                bytes?.decodeToBitmap()
-            }
-            if (lowBitmap != null) {
-                updateBitmapForRequest(version = requestVersion, quality = 1, bitmap = lowBitmap)
-            }
+                // Stage 2: low quality (still fast, but clearer).
+                val lowBitmap = withContext(renderDispatcher) {
+                    val bytes = runCatching { LibRawDecoder.lowdecodeFromSession(handle, requestJson) }.getOrNull()
+                    bytes?.decodeToBitmap()
+                }
+                if (lowBitmap != null) {
+                    updateBitmapForRequest(version = requestVersion, quality = 1, bitmap = lowBitmap)
+                }
 
-            // Debounce before running the expensive preview render.
-            val maybeUpdatedAfterLow = withTimeoutOrNull(180) { renderRequests.receive() }
-            if (maybeUpdatedAfterLow != null) {
-                currentRequest = maybeUpdatedAfterLow
-                continue
+                // Debounce before running the expensive preview render.
+                val maybeUpdatedAfterLow = withTimeoutOrNull(180) { renderRequests.receive() }
+                if (maybeUpdatedAfterLow != null) {
+                    currentRequest = maybeUpdatedAfterLow
+                    continue
+                }
             }
 
             isLoading = true
@@ -1926,32 +1919,31 @@ private fun EditorScreen(
             }
             isLoading = false
 
-            if (requestVersion == renderVersion.get()) {
-                if (!requestIsOriginal) {
-                    errorMessage = if (fullBitmap == null) "Failed to render preview." else null
-                }
-                if (fullBitmap != null) {
-                    updateBitmapForRequest(version = requestVersion, quality = 2, bitmap = fullBitmap)
-                }
+            val isLatest = requestVersion == renderVersion.get()
+            if (!requestIsOriginal && isLatest) {
+                errorMessage = if (fullBitmap == null) "Failed to render preview." else null
+            }
+            if (fullBitmap != null) {
+                updateBitmapForRequest(version = requestVersion, quality = 2, bitmap = fullBitmap)
+            }
 
-                // Generate and save thumbnail only for the latest completed render.
-                if (!requestIsOriginal) fullBitmap?.let { bmp ->
-                    withContext(Dispatchers.IO) {
-                        val maxSize = 512
-                        val scale = minOf(maxSize.toFloat() / bmp.width, maxSize.toFloat() / bmp.height)
-                        val scaledWidth = (bmp.width * scale).toInt()
-                        val scaledHeight = (bmp.height * scale).toInt()
-                        val thumbnail = Bitmap.createScaledBitmap(bmp, scaledWidth, scaledHeight, true)
+            // Generate and save thumbnail only for the latest completed render.
+            if (!requestIsOriginal && isLatest) fullBitmap?.let { bmp ->
+                withContext(Dispatchers.IO) {
+                    val maxSize = 512
+                    val scale = minOf(maxSize.toFloat() / bmp.width, maxSize.toFloat() / bmp.height)
+                    val scaledWidth = (bmp.width * scale).toInt()
+                    val scaledHeight = (bmp.height * scale).toInt()
+                    val thumbnail = Bitmap.createScaledBitmap(bmp, scaledWidth, scaledHeight, true)
 
-                        val outputStream = java.io.ByteArrayOutputStream()
-                        thumbnail.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
-                        val thumbnailBytes = outputStream.toByteArray()
+                    val outputStream = java.io.ByteArrayOutputStream()
+                    thumbnail.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+                    val thumbnailBytes = outputStream.toByteArray()
 
-                        storage.saveThumbnail(galleryItem.projectId, thumbnailBytes)
+                    storage.saveThumbnail(galleryItem.projectId, thumbnailBytes)
 
-                        if (thumbnail != bmp) {
-                            thumbnail.recycle()
-                        }
+                    if (thumbnail != bmp) {
+                        thumbnail.recycle()
                     }
                 }
             }

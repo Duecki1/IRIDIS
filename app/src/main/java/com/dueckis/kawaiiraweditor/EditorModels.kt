@@ -30,6 +30,7 @@ internal data class GalleryItem(
 
 internal enum class Screen {
     Gallery,
+    Settings,
     Editor
 }
 
