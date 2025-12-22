@@ -25,7 +25,7 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun ExportButton(
     modifier: Modifier = Modifier,
-    label: String = "Save",
+    label: String = "Export",
     sessionHandle: Long,
     adjustments: AdjustmentState,
     masks: List<MaskState>,
