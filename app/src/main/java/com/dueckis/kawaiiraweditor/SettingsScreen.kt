@@ -34,7 +34,9 @@ import androidx.compose.ui.text.font.FontWeight
 @Composable
 internal fun SettingsScreen(
     lowQualityPreviewEnabled: Boolean,
+    automaticTaggingEnabled: Boolean,
     onLowQualityPreviewEnabledChange: (Boolean) -> Unit,
+    onAutomaticTaggingEnabledChange: (Boolean) -> Unit,
     onBackClick: () -> Unit
 ) {
     var showInfoDialog by remember { mutableStateOf(false) }
@@ -81,6 +83,23 @@ internal fun SettingsScreen(
                     )
                 },
                 modifier = Modifier.clickable { onLowQualityPreviewEnabledChange(!lowQualityPreviewEnabled) }
+            )
+            ListItem(
+                headlineContent = { Text("Enable automatic tagging") },
+                supportingContent = {
+                    Text(
+                        "This will download an AI Model and automatically tag every raw file imported.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                trailingContent = {
+                    Switch(
+                        checked = automaticTaggingEnabled,
+                        onCheckedChange = onAutomaticTaggingEnabledChange
+                    )
+                },
+                modifier = Modifier.clickable { onAutomaticTaggingEnabledChange(!automaticTaggingEnabled) }
             )
         }
     }

@@ -6,6 +6,7 @@
 package com.dueckis.kawaiiraweditor
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -287,6 +288,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@SuppressLint("UnusedBoxWithConstraintsScope")
 @Composable
 private fun RapidRawEditorScreen() {
     val context = LocalContext.current
@@ -306,6 +308,7 @@ private fun RapidRawEditorScreen() {
     var editorDismissProgressTarget by remember { mutableFloatStateOf(0f) }
     val editorDismissProgress = remember { Animatable(0f) }
     var lowQualityPreviewEnabled by remember { mutableStateOf(appPreferences.isLowQualityPreviewEnabled()) }
+    var automaticTaggingEnabled by remember { mutableStateOf(appPreferences.isAutomaticTaggingEnabled()) }
 
     BackHandler(enabled = currentScreen == Screen.Settings) {
         currentScreen = Screen.Gallery
@@ -380,6 +383,7 @@ private fun RapidRawEditorScreen() {
     }
 
     LaunchedEffect(Unit) {
+        if(automaticTaggingEnabled){
         for (projectId in tagBackfillQueue) {
             tagBackfillQueued.remove(projectId)
             setTaggingInFlight(projectId, true)
@@ -409,7 +413,7 @@ private fun RapidRawEditorScreen() {
                     galleryItems.map { item -> if (item.projectId == projectId) item.copy(tags = tags) else item }
             } finally {
                 setTaggingInFlight(projectId, false)
-            }
+            }}
         }
     }
 
@@ -452,7 +456,7 @@ private fun RapidRawEditorScreen() {
         }
 
         val missingTagIds = projects.filter { it.tags.isNullOrEmpty() }.map { it.id }
-        if (missingTagIds.isNotEmpty()) {
+        if (missingTagIds.isNotEmpty()&&automaticTaggingEnabled) {
             maybeRequestNotificationPermission()
         }
         missingTagIds.forEach { id ->
@@ -508,6 +512,7 @@ private fun RapidRawEditorScreen() {
                 items = galleryItems,
                 tagger = tagger,
                 lowQualityPreviewEnabled = lowQualityPreviewEnabled,
+                automaticTaggingEnabled = automaticTaggingEnabled,
                 isTaggingInFlight = ::isTaggingInFlight,
                 onTaggingInFlightChange = ::setTaggingInFlight,
                 tagProgressFor = ::tagProgressFor,
@@ -609,9 +614,14 @@ private fun RapidRawEditorScreen() {
             if (currentScreen == Screen.Settings) {
                 SettingsScreen(
                     lowQualityPreviewEnabled = lowQualityPreviewEnabled,
+                    automaticTaggingEnabled = automaticTaggingEnabled,
                     onLowQualityPreviewEnabledChange = { enabled ->
                         lowQualityPreviewEnabled = enabled
                         appPreferences.setLowQualityPreviewEnabled(enabled)
+                    },
+                    onAutomaticTaggingEnabledChange = { enabled ->
+                        automaticTaggingEnabled = enabled
+                        appPreferences.setAutomaticTaggingEnabled(enabled)
                     },
                     onBackClick = { currentScreen = Screen.Gallery }
                 )
@@ -625,6 +635,7 @@ private fun GalleryScreen(
     items: List<GalleryItem>,
     tagger: ClipAutoTagger,
     lowQualityPreviewEnabled: Boolean,
+    automaticTaggingEnabled: Boolean,
     isTaggingInFlight: (String) -> Boolean,
     onTaggingInFlightChange: (String, Boolean) -> Unit,
     tagProgressFor: (String) -> Float?,
@@ -737,7 +748,9 @@ private fun GalleryScreen(
                 )
                 onAddClick(item)
 
-                maybeRequestNotificationPermission()
+                if(automaticTaggingEnabled){
+                    maybeRequestNotificationPermission()
+
                 coroutineScope.launch {
                     onTaggingInFlightChange(projectId, true)
                     try {
@@ -770,7 +783,7 @@ private fun GalleryScreen(
                         onTagsChanged(projectId, tags)
                     } finally {
                         onTaggingInFlightChange(projectId, false)
-                    }
+                    }}
                 }
             }
         }
@@ -1071,6 +1084,7 @@ private fun GalleryScreen(
                                 item = item,
                                 selected = isSelected,
                                 isProcessing = isTaggingInFlight(item.projectId),
+                                automaticTaggingEnabled = automaticTaggingEnabled,
                                 processingProgress = tagProgressFor(item.projectId),
                                 onClick = {
                                     if (isBulkExporting) return@GalleryItemCard
@@ -1334,6 +1348,7 @@ private fun GalleryItemCard(
     item: GalleryItem,
     selected: Boolean,
     isProcessing: Boolean,
+    automaticTaggingEnabled: Boolean,
     processingProgress: Float?,
     onClick: () -> Unit,
     onLongClick: () -> Unit
@@ -1399,7 +1414,7 @@ private fun GalleryItemCard(
                 )
             }
 
-            if (isProcessing) {
+            if (isProcessing&&automaticTaggingEnabled) {
                 if (processingProgress != null) {
                     val smoothProgress by animateFloatAsState(
                         targetValue = processingProgress.coerceIn(0f, 1f),

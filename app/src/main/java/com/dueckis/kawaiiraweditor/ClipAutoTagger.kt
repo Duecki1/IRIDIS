@@ -11,6 +11,10 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Build
 import android.os.SystemClock
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
@@ -52,6 +56,7 @@ class ClipAutoTagger(appContext: Context) {
         previewBitmap: Bitmap,
         onProgress: ((Float) -> Unit)? = null
     ): List<String> = withContext(Dispatchers.Default) {
+
         var lastProgress = 0f
         fun setProgress(p: Float) {
             val clamped = p.coerceIn(0f, 1f)
