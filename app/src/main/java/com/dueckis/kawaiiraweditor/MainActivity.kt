@@ -4589,12 +4589,23 @@ private fun MaskManagementOverlay(
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            // Button to add new masks
+            /* Add mask button styled as a square with a blue background */
             var showAddMaskMenu by remember { mutableStateOf(false) }
-            Box {
-                IconButton(onClick = { showAddMaskMenu = true }) {
-                    Icon(Icons.Filled.Add, contentDescription = "Add mask")
-                }
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .background(
+                        MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    .clickable { showAddMaskMenu = true }
+            ) {
+                Icon(
+                    Icons.Filled.Add,
+                    contentDescription = "Add mask",
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.align(Alignment.Center)
+                )
                 DropdownMenu(
                     expanded = showAddMaskMenu,
                     onDismissRequest = { showAddMaskMenu = false }
@@ -4646,8 +4657,9 @@ private fun MaskManagementOverlay(
                 }
             }
 
-            // Draw a square for each mask
+            /* Each mask square shows its 1‑based index instead of a letter */
             masks.forEach { mask ->
+                val indexLabel = (masks.indexOf(mask) + 1).toString()
                 val isSelected = mask.id == selectedMaskId
                 var showMaskMenu by remember(mask.id) { mutableStateOf(false) }
                 Box(
@@ -4676,7 +4688,7 @@ private fun MaskManagementOverlay(
                         }
                 ) {
                     Text(
-                        mask.name.take(1),
+                        indexLabel,
                         modifier = Modifier.align(Alignment.Center),
                         color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.titleMedium
@@ -4785,12 +4797,24 @@ private fun MaskManagementOverlay(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    // Add new sub‑mask button
+                    /* Add sub‑mask button styled like a sub‑mask square with red background */
                     var showAddSubMenu by remember { mutableStateOf(false) }
-                    Box {
-                        IconButton(onClick = { showAddSubMenu = true }) {
-                            Icon(Icons.Filled.Add, contentDescription = "Add submask")
-                        }
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(
+                                MaterialTheme.colorScheme.errorContainer,
+                                shape = RoundedCornerShape(6.dp)
+                            )
+                            .clickable { showAddSubMenu = true }
+                            .align(Alignment.CenterHorizontally)
+                    ) {
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = "Add submask",
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
                         DropdownMenu(
                             expanded = showAddSubMenu,
                             onDismissRequest = { showAddSubMenu = false }
