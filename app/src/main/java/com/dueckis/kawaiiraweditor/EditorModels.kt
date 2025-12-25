@@ -154,6 +154,41 @@ internal data class ColorGradingState(
     }
 }
 
+internal data class HslState(
+    val reds: HueSatLumState = HueSatLumState(),
+    val oranges: HueSatLumState = HueSatLumState(),
+    val yellows: HueSatLumState = HueSatLumState(),
+    val greens: HueSatLumState = HueSatLumState(),
+    val aquas: HueSatLumState = HueSatLumState(),
+    val blues: HueSatLumState = HueSatLumState(),
+    val purples: HueSatLumState = HueSatLumState(),
+    val magentas: HueSatLumState = HueSatLumState()
+) {
+    fun toJsonObject(): JSONObject {
+        return JSONObject().apply {
+            put("reds", reds.toJsonObject())
+            put("oranges", oranges.toJsonObject())
+            put("yellows", yellows.toJsonObject())
+            put("greens", greens.toJsonObject())
+            put("aquas", aquas.toJsonObject())
+            put("blues", blues.toJsonObject())
+            put("purples", purples.toJsonObject())
+            put("magentas", magentas.toJsonObject())
+        }
+    }
+
+    fun isDefault(): Boolean {
+        return reds.isDefault() &&
+            oranges.isDefault() &&
+            yellows.isDefault() &&
+            greens.isDefault() &&
+            aquas.isDefault() &&
+            blues.isDefault() &&
+            purples.isDefault() &&
+            magentas.isDefault()
+    }
+}
+
 internal data class AdjustmentState(
     val brightness: Float = 0f,
     val contrast: Float = 0f,
@@ -180,7 +215,8 @@ internal data class AdjustmentState(
     val chromaticAberrationBlueYellow: Float = 0f,
     val toneMapper: String = "basic",
     val curves: CurvesState = CurvesState(),
-    val colorGrading: ColorGradingState = ColorGradingState()
+    val colorGrading: ColorGradingState = ColorGradingState(),
+    val hsl: HslState = HslState()
 ) {
     fun toJsonObject(includeToneMapper: Boolean = true): JSONObject {
         return JSONObject().apply {
@@ -209,6 +245,7 @@ internal data class AdjustmentState(
             put("chromaticAberrationBlueYellow", chromaticAberrationBlueYellow)
             put("curves", curves.toJsonObject())
             put("colorGrading", colorGrading.toJsonObject())
+            put("hsl", hsl.toJsonObject())
             if (includeToneMapper) {
                 put("toneMapper", toneMapper)
             }
@@ -387,7 +424,8 @@ internal fun AdjustmentState.isNeutralForMask(): Boolean {
         nearZero(chromaticAberrationRedCyan) &&
         nearZero(chromaticAberrationBlueYellow) &&
         curves.isDefault() &&
-        colorGrading.isDefault()
+        colorGrading.isDefault() &&
+        hsl.isDefault()
 }
 
 internal data class MaskPoint(

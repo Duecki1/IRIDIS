@@ -59,6 +59,14 @@ struct AdjustmentValues {
     chromatic_aberration_blue_yellow: f32,
     tone_mapper: ToneMapper,
     color_grading: ColorGradingValues,
+    hsl: [HslColorValues; 8],
+}
+
+#[derive(Clone, Copy, Default)]
+struct HslColorValues {
+    hue: f32,
+    saturation: f32,
+    luminance: f32,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -134,6 +142,9 @@ struct AdjustmentScales {
     color_noise_reduction: f32,
     chromatic_aberration_red_cyan: f32,
     chromatic_aberration_blue_yellow: f32,
+    hsl_hue_multiplier: f32,
+    hsl_saturation: f32,
+    hsl_luminance: f32,
 }
 
 const ADJUSTMENT_SCALES: AdjustmentScales = AdjustmentScales {
@@ -161,6 +172,9 @@ const ADJUSTMENT_SCALES: AdjustmentScales = AdjustmentScales {
     color_noise_reduction: 100.0,
     chromatic_aberration_red_cyan: 10000.0,  // RapidRAW uses 10000.0
     chromatic_aberration_blue_yellow: 10000.0,  // RapidRAW uses 10000.0
+    hsl_hue_multiplier: 0.3,
+    hsl_saturation: 100.0,
+    hsl_luminance: 100.0,
 };
 
 impl AdjustmentValues {
@@ -171,6 +185,13 @@ impl AdjustmentValues {
             } else {
                 value / divisor
             }
+        }
+
+        let mut hsl = self.hsl;
+        for color in hsl.iter_mut() {
+            color.hue *= scales.hsl_hue_multiplier;
+            color.saturation = scale(color.saturation, scales.hsl_saturation);
+            color.luminance = scale(color.luminance, scales.hsl_luminance);
         }
 
         AdjustmentValues {
@@ -200,6 +221,7 @@ impl AdjustmentValues {
             chromatic_aberration_blue_yellow: scale(self.chromatic_aberration_blue_yellow, scales.chromatic_aberration_blue_yellow),
             tone_mapper: self.tone_mapper,
             color_grading: self.color_grading.normalized(),
+            hsl,
         }
     }
 }
@@ -241,6 +263,11 @@ impl AddAssign for AdjustmentValues {
         self.color_grading.highlights.luminance += rhs.color_grading.highlights.luminance;
         self.color_grading.blending += rhs.color_grading.blending;
         self.color_grading.balance += rhs.color_grading.balance;
+        for i in 0..8 {
+            self.hsl[i].hue += rhs.hsl[i].hue;
+            self.hsl[i].saturation += rhs.hsl[i].saturation;
+            self.hsl[i].luminance += rhs.hsl[i].luminance;
+        }
     }
 }
 
@@ -307,6 +334,8 @@ struct MaskAdjustmentsPayload {
     curves: CurvesPayload,
     #[serde(default)]
     color_grading: ColorGradingPayload,
+    #[serde(default)]
+    hsl: HslPanelPayload,
 }
 
 impl MaskAdjustmentsPayload {
@@ -333,6 +362,7 @@ impl MaskAdjustmentsPayload {
             chromatic_aberration_red_cyan: self.chromatic_aberration_red_cyan,
             chromatic_aberration_blue_yellow: self.chromatic_aberration_blue_yellow,
             color_grading: self.color_grading.to_values(),
+            hsl: self.hsl.to_values(),
             ..Default::default()
         }
     }
@@ -527,6 +557,66 @@ impl ColorGradingPayload {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(default)]
+struct HslPanelPayload {
+    reds: HueSatLumPayload,
+    oranges: HueSatLumPayload,
+    yellows: HueSatLumPayload,
+    greens: HueSatLumPayload,
+    aquas: HueSatLumPayload,
+    blues: HueSatLumPayload,
+    purples: HueSatLumPayload,
+    magentas: HueSatLumPayload,
+}
+
+impl HslPanelPayload {
+    fn to_values(&self) -> [HslColorValues; 8] {
+        [
+            HslColorValues {
+                hue: self.reds.hue,
+                saturation: self.reds.saturation,
+                luminance: self.reds.luminance,
+            },
+            HslColorValues {
+                hue: self.oranges.hue,
+                saturation: self.oranges.saturation,
+                luminance: self.oranges.luminance,
+            },
+            HslColorValues {
+                hue: self.yellows.hue,
+                saturation: self.yellows.saturation,
+                luminance: self.yellows.luminance,
+            },
+            HslColorValues {
+                hue: self.greens.hue,
+                saturation: self.greens.saturation,
+                luminance: self.greens.luminance,
+            },
+            HslColorValues {
+                hue: self.aquas.hue,
+                saturation: self.aquas.saturation,
+                luminance: self.aquas.luminance,
+            },
+            HslColorValues {
+                hue: self.blues.hue,
+                saturation: self.blues.saturation,
+                luminance: self.blues.luminance,
+            },
+            HslColorValues {
+                hue: self.purples.hue,
+                saturation: self.purples.saturation,
+                luminance: self.purples.luminance,
+            },
+            HslColorValues {
+                hue: self.magentas.hue,
+                saturation: self.magentas.saturation,
+                luminance: self.magentas.luminance,
+            },
+        ]
+    }
+}
+
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct AdjustmentsPayload {
@@ -560,6 +650,8 @@ struct AdjustmentsPayload {
     curves: CurvesPayload,
     #[serde(default)]
     color_grading: ColorGradingPayload,
+    #[serde(default)]
+    hsl: HslPanelPayload,
     masks: Vec<Value>,
 }
 
@@ -592,6 +684,7 @@ impl AdjustmentsPayload {
             chromatic_aberration_blue_yellow: self.chromatic_aberration_blue_yellow,
             tone_mapper: self.tone_mapper,
             color_grading: self.color_grading.to_values(),
+            hsl: self.hsl.to_values(),
         }
     }
 }
@@ -1366,6 +1459,18 @@ fn rgb_to_hue(color: [f32; 3]) -> f32 {
     if hue < 0.0 { hue + 360.0 } else { hue }
 }
 
+fn rgb_to_hsv(color: [f32; 3]) -> [f32; 3] {
+    let r = color[0];
+    let g = color[1];
+    let b = color[2];
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+    let hue = rgb_to_hue(color);
+    let saturation = if max <= 1e-10 { 0.0 } else { delta / max };
+    [hue, saturation, max]
+}
+
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     let c = v * s;
     let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
@@ -1386,6 +1491,96 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     };
 
     [rp + m, gp + m, bp + m]
+}
+
+const HSL_RANGES: [(f32, f32); 8] = [
+    (358.0, 35.0), // Reds
+    (25.0, 45.0),  // Oranges
+    (60.0, 40.0),  // Yellows
+    (115.0, 90.0), // Greens
+    (180.0, 60.0), // Aquas
+    (225.0, 60.0), // Blues
+    (280.0, 55.0), // Purples
+    (330.0, 50.0), // Magentas
+];
+
+fn apply_hsl_panel(color: [f32; 3], hsl_adjustments: &[HslColorValues; 8]) -> [f32; 3] {
+    if hsl_adjustments.iter().all(|adj| {
+        adj.hue.abs() <= 0.000001
+            && adj.saturation.abs() <= 0.000001
+            && adj.luminance.abs() <= 0.000001
+    }) {
+        return color;
+    }
+
+    // Quick chroma check (avoid work for greys)
+    if (color[0] - color[1]).abs() < 0.001 && (color[1] - color[2]).abs() < 0.001 {
+        return color;
+    }
+
+    let hsv = rgb_to_hsv(color);
+    let original_hue = hsv[0];
+    let original_sat = hsv[1];
+    let original_val = hsv[2];
+
+    if original_sat < 0.05 {
+        return color;
+    }
+
+    let saturation_mask = smoothstep(0.05, 0.20, original_sat);
+    let luminance_weight = smoothstep(0.0, 1.0, original_sat);
+
+    let mut total_hue_shift = 0.0;
+    let mut total_sat_mult = 0.0;
+    let mut total_lum_adj = 0.0;
+    let mut total_weight = 0.0;
+
+    for (i, (center, width)) in HSL_RANGES.iter().enumerate() {
+        let dist = (original_hue - center).abs();
+        let dist = dist.min(360.0 - dist);
+        let falloff = dist / (width * 0.5);
+        let influence = (-1.5 * falloff * falloff).exp();
+
+        total_weight += influence;
+
+        let adj = &hsl_adjustments[i];
+        total_hue_shift += adj.hue * influence;
+        total_sat_mult += adj.saturation * influence;
+        total_lum_adj += adj.luminance * influence;
+    }
+
+    if total_weight <= 0.0001 {
+        return color;
+    }
+
+    let inv_weight = 1.0 / total_weight;
+    let final_hue_shift = (total_hue_shift * inv_weight) * 2.0 * saturation_mask;
+    let final_sat_mult = (total_sat_mult * inv_weight) * saturation_mask;
+    let final_lum_adj = (total_lum_adj * inv_weight) * luminance_weight;
+
+    let mut hue = (original_hue + final_hue_shift) % 360.0;
+    if hue < 0.0 {
+        hue += 360.0;
+    }
+    let sat = (original_sat * (1.0 + final_sat_mult)).clamp(0.0, 1.0);
+
+    let original_luma = get_luma(color);
+    let target_luma = original_luma * (1.0 + final_lum_adj);
+
+    if sat < 0.0001 {
+        let v = target_luma.max(0.0);
+        return [v, v, v];
+    }
+
+    let rgb_shifted = hsv_to_rgb(hue, sat, original_val);
+    let new_luma = get_luma(rgb_shifted);
+    if new_luma < 0.0001 {
+        let v = target_luma.max(0.0);
+        return [v, v, v];
+    }
+
+    let scale = target_luma / new_luma;
+    [rgb_shifted[0] * scale, rgb_shifted[1] * scale, rgb_shifted[2] * scale]
 }
 
 fn apply_color_grading(
@@ -1637,6 +1832,9 @@ fn apply_color_adjustments(mut colors: [f32; 3], settings: &AdjustmentValues) ->
     
     // Highlights
     colors = apply_highlights_adjustment(colors, settings.highlights);
+
+    // RapidRAW-like HSL panel (Reds/Oranges/.../Magentas)
+    colors = apply_hsl_panel(colors, &settings.hsl);
 
     // RapidRAW-like color grading wheels (shadows/midtones/highlights)
     colors = apply_color_grading(

@@ -1692,6 +1692,22 @@ private fun EditorScreen(
 
                 val parsedCurves = parseCurves(json.optJSONObject("curves"))
                 val parsedColorGrading = parseColorGrading(json.optJSONObject("colorGrading"))
+
+                fun parseHsl(obj: JSONObject?): HslState {
+                    if (obj == null) return HslState()
+                    return HslState(
+                        reds = parseHueSatLum(obj, "reds"),
+                        oranges = parseHueSatLum(obj, "oranges"),
+                        yellows = parseHueSatLum(obj, "yellows"),
+                        greens = parseHueSatLum(obj, "greens"),
+                        aquas = parseHueSatLum(obj, "aquas"),
+                        blues = parseHueSatLum(obj, "blues"),
+                        purples = parseHueSatLum(obj, "purples"),
+                        magentas = parseHueSatLum(obj, "magentas"),
+                    )
+                }
+
+                val parsedHsl = parseHsl(json.optJSONObject("hsl"))
                 adjustments = AdjustmentState(
                     brightness = json.optDouble("brightness", 0.0).toFloat(),
                     contrast = json.optDouble("contrast", 0.0).toFloat(),
@@ -1718,7 +1734,8 @@ private fun EditorScreen(
                     chromaticAberrationBlueYellow = json.optDouble("chromaticAberrationBlueYellow", 0.0).toFloat(),
                     toneMapper = json.optString("toneMapper", "basic"),
                     curves = parsedCurves,
-                    colorGrading = parsedColorGrading
+                    colorGrading = parsedColorGrading,
+                    hsl = parsedHsl
                 )
 
                 val masksArr = json.optJSONArray("masks") ?: JSONArray()
@@ -1729,6 +1746,7 @@ private fun EditorScreen(
                     val maskAdjustmentsObj = maskObj.optJSONObject("adjustments") ?: JSONObject()
                     val maskCurves = parseCurves(maskAdjustmentsObj.optJSONObject("curves"))
                     val maskColorGrading = parseColorGrading(maskAdjustmentsObj.optJSONObject("colorGrading"))
+                    val maskHsl = parseHsl(maskAdjustmentsObj.optJSONObject("hsl"))
                     val maskAdjustments = AdjustmentState(
                         brightness = maskAdjustmentsObj.optDouble("brightness", 0.0).toFloat(),
                         contrast = maskAdjustmentsObj.optDouble("contrast", 0.0).toFloat(),
@@ -1755,7 +1773,8 @@ private fun EditorScreen(
                         chromaticAberrationBlueYellow = maskAdjustmentsObj.optDouble("chromaticAberrationBlueYellow", 0.0).toFloat(),
                         toneMapper = adjustments.toneMapper,
                         curves = maskCurves,
-                        colorGrading = maskColorGrading
+                        colorGrading = maskColorGrading,
+                        hsl = maskHsl
                     )
 
                     val subMasksArr = maskObj.optJSONArray("subMasks") ?: JSONArray()
@@ -3038,6 +3057,18 @@ private fun EditorControlsContent(
                     onEndEditInteraction = onEndEditInteraction
                 )
             }
+
+            PanelSectionCard(
+                title = "Color Mixer",
+                subtitle = "Hue / Saturation / Luminance"
+            ) {
+                HslEditor(
+                    hsl = adjustments.hsl,
+                    onHslChange = { updated -> onAdjustmentsChange(adjustments.copy(hsl = updated)) },
+                    onBeginEditInteraction = onBeginEditInteraction,
+                    onEndEditInteraction = onEndEditInteraction
+                )
+            }
         }
 
         EditorPanelTab.Effects -> {
@@ -3397,6 +3428,20 @@ private fun EditorControlsContent(
                             colorGrading = selectedMask.adjustments.colorGrading,
                             onColorGradingChange = { updated ->
                                 updateSelectedMaskAdjustments(selectedMask.adjustments.copy(colorGrading = updated))
+                            },
+                            onBeginEditInteraction = onBeginEditInteraction,
+                            onEndEditInteraction = onEndEditInteraction
+                        )
+                    }
+
+                    PanelSectionCard(
+                        title = "Color Mixer",
+                        subtitle = "Hue / Saturation / Luminance"
+                    ) {
+                        HslEditor(
+                            hsl = selectedMask.adjustments.hsl,
+                            onHslChange = { updated ->
+                                updateSelectedMaskAdjustments(selectedMask.adjustments.copy(hsl = updated))
                             },
                             onBeginEditInteraction = onBeginEditInteraction,
                             onEndEditInteraction = onEndEditInteraction
@@ -4167,6 +4212,113 @@ private fun ColorWheelControl(
             defaultValue = 0f,
             formatter = formatterInt,
             onValueChange = { onValueChange(value.copy(luminance = it)) }
+        )
+    }
+}
+
+private enum class HslChannel(val label: String, val swatch: Color) {
+    Reds("Reds", Color(0xFFF87171)),
+    Oranges("Oranges", Color(0xFFFB923C)),
+    Yellows("Yellows", Color(0xFFFACC15)),
+    Greens("Greens", Color(0xFF4ADE80)),
+    Aquas("Aquas", Color(0xFF2DD4BF)),
+    Blues("Blues", Color(0xFF60A5FA)),
+    Purples("Purples", Color(0xFFA78BFA)),
+    Magentas("Magentas", Color(0xFFF472B6)),
+}
+
+private fun HslState.valueFor(channel: HslChannel): HueSatLumState {
+    return when (channel) {
+        HslChannel.Reds -> reds
+        HslChannel.Oranges -> oranges
+        HslChannel.Yellows -> yellows
+        HslChannel.Greens -> greens
+        HslChannel.Aquas -> aquas
+        HslChannel.Blues -> blues
+        HslChannel.Purples -> purples
+        HslChannel.Magentas -> magentas
+    }
+}
+
+private fun HslState.withValue(channel: HslChannel, value: HueSatLumState): HslState {
+    return when (channel) {
+        HslChannel.Reds -> copy(reds = value)
+        HslChannel.Oranges -> copy(oranges = value)
+        HslChannel.Yellows -> copy(yellows = value)
+        HslChannel.Greens -> copy(greens = value)
+        HslChannel.Aquas -> copy(aquas = value)
+        HslChannel.Blues -> copy(blues = value)
+        HslChannel.Purples -> copy(purples = value)
+        HslChannel.Magentas -> copy(magentas = value)
+    }
+}
+
+@Composable
+private fun HslEditor(
+    hsl: HslState,
+    onHslChange: (HslState) -> Unit,
+    onBeginEditInteraction: () -> Unit,
+    onEndEditInteraction: () -> Unit
+) {
+    var activeChannel by remember { mutableStateOf(HslChannel.Reds) }
+    val current = hsl.valueFor(activeChannel)
+    val formatterInt: (Float) -> String = { it.roundToInt().toString() }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+            text = activeChannel.label,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(HslChannel.entries.size) { index ->
+                val channel = HslChannel.entries[index]
+                val isActive = channel == activeChannel
+                val borderColor = if (isActive) MaterialTheme.colorScheme.primary else Color.Transparent
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(channel.swatch)
+                        .border(width = 2.dp, color = borderColor, shape = CircleShape)
+                        .clickable { activeChannel = channel },
+                )
+            }
+        }
+
+        AdjustmentSlider(
+            label = "Hue",
+            value = current.hue,
+            range = -100f..100f,
+            step = 1f,
+            defaultValue = 0f,
+            formatter = formatterInt,
+            onValueChange = { onHslChange(hsl.withValue(activeChannel, current.copy(hue = it))) },
+            onInteractionStart = onBeginEditInteraction,
+            onInteractionEnd = onEndEditInteraction
+        )
+        AdjustmentSlider(
+            label = "Saturation",
+            value = current.saturation,
+            range = -100f..100f,
+            step = 1f,
+            defaultValue = 0f,
+            formatter = formatterInt,
+            onValueChange = { onHslChange(hsl.withValue(activeChannel, current.copy(saturation = it))) },
+            onInteractionStart = onBeginEditInteraction,
+            onInteractionEnd = onEndEditInteraction
+        )
+        AdjustmentSlider(
+            label = "Luminance",
+            value = current.luminance,
+            range = -100f..100f,
+            step = 1f,
+            defaultValue = 0f,
+            formatter = formatterInt,
+            onValueChange = { onHslChange(hsl.withValue(activeChannel, current.copy(luminance = it))) },
+            onInteractionStart = onBeginEditInteraction,
+            onInteractionEnd = onEndEditInteraction
         )
     }
 }
