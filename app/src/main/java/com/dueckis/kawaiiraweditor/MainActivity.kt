@@ -4790,8 +4790,11 @@ private fun MaskManagementOverlay(
                         horizontalAlignment = Alignment.End,
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        // Red "Add sub‑mask" button, centered relative to sub‑mask squares
-                        var showAddSubMenu by remember { mutableStateOf(false) }
+                        /* Red "Add sub-mask" button with two-step menu */
+                        var showModeMenu by remember { mutableStateOf(false) }
+                        var showTypeMenu by remember { mutableStateOf(false) }
+                        var chosenMode by remember { mutableStateOf<SubMaskMode?>(null) }
+
                         Box(
                             modifier = Modifier
                                 .size(36.dp)
@@ -4799,7 +4802,12 @@ private fun MaskManagementOverlay(
                                     MaterialTheme.colorScheme.errorContainer,
                                     shape = RoundedCornerShape(6.dp)
                                 )
-                                .clickable { showAddSubMenu = true }
+                                .clickable {
+                                    // reset selections and open the first menu
+                                    chosenMode = null
+                                    showTypeMenu = false
+                                    showModeMenu = true
+                                }
                                 .align(Alignment.CenterHorizontally)
                         ) {
                             Icon(
@@ -4808,9 +4816,38 @@ private fun MaskManagementOverlay(
                                 tint = MaterialTheme.colorScheme.onErrorContainer,
                                 modifier = Modifier.align(Alignment.Center)
                             )
+
+                            /* First menu: choose Add or Subtract */
                             DropdownMenu(
-                                expanded = showAddSubMenu,
-                                onDismissRequest = { showAddSubMenu = false }
+                                expanded = showModeMenu,
+                                onDismissRequest = { showModeMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Add") },
+                                    onClick = {
+                                        chosenMode = SubMaskMode.Additive
+                                        showModeMenu = false
+                                        showTypeMenu = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Subtract") },
+                                    onClick = {
+                                        chosenMode = SubMaskMode.Subtractive
+                                        showModeMenu = false
+                                        showTypeMenu = true
+                                    }
+                                )
+                            }
+
+                            /* Second menu: choose submask type */
+                            DropdownMenu(
+                                expanded = showTypeMenu,
+                                onDismissRequest = {
+                                    // reset if the type menu is dismissed without a selection
+                                    showTypeMenu = false
+                                    chosenMode = null
+                                }
                             ) {
                                 listOf(
                                     SubMaskType.AiSubject,
@@ -4830,17 +4867,18 @@ private fun MaskManagementOverlay(
                                             )
                                         },
                                         onClick = {
-                                            showAddSubMenu = false
-                                            onMaskTapModeChange(MaskTapMode.None)
+                                            showTypeMenu = false
+                                            val mode = chosenMode ?: SubMaskMode.Additive
                                             val newSubId = UUID.randomUUID().toString()
                                             val updated = masks.map { m ->
                                                 if (m.id != mask.id) m
                                                 else m.copy(
-                                                    subMasks = m.subMasks + newSubMaskState(
-                                                        newSubId,
-                                                        SubMaskMode.Additive,
-                                                        type
-                                                    )
+                                                    subMasks = m.subMasks +
+                                                        newSubMaskState(
+                                                            newSubId,
+                                                            mode,
+                                                            type
+                                                        )
                                                 )
                                             }
                                             onMasksChange(updated)
@@ -4849,46 +4887,8 @@ private fun MaskManagementOverlay(
                                                 type == SubMaskType.Brush ||
                                                     type == SubMaskType.AiSubject
                                             )
-                                        }
-                                    )
-                                }
-                                // Subtractive versions
-                                listOf(
-                                    SubMaskType.AiSubject,
-                                    SubMaskType.Brush,
-                                    SubMaskType.Linear,
-                                    SubMaskType.Radial
-                                ).forEach { type ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                when (type) {
-                                                    SubMaskType.AiSubject -> "Subtract Subject"
-                                                    SubMaskType.Brush -> "Subtract Brush"
-                                                    SubMaskType.Linear -> "Subtract Gradient"
-                                                    SubMaskType.Radial -> "Subtract Radial"
-                                                }
-                                            )
-                                        },
-                                        onClick = {
-                                            showAddSubMenu = false
-                                            onMaskTapModeChange(MaskTapMode.None)
-                                            val newSubId = UUID.randomUUID().toString()
-                                            val updated = masks.map { m ->
-                                                if (m.id != mask.id) m
-                                                else m.copy(
-                                                    subMasks = m.subMasks + newSubMaskState(
-                                                        newSubId,
-                                                        SubMaskMode.Subtractive,
-                                                        type
-                                                    )
-                                                )
-                                            }
-                                            onMasksChange(updated)
-                                            onSelectedSubMaskIdChange(newSubId)
-                                            onPaintingMaskChange(
-                                                type == SubMaskType.Brush || type == SubMaskType.AiSubject
-                                            )
+                                            // reset for next time
+                                            chosenMode = null
                                         }
                                     )
                                 }
