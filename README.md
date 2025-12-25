@@ -1,6 +1,6 @@
 # IRIDIS
 
-Draft / test Android RAW editor built with Jetpack Compose + a Rust native decoder/processor.
+Android RAW editor built with Jetpack Compose + a Rust native decoder/processor.
 
 If you are interested in this Project and want it to be continued, let me know by giving this repo a star :)
 
@@ -36,9 +36,7 @@ Download the newest pre-release here: [Releases](https://github.com/Duecki1/IRID
 
 ## Status
 
-> This mobile port is a **draft/test**. Expect rough edges and rapid iteration.
-
-Inspired by / forked from RapidRAW: https://github.com/CyberTimon/RapidRAW
+Inspired by/using backend processing maths from RapidRAW: https://github.com/CyberTimon/RapidRAW
 
 ## Features (current)
 
@@ -55,7 +53,7 @@ Inspired by / forked from RapidRAW: https://github.com/CyberTimon/RapidRAW
 
 - Tab for cropping and rotating the image
 - S-Pen support for brush masks (line width depending on pressure)
-- Clarity and sich slider need to actually work
+- Clarity and such slider need to actually work
 - Highlight recovery needs to be better for the highlight slider. (use the exposure slider for now)
 - Holding down on the Preview should show the original picture until let go
 - Use a more intuitive rating system
