@@ -2264,7 +2264,9 @@ private fun EditorScreen(
                                     onRequestMaskOverlayBlink = { maskOverlayBlinkKey++ },
                                     newSubMaskState = ::newSubMaskState,
                                     duplicateMaskState = ::duplicateMaskState
-                                    , modifier = Modifier.align(Alignment.CenterEnd)
+                                    , modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .fillMaxHeight()
                                 )
                             }
                         }
@@ -2585,7 +2587,9 @@ private fun EditorScreen(
                                 onRequestMaskOverlayBlink = { maskOverlayBlinkKey++ },
                                 newSubMaskState = ::newSubMaskState,
                                 duplicateMaskState = ::duplicateMaskState,
-                                modifier = Modifier.align(Alignment.CenterEnd)
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .fillMaxHeight()
                             )
                         }
                     }
@@ -4584,8 +4588,9 @@ private fun MaskManagementOverlay(
     duplicateMaskState: (MaskState, Boolean) -> MaskState,
     modifier: Modifier = Modifier
 ) {
-    Box(modifier = modifier.padding(8.dp)) {
+    Box(modifier = modifier.fillMaxHeight().padding(8.dp)) {
         Column(
+            modifier = Modifier.verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
