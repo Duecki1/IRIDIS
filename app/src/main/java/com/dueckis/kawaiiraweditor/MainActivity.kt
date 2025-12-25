@@ -1473,6 +1473,14 @@ private fun EditorScreen(
     var sessionHandle by remember { mutableStateOf(0L) }
     var adjustments by remember { mutableStateOf(AdjustmentState()) }
     var masks by remember { mutableStateOf<List<MaskState>>(emptyList()) }
+    val maskNumbers = remember { mutableStateMapOf<String, Int>() }
+
+    fun assignNumber(maskId: String) {
+        if (maskId !in maskNumbers) {
+            val next = (maskNumbers.values.maxOrNull() ?: 0) + 1
+            maskNumbers[maskId] = next
+        }
+    }
     var editedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var originalBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isComparingOriginal by remember { mutableStateOf(false) }
@@ -1856,6 +1864,8 @@ private fun EditorScreen(
                     .maxOfOrNull { it.order } ?: 0L
                 strokeOrder.set(maxOf(strokeOrder.get(), maxOrder))
                 masks = parsedMasks
+                // ensure each loaded mask has a preserved number
+                parsedMasks.forEach { m -> assignNumber(m.id) }
                 if (selectedMaskId == null && parsedMasks.isNotEmpty()) {
                     selectedMaskId = parsedMasks.first().id
                     selectedSubMaskId = parsedMasks.first().subMasks.firstOrNull()?.id
@@ -2254,6 +2264,7 @@ private fun EditorScreen(
                             if (panelTab == EditorPanelTab.Masks) {
                                 MaskManagementOverlay(
                                     masks = masks,
+                                    maskNumbers = maskNumbers,
                                     selectedMaskId = selectedMaskId,
                                     selectedSubMaskId = selectedSubMaskId,
                                     onMasksChange = { masks = it },
@@ -2264,8 +2275,8 @@ private fun EditorScreen(
                                     onShowMaskOverlayChange = { showMaskOverlay = it },
                                     onRequestMaskOverlayBlink = { maskOverlayBlinkKey++ },
                                     newSubMaskState = ::newSubMaskState,
-                                    duplicateMaskState = ::duplicateMaskState
-                                    , modifier = Modifier
+                                    duplicateMaskState = ::duplicateMaskState,
+                                    modifier = Modifier
                                         .align(Alignment.TopEnd)
                                         .fillMaxHeight()
                                 )
@@ -2320,6 +2331,7 @@ private fun EditorScreen(
                                                                 )
                                                             )
                                                             masks = masks + newMask
+                                                            assignNumber(newMaskId)
                                                             selectedMaskId = newMaskId
                                                             selectedSubMaskId = newSubId
                                                             isPaintingMask = (type == SubMaskType.Brush || type == SubMaskType.AiSubject)
@@ -2636,6 +2648,7 @@ private fun EditorScreen(
                         if (panelTab == EditorPanelTab.Masks) {
                             MaskManagementOverlay(
                                 masks = masks,
+                                maskNumbers = maskNumbers,
                                 selectedMaskId = selectedMaskId,
                                 selectedSubMaskId = selectedSubMaskId,
                                 onMasksChange = { masks = it },
@@ -2701,6 +2714,7 @@ private fun EditorScreen(
                                                 )
                                             )
                                             masks = masks + newMask
+                                            assignNumber(newMaskId)
                                             selectedMaskId = newMaskId
                                             selectedSubMaskId = newSubId
                                             isPaintingMask = (type == SubMaskType.Brush || type == SubMaskType.AiSubject)
@@ -4693,6 +4707,7 @@ private fun ImagePreview(
 @Composable
 private fun MaskManagementOverlay(
     masks: List<MaskState>,
+    maskNumbers: MutableMap<String, Int>,
     selectedMaskId: String?,
     selectedSubMaskId: String?,
     onMasksChange: (List<MaskState>) -> Unit,
@@ -4745,7 +4760,7 @@ private fun MaskManagementOverlay(
         ) {
             // Iterate through masks, inserting the sub‑mask column immediately after the selected mask
             masks.forEachIndexed { index, mask ->
-                val indexLabel = (index + 1).toString()
+                val indexLabel = (maskNumbers[mask.id] ?: (index + 1)).toString()
                 val isSelected = mask.id == selectedMaskId
                 var showMaskMenu by remember(mask.id) { mutableStateOf(false) }
 
@@ -4791,6 +4806,11 @@ private fun MaskManagementOverlay(
                                 val updated = masks.toMutableList().apply {
                                     add(index + 1, duplicated)
                                 }.toList()
+                                // assign a number for the new duplicated mask
+                                if (duplicated.id !in maskNumbers) {
+                                    val next = (maskNumbers.values.maxOrNull() ?: 0) + 1
+                                    maskNumbers[duplicated.id] = next
+                                }
                                 onMasksChange(updated)
                                 onPaintingMaskChange(false)
                                 onShowMaskOverlayChange(
@@ -4811,6 +4831,10 @@ private fun MaskManagementOverlay(
                                 val updated = masks.toMutableList().apply {
                                     add(index + 1, duplicated)
                                 }.toList()
+                                if (duplicated.id !in maskNumbers) {
+                                    val next = (maskNumbers.values.maxOrNull() ?: 0) + 1
+                                    maskNumbers[duplicated.id] = next
+                                }
                                 onMasksChange(updated)
                                 onPaintingMaskChange(false)
                                 onShowMaskOverlayChange(
@@ -5010,12 +5034,16 @@ private fun MaskManagementOverlay(
                                     }
                             ) {
                                 Text(
-                                    when (sub.type) {
-                                        SubMaskType.AiSubject.id -> "S"
-                                        SubMaskType.Brush.id -> "B"
-                                        SubMaskType.Linear.id -> "G"
-                                        SubMaskType.Radial.id -> "R"
-                                        else -> ""
+                                    run {
+                                        val typeChar = when (sub.type) {
+                                            SubMaskType.AiSubject.id -> "S"
+                                            SubMaskType.Brush.id -> "B"
+                                            SubMaskType.Linear.id -> "G"
+                                            SubMaskType.Radial.id -> "R"
+                                            else -> ""
+                                        }
+                                        val modeChar = if (sub.mode == SubMaskMode.Additive) "+" else "-"
+                                        "$modeChar$typeChar"
                                     },
                                     modifier = Modifier.align(Alignment.Center),
                                     color = MaterialTheme.colorScheme.onSurface,
