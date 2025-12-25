@@ -140,6 +140,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import java.util.UUID
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -2263,6 +2264,7 @@ private fun EditorScreen(
                                     onRequestMaskOverlayBlink = { maskOverlayBlinkKey++ },
                                     newSubMaskState = ::newSubMaskState,
                                     duplicateMaskState = ::duplicateMaskState
+                                    , modifier = Modifier.align(Alignment.CenterEnd)
                                 )
                             }
                         }
@@ -2582,7 +2584,8 @@ private fun EditorScreen(
                                 onShowMaskOverlayChange = { showMaskOverlay = it },
                                 onRequestMaskOverlayBlink = { maskOverlayBlinkKey++ },
                                 newSubMaskState = ::newSubMaskState,
-                                duplicateMaskState = ::duplicateMaskState
+                                duplicateMaskState = ::duplicateMaskState,
+                                modifier = Modifier.align(Alignment.CenterEnd)
                             )
                         }
                     }
@@ -4578,18 +4581,15 @@ private fun MaskManagementOverlay(
     onShowMaskOverlayChange: (Boolean) -> Unit,
     onRequestMaskOverlayBlink: () -> Unit,
     newSubMaskState: (String, SubMaskMode, SubMaskType) -> SubMaskState,
-    duplicateMaskState: (MaskState, Boolean) -> MaskState
+    duplicateMaskState: (MaskState, Boolean) -> MaskState,
+    modifier: Modifier = Modifier
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxHeight()
-            .wrapContentWidth()
-            .padding(8.dp)
-    ) {
+    Box(modifier = modifier.padding(8.dp)) {
         Column(
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            // Button to add new masks
             var showAddMaskMenu by remember { mutableStateOf(false) }
             Box {
                 IconButton(onClick = { showAddMaskMenu = true }) {
@@ -4599,7 +4599,12 @@ private fun MaskManagementOverlay(
                     expanded = showAddMaskMenu,
                     onDismissRequest = { showAddMaskMenu = false }
                 ) {
-                    listOf(SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial).forEach { type ->
+                    listOf(
+                        SubMaskType.AiSubject,
+                        SubMaskType.Brush,
+                        SubMaskType.Linear,
+                        SubMaskType.Radial
+                    ).forEach { type ->
                         DropdownMenuItem(
                             text = {
                                 Text(
@@ -4614,17 +4619,26 @@ private fun MaskManagementOverlay(
                             onClick = {
                                 showAddMaskMenu = false
                                 onMaskTapModeChange(MaskTapMode.None)
-                                val newMaskId = java.util.UUID.randomUUID().toString()
-                                val newSubId = java.util.UUID.randomUUID().toString()
+                                val newMaskId = UUID.randomUUID().toString()
+                                val newSubId = UUID.randomUUID().toString()
                                 val newMask = MaskState(
                                     id = newMaskId,
                                     name = "Mask ${masks.size + 1}",
-                                    subMasks = listOf(newSubMaskState(newSubId, SubMaskMode.Additive, type))
+                                    subMasks = listOf(
+                                        newSubMaskState(
+                                            newSubId,
+                                            SubMaskMode.Additive,
+                                            type
+                                        )
+                                    )
                                 )
                                 onMasksChange(masks + newMask)
                                 onSelectedMaskIdChange(newMaskId)
                                 onSelectedSubMaskIdChange(newSubId)
-                                onPaintingMaskChange(type == SubMaskType.Brush || type == SubMaskType.AiSubject)
+                                onPaintingMaskChange(
+                                    type == SubMaskType.Brush ||
+                                        type == SubMaskType.AiSubject
+                                )
                                 onRequestMaskOverlayBlink()
                             }
                         )
@@ -4632,6 +4646,7 @@ private fun MaskManagementOverlay(
                 }
             }
 
+            // Draw a square for each mask
             masks.forEach { mask ->
                 val isSelected = mask.id == selectedMaskId
                 var showMaskMenu by remember(mask.id) { mutableStateOf(false) }
@@ -4639,16 +4654,25 @@ private fun MaskManagementOverlay(
                     modifier = Modifier
                         .size(48.dp)
                         .background(
-                            if (isSelected) MaterialTheme.colorScheme.secondaryContainer
-                            else MaterialTheme.colorScheme.surfaceContainerHigh,
+                            if (isSelected)
+                                MaterialTheme.colorScheme.secondaryContainer
+                            else
+                                MaterialTheme.colorScheme.surfaceContainerHigh,
                             shape = RoundedCornerShape(8.dp)
                         )
                         .clickable {
-                            onPaintingMaskChange(false)
-                            onShowMaskOverlayChange(mask.adjustments.isNeutralForMask())
-                            onSelectedMaskIdChange(mask.id)
-                            onSelectedSubMaskIdChange(mask.subMasks.firstOrNull()?.id)
-                            onRequestMaskOverlayBlink()
+                            if (isSelected) {
+                                // second click toggles menu
+                                showMaskMenu = !showMaskMenu
+                            } else {
+                                // first click selects mask
+                                onPaintingMaskChange(false)
+                                onShowMaskOverlayChange(mask.adjustments.isNeutralForMask())
+                                onSelectedMaskIdChange(mask.id)
+                                onSelectedSubMaskIdChange(mask.subMasks.firstOrNull()?.id)
+                                showMaskMenu = false
+                                onRequestMaskOverlayBlink()
+                            }
                         }
                 ) {
                     Text(
@@ -4657,28 +4681,29 @@ private fun MaskManagementOverlay(
                         color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.titleMedium
                     )
-                    IconButton(
-                        onClick = { showMaskMenu = true },
-                        modifier = Modifier.align(Alignment.TopEnd)
-                    ) {
-                        Icon(Icons.Filled.MoreVert, contentDescription = "Mask options")
-                    }
                     DropdownMenu(
                         expanded = showMaskMenu,
                         onDismissRequest = { showMaskMenu = false }
                     ) {
+                        // context menu entries
                         DropdownMenuItem(
                             text = { Text("Duplicate") },
                             onClick = {
                                 showMaskMenu = false
-                                val duplicated = duplicateMaskState(mask, invertDuplicate = false)
+                                val duplicated = duplicateMaskState(mask, false)
                                 val index = masks.indexOf(mask)
-                                val updated = masks.toMutableList().apply { add(index + 1, duplicated) }.toList()
+                                val updated = masks.toMutableList().apply {
+                                    add(index + 1, duplicated)
+                                }.toList()
                                 onMasksChange(updated)
                                 onPaintingMaskChange(false)
-                                onShowMaskOverlayChange(duplicated.adjustments.isNeutralForMask())
+                                onShowMaskOverlayChange(
+                                    duplicated.adjustments.isNeutralForMask()
+                                )
                                 onSelectedMaskIdChange(duplicated.id)
-                                onSelectedSubMaskIdChange(duplicated.subMasks.firstOrNull()?.id)
+                                onSelectedSubMaskIdChange(
+                                    duplicated.subMasks.firstOrNull()?.id
+                                )
                                 onRequestMaskOverlayBlink()
                             }
                         )
@@ -4686,14 +4711,20 @@ private fun MaskManagementOverlay(
                             text = { Text("Duplicate and invert") },
                             onClick = {
                                 showMaskMenu = false
-                                val duplicated = duplicateMaskState(mask, invertDuplicate = true)
+                                val duplicated = duplicateMaskState(mask, true)
                                 val index = masks.indexOf(mask)
-                                val updated = masks.toMutableList().apply { add(index + 1, duplicated) }.toList()
+                                val updated = masks.toMutableList().apply {
+                                    add(index + 1, duplicated)
+                                }.toList()
                                 onMasksChange(updated)
                                 onPaintingMaskChange(false)
-                                onShowMaskOverlayChange(duplicated.adjustments.isNeutralForMask())
+                                onShowMaskOverlayChange(
+                                    duplicated.adjustments.isNeutralForMask()
+                                )
                                 onSelectedMaskIdChange(duplicated.id)
-                                onSelectedSubMaskIdChange(duplicated.subMasks.firstOrNull()?.id)
+                                onSelectedSubMaskIdChange(
+                                    duplicated.subMasks.firstOrNull()?.id
+                                )
                                 onRequestMaskOverlayBlink()
                             }
                         )
@@ -4702,10 +4733,14 @@ private fun MaskManagementOverlay(
                             onClick = {
                                 val remaining = masks.filterNot { it.id == mask.id }
                                 onMasksChange(remaining)
-                                if (selectedMaskId == mask.id) {
+                                if (isSelected) {
                                     onPaintingMaskChange(false)
-                                    onSelectedMaskIdChange(remaining.firstOrNull()?.id)
-                                    onSelectedSubMaskIdChange(remaining.firstOrNull()?.subMasks?.firstOrNull()?.id)
+                                    onSelectedMaskIdChange(
+                                        remaining.firstOrNull()?.id
+                                    )
+                                    onSelectedSubMaskIdChange(
+                                        remaining.firstOrNull()?.subMasks?.firstOrNull()?.id
+                                    )
                                 }
                             }
                         )
@@ -4713,6 +4748,7 @@ private fun MaskManagementOverlay(
                             text = { Text("Move Up") },
                             enabled = masks.indexOf(mask) > 0,
                             onClick = {
+                                showMaskMenu = false
                                 val index = masks.indexOf(mask)
                                 if (index > 0) {
                                     val reordered = masks.toMutableList()
@@ -4727,6 +4763,7 @@ private fun MaskManagementOverlay(
                             text = { Text("Move Down") },
                             enabled = masks.indexOf(mask) < masks.lastIndex,
                             onClick = {
+                                showMaskMenu = false
                                 val index = masks.indexOf(mask)
                                 if (index < masks.lastIndex) {
                                     val reordered = masks.toMutableList()
@@ -4741,12 +4778,14 @@ private fun MaskManagementOverlay(
                 }
             }
 
+            // Sub‑mask column for the selected mask
             val selectedMask = masks.firstOrNull { it.id == selectedMaskId }
             if (selectedMask != null) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    // Add new sub‑mask button
                     var showAddSubMenu by remember { mutableStateOf(false) }
                     Box {
                         IconButton(onClick = { showAddSubMenu = true }) {
@@ -4756,7 +4795,12 @@ private fun MaskManagementOverlay(
                             expanded = showAddSubMenu,
                             onDismissRequest = { showAddSubMenu = false }
                         ) {
-                            listOf(SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial).forEach { type ->
+                            listOf(
+                                SubMaskType.AiSubject,
+                                SubMaskType.Brush,
+                                SubMaskType.Linear,
+                                SubMaskType.Radial
+                            ).forEach { type ->
                                 DropdownMenuItem(
                                     text = {
                                         Text(
@@ -4771,18 +4815,33 @@ private fun MaskManagementOverlay(
                                     onClick = {
                                         showAddSubMenu = false
                                         onMaskTapModeChange(MaskTapMode.None)
-                                        val newSubId = java.util.UUID.randomUUID().toString()
+                                        val newSubId = UUID.randomUUID().toString()
                                         val updated = masks.map { m ->
                                             if (m.id != selectedMask.id) m
-                                            else m.copy(subMasks = m.subMasks + newSubMaskState(newSubId, SubMaskMode.Additive, type))
+                                            else m.copy(
+                                                subMasks = m.subMasks + newSubMaskState(
+                                                    newSubId,
+                                                    SubMaskMode.Additive,
+                                                    type
+                                                )
+                                            )
                                         }
                                         onMasksChange(updated)
                                         onSelectedSubMaskIdChange(newSubId)
-                                        onPaintingMaskChange(type == SubMaskType.Brush || type == SubMaskType.AiSubject)
+                                        onPaintingMaskChange(
+                                            type == SubMaskType.Brush ||
+                                                type == SubMaskType.AiSubject
+                                        )
                                     }
                                 )
                             }
-                            listOf(SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial).forEach { type ->
+                            // Subtractive versions
+                            listOf(
+                                SubMaskType.AiSubject,
+                                SubMaskType.Brush,
+                                SubMaskType.Linear,
+                                SubMaskType.Radial
+                            ).forEach { type ->
                                 DropdownMenuItem(
                                     text = {
                                         Text(
@@ -4797,19 +4856,28 @@ private fun MaskManagementOverlay(
                                     onClick = {
                                         showAddSubMenu = false
                                         onMaskTapModeChange(MaskTapMode.None)
-                                        val newSubId = java.util.UUID.randomUUID().toString()
+                                        val newSubId = UUID.randomUUID().toString()
                                         val updated = masks.map { m ->
                                             if (m.id != selectedMask.id) m
-                                            else m.copy(subMasks = m.subMasks + newSubMaskState(newSubId, SubMaskMode.Subtractive, type))
+                                            else m.copy(
+                                                subMasks = m.subMasks + newSubMaskState(
+                                                    newSubId,
+                                                    SubMaskMode.Subtractive,
+                                                    type
+                                                )
+                                            )
                                         }
                                         onMasksChange(updated)
                                         onSelectedSubMaskIdChange(newSubId)
-                                        onPaintingMaskChange(type == SubMaskType.Brush || type == SubMaskType.AiSubject)
+                                        onPaintingMaskChange(
+                                            type == SubMaskType.Brush || type == SubMaskType.AiSubject
+                                        )
                                     }
                                 )
                             }
                         }
                     }
+                    // Render each sub‑mask as a smaller square
                     selectedMask.subMasks.forEach { sub ->
                         val isSubSelected = sub.id == selectedSubMaskId
                         var showSubMaskMenu by remember(sub.id) { mutableStateOf(false) }
@@ -4817,14 +4885,24 @@ private fun MaskManagementOverlay(
                             modifier = Modifier
                                 .size(36.dp)
                                 .background(
-                                    if (isSubSelected) MaterialTheme.colorScheme.tertiaryContainer
-                                    else MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    if (isSubSelected)
+                                        MaterialTheme.colorScheme.tertiaryContainer
+                                    else
+                                        MaterialTheme.colorScheme.surfaceContainerHigh,
                                     shape = RoundedCornerShape(6.dp)
                                 )
                                 .clickable {
-                                    onMaskTapModeChange(MaskTapMode.None)
-                                    onSelectedSubMaskIdChange(sub.id)
-                                    onPaintingMaskChange(sub.type == SubMaskType.Brush.id || sub.type == SubMaskType.AiSubject.id)
+                                    if (isSubSelected) {
+                                        showSubMaskMenu = !showSubMaskMenu
+                                    } else {
+                                        onMaskTapModeChange(MaskTapMode.None)
+                                        onSelectedSubMaskIdChange(sub.id)
+                                        onPaintingMaskChange(
+                                            sub.type == SubMaskType.Brush.id ||
+                                                sub.type == SubMaskType.AiSubject.id
+                                        )
+                                        showSubMaskMenu = false
+                                    }
                                 }
                         ) {
                             Text(
@@ -4839,12 +4917,6 @@ private fun MaskManagementOverlay(
                                 color = MaterialTheme.colorScheme.onSurface,
                                 style = MaterialTheme.typography.titleSmall
                             )
-                            IconButton(
-                                onClick = { showSubMaskMenu = true },
-                                modifier = Modifier.align(Alignment.TopEnd)
-                            ) {
-                                Icon(Icons.Filled.MoreVert, contentDescription = "Submask options")
-                            }
                             DropdownMenu(
                                 expanded = showSubMaskMenu,
                                 onDismissRequest = { showSubMaskMenu = false }
@@ -4856,7 +4928,8 @@ private fun MaskManagementOverlay(
                                         val updated = masks.map { m ->
                                             if (m.id != selectedMask.id) m
                                             else m.copy(subMasks = m.subMasks.map { s ->
-                                                if (s.id != sub.id) s else s.copy(mode = SubMaskMode.Additive)
+                                                if (s.id != sub.id) s
+                                                else s.copy(mode = SubMaskMode.Additive)
                                             })
                                         }
                                         onMasksChange(updated)
@@ -4869,7 +4942,8 @@ private fun MaskManagementOverlay(
                                         val updated = masks.map { m ->
                                             if (m.id != selectedMask.id) m
                                             else m.copy(subMasks = m.subMasks.map { s ->
-                                                if (s.id != sub.id) s else s.copy(mode = SubMaskMode.Subtractive)
+                                                if (s.id != sub.id) s
+                                                else s.copy(mode = SubMaskMode.Subtractive)
                                             })
                                         }
                                         onMasksChange(updated)
@@ -4892,13 +4966,14 @@ private fun MaskManagementOverlay(
                                     text = { Text("Duplicate") },
                                     onClick = {
                                         showSubMaskMenu = false
-                                        val newId = java.util.UUID.randomUUID().toString()
+                                        val newId = UUID.randomUUID().toString()
                                         val copy = sub.copy(id = newId)
                                         val updated = masks.map { m ->
                                             if (m.id != selectedMask.id) m
                                             else {
                                                 val list = m.subMasks.toMutableList()
-                                                val idx = list.indexOfFirst { it.id == sub.id }.coerceAtLeast(0)
+                                                val idx = list.indexOfFirst { it.id == sub.id }
+                                                    .coerceAtLeast(0)
                                                 list.add(idx + 1, copy)
                                                 m.copy(subMasks = list.toList())
                                             }
@@ -4906,20 +4981,24 @@ private fun MaskManagementOverlay(
                                         onMasksChange(updated)
                                         onMaskTapModeChange(MaskTapMode.None)
                                         onSelectedSubMaskIdChange(newId)
-                                        onPaintingMaskChange(copy.type == SubMaskType.Brush.id || copy.type == SubMaskType.AiSubject.id)
+                                        onPaintingMaskChange(
+                                            copy.type == SubMaskType.Brush.id ||
+                                                copy.type == SubMaskType.AiSubject.id
+                                        )
                                     }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Duplicate and invert") },
                                     onClick = {
                                         showSubMaskMenu = false
-                                        val newId = java.util.UUID.randomUUID().toString()
+                                        val newId = UUID.randomUUID().toString()
                                         val copy = sub.copy(id = newId, mode = sub.mode.inverted())
                                         val updated = masks.map { m ->
                                             if (m.id != selectedMask.id) m
                                             else {
                                                 val list = m.subMasks.toMutableList()
-                                                val idx = list.indexOfFirst { it.id == sub.id }.coerceAtLeast(0)
+                                                val idx = list.indexOfFirst { it.id == sub.id }
+                                                    .coerceAtLeast(0)
                                                 list.add(idx + 1, copy)
                                                 m.copy(subMasks = list.toList())
                                             }
@@ -4927,7 +5006,10 @@ private fun MaskManagementOverlay(
                                         onMasksChange(updated)
                                         onMaskTapModeChange(MaskTapMode.None)
                                         onSelectedSubMaskIdChange(newId)
-                                        onPaintingMaskChange(copy.type == SubMaskType.Brush.id || copy.type == SubMaskType.AiSubject.id)
+                                        onPaintingMaskChange(
+                                            copy.type == SubMaskType.Brush.id ||
+                                                copy.type == SubMaskType.AiSubject.id
+                                        )
                                     }
                                 )
                                 DropdownMenuItem(
@@ -4935,12 +5017,19 @@ private fun MaskManagementOverlay(
                                     onClick = {
                                         val updated = masks.map { m ->
                                             if (m.id != selectedMask.id) m
-                                            else m.copy(subMasks = m.subMasks.filterNot { it.id == sub.id })
+                                            else m.copy(subMasks = m.subMasks.filterNot {
+                                                it.id == sub.id
+                                            })
                                         }
                                         onMasksChange(updated)
-                                        if (selectedSubMaskId == sub.id) {
+                                        if (isSubSelected) {
                                             onPaintingMaskChange(false)
-                                            onSelectedSubMaskIdChange(updated.firstOrNull { it.id == selectedMask.id }?.subMasks?.firstOrNull()?.id)
+                                            onSelectedSubMaskIdChange(
+                                                updated
+                                                    .first { it.id == selectedMask.id }
+                                                    .subMasks
+                                                    .firstOrNull()?.id
+                                            )
                                         }
                                     }
                                 )
