@@ -13,21 +13,21 @@ Download the newest pre-release here: [Releases](https://github.com/Duecki1/IRID
     <td>
       <img
         alt="Gallery"
-        src="https://github.com/user-attachments/assets/30c52607-c961-4265-b8c5-a9610407d063"
+        src="https://github.com/user-attachments/assets/34615820-48c3-4b3a-be25-9d5afe6268df"
         width="260"
       />
     </td>
     <td>
       <img
         alt="Editor"
-        src="https://github.com/user-attachments/assets/658364d8-d192-4952-8e16-11425abdc404"
+        src="https://github.com/user-attachments/assets/1c80c594-7a39-4f69-8172-d45a15f63ffa"
         width="260"
       />
     </td>
     <td>
       <img
         alt="Editor (extra screenshot slot)"
-        src="https://github.com/user-attachments/assets/c943ccd0-989e-4354-b7d8-e794b39ee2ff"
+        src="https://github.com/user-attachments/assets/3966ea9b-6c6d-4d2a-b677-8e4926262af7"
         width="260"
       />
     </td>
