@@ -25,6 +25,7 @@ use serde::Deserialize;
 use serde_json::json;
 use serde_json::from_str;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::AddAssign;
 use std::ptr;
@@ -619,7 +620,26 @@ impl HslPanelPayload {
 
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+struct CropPayload {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 struct AdjustmentsPayload {
+    #[serde(default)]
+    rotation: f32,
+    #[serde(default)]
+    flip_horizontal: bool,
+    #[serde(default)]
+    flip_vertical: bool,
+    #[serde(default)]
+    orientation_steps: u8,
+    #[serde(default)]
+    crop: Option<CropPayload>,
     exposure: f32,
     brightness: f32,
     contrast: f32,
@@ -2017,6 +2037,161 @@ fn develop_preview_linear(
     Ok(dynamic_image.to_rgba32f())
 }
 
+fn rotate_about_center_rgba32f(image: &LinearImage, rotation_degrees: f32) -> LinearImage {
+    let angle = rotation_degrees % 360.0;
+    if !angle.is_finite() || angle.abs() <= 0.0001 {
+        return image.clone();
+    }
+
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        return image.clone();
+    }
+
+    let cx = (width as f32 - 1.0) / 2.0;
+    let cy = (height as f32 - 1.0) / 2.0;
+
+    let rad = angle.to_radians();
+    let cos_a = rad.cos();
+    let sin_a = rad.sin();
+
+    let src = image.as_raw();
+    let mut out = vec![0.0f32; (width as usize) * (height as usize) * 4];
+
+    fn get_pixel(src: &[f32], width: u32, x: u32, y: u32) -> [f32; 4] {
+        let idx = ((y as usize) * (width as usize) + (x as usize)) * 4;
+        [src[idx], src[idx + 1], src[idx + 2], src[idx + 3]]
+    }
+
+    fn bilinear(src: &[f32], width: u32, height: u32, x: f32, y: f32) -> [f32; 4] {
+        if !x.is_finite() || !y.is_finite() {
+            return [0.0, 0.0, 0.0, 0.0];
+        }
+        let max_x = width.saturating_sub(1) as f32;
+        let max_y = height.saturating_sub(1) as f32;
+        if x < 0.0 || y < 0.0 || x > max_x || y > max_y {
+            return [0.0, 0.0, 0.0, 0.0];
+        }
+
+        let x0 = x.floor() as u32;
+        let y0 = y.floor() as u32;
+        let x1 = (x0 + 1).min(width.saturating_sub(1));
+        let y1 = (y0 + 1).min(height.saturating_sub(1));
+
+        let tx = (x - x0 as f32).clamp(0.0, 1.0);
+        let ty = (y - y0 as f32).clamp(0.0, 1.0);
+
+        let p00 = get_pixel(src, width, x0, y0);
+        let p10 = get_pixel(src, width, x1, y0);
+        let p01 = get_pixel(src, width, x0, y1);
+        let p11 = get_pixel(src, width, x1, y1);
+
+        let mut out = [0.0f32; 4];
+        for c in 0..4 {
+            let a = p00[c] + (p10[c] - p00[c]) * tx;
+            let b = p01[c] + (p11[c] - p01[c]) * tx;
+            out[c] = a + (b - a) * ty;
+        }
+        out
+    }
+
+    for y in 0..height {
+        for x in 0..width {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+
+            let src_x = cos_a * dx + sin_a * dy + cx;
+            let src_y = -sin_a * dx + cos_a * dy + cy;
+
+            let rgba = bilinear(src, width, height, src_x, src_y);
+            let idx = ((y as usize) * (width as usize) + (x as usize)) * 4;
+            out[idx..idx + 4].copy_from_slice(&rgba);
+        }
+    }
+
+    ImageBuffer::from_vec(width, height, out).unwrap_or_else(|| image.clone())
+}
+
+fn apply_crop_linear(image: &LinearImage, crop: &CropPayload) -> LinearImage {
+    let (img_w, img_h) = image.dimensions();
+    if img_w == 0 || img_h == 0 {
+        return image.clone();
+    }
+
+    let is_normalized = crop.x <= 1.5
+        && crop.y <= 1.5
+        && crop.width <= 1.5
+        && crop.height <= 1.5;
+
+    let fw = img_w as f32;
+    let fh = img_h as f32;
+
+    let mut x = crop.x;
+    let mut y = crop.y;
+    let mut w = crop.width;
+    let mut h = crop.height;
+
+    if is_normalized {
+        x *= fw;
+        y *= fh;
+        w *= fw;
+        h *= fh;
+    }
+
+    let x_u = x.round().clamp(0.0, (img_w.saturating_sub(1)) as f32) as u32;
+    let y_u = y.round().clamp(0.0, (img_h.saturating_sub(1)) as f32) as u32;
+
+    let max_w = (img_w - x_u).max(1);
+    let max_h = (img_h - y_u).max(1);
+
+    let w_u = w.round().clamp(1.0, max_w as f32) as u32;
+    let h_u = h.round().clamp(1.0, max_h as f32) as u32;
+
+    if w_u == img_w && h_u == img_h && x_u == 0 && y_u == 0 {
+        return image.clone();
+    }
+
+    image::imageops::crop_imm(image, x_u, y_u, w_u, h_u).to_image()
+}
+
+fn apply_transformations<'a>(linear: &'a LinearImage, payload: &AdjustmentsPayload) -> Cow<'a, LinearImage> {
+    let steps = payload.orientation_steps % 4;
+    let flip_h = payload.flip_horizontal;
+    let flip_v = payload.flip_vertical;
+    let rotation = payload.rotation;
+    let has_crop = payload.crop.is_some();
+
+    let has_transform = steps != 0 || flip_h || flip_v || rotation.abs() > 0.0001 || has_crop;
+    if !has_transform {
+        return Cow::Borrowed(linear);
+    }
+
+    let mut img = linear.clone();
+    img = match steps {
+        1 => image::imageops::rotate90(&img),
+        2 => image::imageops::rotate180(&img),
+        3 => image::imageops::rotate270(&img),
+        _ => img,
+    };
+
+    if flip_h {
+        img = image::imageops::flip_horizontal(&img);
+    }
+    if flip_v {
+        img = image::imageops::flip_vertical(&img);
+    }
+
+    if rotation.abs() > 0.0001 {
+        img = rotate_about_center_rgba32f(&img, rotation);
+    }
+
+    if let Some(crop) = payload.crop.as_ref() {
+        img = apply_crop_linear(&img, crop);
+    }
+
+    Cow::Owned(img)
+}
+
 fn render_linear_with_payload(
     linear_buffer: &LinearImage,
     payload: &AdjustmentsPayload,
@@ -2164,10 +2339,11 @@ fn render_raw(
 ) -> Result<Vec<u8>> {
     let linear_buffer = develop_preview_linear(raw_bytes, fast_demosaic, max_width, max_height)?;
     let payload = parse_adjustments_payload(adjustments_json);
-    let width = linear_buffer.width();
-    let height = linear_buffer.height();
+    let transformed = apply_transformations(&linear_buffer, &payload);
+    let width = transformed.width();
+    let height = transformed.height();
     let mask_runtimes = parse_masks(payload.masks.clone(), width, height);
-    render_linear_with_payload(&linear_buffer, &payload, &mask_runtimes, fast_demosaic)
+    render_linear_with_payload(transformed.as_ref(), &payload, &mask_runtimes, fast_demosaic)
 }
 
 static LOGGER_INIT: Once = Once::new();
@@ -2443,11 +2619,12 @@ fn render_from_session(
 
     let linear = session.linear_for(kind)?;
     let payload = parse_adjustments_payload(adjustments_json);
-    let width = linear.width();
-    let height = linear.height();
+    let transformed = apply_transformations(linear.as_ref(), &payload);
+    let width = transformed.width();
+    let height = transformed.height();
     let masks = session.masks_for(kind, &payload.masks, width, height);
 
-    render_linear_with_payload(linear.as_ref(), &payload, masks, true)
+    render_linear_with_payload(transformed.as_ref(), &payload, masks, true)
 }
 
 #[no_mangle]

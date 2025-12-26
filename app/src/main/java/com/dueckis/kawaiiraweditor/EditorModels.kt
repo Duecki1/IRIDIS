@@ -4,11 +4,13 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Crop
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Tune
@@ -59,6 +61,31 @@ internal enum class AdjustmentField {
     ChromaticAberrationRedCyan,
     ChromaticAberrationBlueYellow,
     ToneMapper
+}
+
+internal data class CropState(
+    val x: Float,
+    val y: Float,
+    val width: Float,
+    val height: Float
+) {
+    fun normalized(): CropState {
+        val nx = x.coerceIn(0f, 1f)
+        val ny = y.coerceIn(0f, 1f)
+        val nWidth = width.coerceIn(0f, 1f - nx)
+        val nHeight = height.coerceIn(0f, 1f - ny)
+        return copy(x = nx, y = ny, width = nWidth, height = nHeight)
+    }
+
+    fun toJsonObject(): JSONObject {
+        val crop = normalized()
+        return JSONObject().apply {
+            put("x", crop.x)
+            put("y", crop.y)
+            put("width", crop.width)
+            put("height", crop.height)
+        }
+    }
 }
 
 internal data class CurvePointState(
@@ -190,6 +217,12 @@ internal data class HslState(
 }
 
 internal data class AdjustmentState(
+    val rotation: Float = 0f,
+    val flipHorizontal: Boolean = false,
+    val flipVertical: Boolean = false,
+    val orientationSteps: Int = 0,
+    val aspectRatio: Float? = null,
+    val crop: CropState? = null,
     val brightness: Float = 0f,
     val contrast: Float = 0f,
     val highlights: Float = 0f,
@@ -220,6 +253,14 @@ internal data class AdjustmentState(
 ) {
     fun toJsonObject(includeToneMapper: Boolean = true): JSONObject {
         return JSONObject().apply {
+            if (includeToneMapper) {
+                put("rotation", rotation)
+                put("flipHorizontal", flipHorizontal)
+                put("flipVertical", flipVertical)
+                put("orientationSteps", orientationSteps)
+                put("aspectRatio", aspectRatio ?: JSONObject.NULL)
+                put("crop", crop?.toJsonObject() ?: JSONObject.NULL)
+            }
             put("brightness", brightness)
             put("contrast", contrast)
             put("highlights", highlights)
@@ -391,6 +432,7 @@ internal enum class EditorPanelTab(
     val icon: ImageVector,
     val iconSelected: ImageVector
 ) {
+    CropTransform("Crop", Icons.Outlined.Crop, Icons.Filled.Crop),
     Adjustments("Adjust", Icons.Outlined.Tune, Icons.Filled.Tune),
     Color("Color", Icons.Outlined.Palette, Icons.Filled.Palette),
     Effects("Effects", Icons.Outlined.AutoAwesome, Icons.Filled.AutoAwesome),
@@ -400,7 +442,13 @@ internal enum class EditorPanelTab(
 internal fun AdjustmentState.isNeutralForMask(): Boolean {
     fun nearZero(v: Float) = kotlin.math.abs(v) <= 0.000001f
     fun near(v: Float, target: Float) = kotlin.math.abs(v - target) <= 0.000001f
-    return nearZero(brightness) &&
+    return nearZero(rotation) &&
+        !flipHorizontal &&
+        !flipVertical &&
+        orientationSteps == 0 &&
+        aspectRatio == null &&
+        crop == null &&
+        nearZero(brightness) &&
         nearZero(contrast) &&
         nearZero(highlights) &&
         nearZero(shadows) &&
@@ -838,9 +886,15 @@ internal fun buildMaskOverlayBitmap(
     val overlayPixels = IntArray(width * height)
     val invertSelection = highlightSubMaskId == null && mask.invert
     for (i in overlayPixels.indices) {
-        val add = additive[i].coerceIn(0, 255)
-        val sub = subtractive[i].coerceIn(0, 255)
-        val sel = selection[i].coerceIn(0, 255).let { if (invertSelection) 255 - it else it }
+        var add = additive[i].coerceIn(0, 255)
+        var sub = subtractive[i].coerceIn(0, 255)
+        var sel = selection[i].coerceIn(0, 255)
+        if (invertSelection) {
+            sel = 255 - sel
+            val tmp = add
+            add = sub
+            sub = tmp
+        }
         if (add == 0 && sub == 0 && sel == 0) continue
 
         fun argb(alpha: Int, r: Int, g: Int, b: Int): Int {
@@ -892,8 +946,15 @@ internal data class AdjustmentControl(
 internal data class RenderRequest(
     val version: Long,
     val adjustmentsJson: String,
-    val isOriginal: Boolean = false
+    val target: RenderTarget = RenderTarget.Edited,
+    val rotationDegrees: Float = 0f
 )
+
+internal enum class RenderTarget {
+    Edited,
+    Original,
+    UncroppedEdited,
+}
 
 internal val basicSection = listOf(
     AdjustmentControl(

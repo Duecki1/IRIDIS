@@ -13,6 +13,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color as AndroidColor
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.net.Uri
@@ -1483,8 +1484,10 @@ private fun EditorScreen(
     }
     var editedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var originalBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var uncroppedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var editedPreviewRotationDegrees by remember(galleryItem.projectId) { mutableFloatStateOf(0f) }
+    var uncroppedPreviewRotationDegrees by remember(galleryItem.projectId) { mutableFloatStateOf(0f) }
     var isComparingOriginal by remember { mutableStateOf(false) }
-    val displayBitmap = if (isComparingOriginal) (originalBitmap ?: editedBitmap) else editedBitmap
     var histogramData by remember { mutableStateOf<HistogramData?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var isGeneratingAiMask by remember { mutableStateOf(false) }
@@ -1528,6 +1531,8 @@ private fun EditorScreen(
     }
 
     var panelTab by remember { mutableStateOf(EditorPanelTab.Adjustments) }
+    val isCropMode = panelTab == EditorPanelTab.CropTransform
+    val isCropPreviewActive = isCropMode && !isComparingOriginal
     var selectedMaskId by remember { mutableStateOf<String?>(null) }
     var selectedSubMaskId by remember { mutableStateOf<String?>(null) }
     var isPaintingMask by remember { mutableStateOf(false) }
@@ -1538,7 +1543,68 @@ private fun EditorScreen(
     var eraserSoftness by remember { mutableStateOf(0.5f) }
     var showMaskOverlay by remember { mutableStateOf(true) }
     var maskOverlayBlinkKey by remember { mutableStateOf(0L) }
+    var maskOverlayBlinkSubMaskId by remember { mutableStateOf<String?>(null) }
+    fun requestMaskOverlayBlink(highlightSubMaskId: String?) {
+        maskOverlayBlinkSubMaskId = highlightSubMaskId
+        maskOverlayBlinkKey++
+    }
     val strokeOrder = remember { AtomicLong(0L) }
+
+    var cropDraft by remember(galleryItem.projectId) { mutableStateOf<CropState?>(null) }
+    var rotationDraft by remember(galleryItem.projectId) { mutableStateOf<Float?>(null) }
+    var isStraightenActive by remember(galleryItem.projectId) { mutableStateOf(false) }
+
+    val cropBaseBitmap = if (isCropMode) (uncroppedBitmap ?: editedBitmap) else null
+    val cropBaseWidthPx = cropBaseBitmap?.width
+    val cropBaseHeightPx = cropBaseBitmap?.height
+    val cropPreviewBaseRotation =
+        if (uncroppedBitmap != null) uncroppedPreviewRotationDegrees else editedPreviewRotationDegrees
+    val previewRotationDelta =
+        if (!isCropPreviewActive) 0f else ((rotationDraft ?: adjustments.rotation) - cropPreviewBaseRotation)
+
+    val editedBitmapForUi = if (isCropMode) (uncroppedBitmap ?: editedBitmap) else editedBitmap
+    val displayBitmap = if (isComparingOriginal) (originalBitmap ?: editedBitmapForUi) else editedBitmapForUi
+
+    LaunchedEffect(isCropMode) {
+        if (!isCropMode) {
+            cropDraft = null
+            rotationDraft = null
+            isStraightenActive = false
+        }
+    }
+
+    LaunchedEffect(
+        isCropMode,
+        cropBaseWidthPx,
+        cropBaseHeightPx,
+        adjustments.rotation,
+        adjustments.aspectRatio,
+        adjustments.crop,
+        isHistoryInteractionActive
+    ) {
+        if (!isCropMode) return@LaunchedEffect
+        if (isHistoryInteractionActive) return@LaunchedEffect
+
+        val w = cropBaseWidthPx ?: return@LaunchedEffect
+        val h = cropBaseHeightPx ?: return@LaunchedEffect
+        val baseRatio = w.toFloat().coerceAtLeast(1f) / h.toFloat().coerceAtLeast(1f)
+
+        if (adjustments.crop == null) {
+            val auto = computeMaxCropNormalized(
+                AutoCropParams(
+                    baseAspectRatio = baseRatio,
+                    rotationDegrees = adjustments.rotation,
+                    aspectRatio = adjustments.aspectRatio
+                )
+            )
+            cropDraft = auto
+            if (adjustments.rotation != 0f || adjustments.aspectRatio != null) {
+                adjustments = adjustments.copy(crop = auto)
+            }
+        } else if (cropDraft == null) {
+            cropDraft = adjustments.crop
+        }
+    }
 
     fun normalizeMaskSelectionForCurrentState() {
         val selectedMask = selectedMaskId?.takeIf { id -> masks.any { it.id == id } }
@@ -1595,6 +1661,7 @@ private fun EditorScreen(
     val renderVersion = remember { AtomicLong(0L) }
     val lastEditedPreviewStamp = remember { AtomicLong(-1L) } // version*10 + quality
     val lastOriginalPreviewStamp = remember { AtomicLong(-1L) } // version*10 + quality
+    val lastUncroppedPreviewStamp = remember { AtomicLong(-1L) } // version*10 + quality
     val renderRequests = remember { Channel<RenderRequest>(capacity = Channel.CONFLATED) }
     val renderDispatcher = remember { Executors.newSingleThreadExecutor().asCoroutineDispatcher() }
     DisposableEffect(renderDispatcher) {
@@ -1617,6 +1684,8 @@ private fun EditorScreen(
         masks = emptyList()
         selectedMaskId = null
         selectedSubMaskId = null
+        maskOverlayBlinkSubMaskId = null
+        maskOverlayBlinkKey = 0L
         editHistory.clear()
         editHistoryIndex = -1
         isRestoringEditHistory = false
@@ -1624,8 +1693,12 @@ private fun EditorScreen(
         isComparingOriginal = false
         originalBitmap = null
         editedBitmap = null
+        uncroppedBitmap = null
+        editedPreviewRotationDegrees = 0f
+        uncroppedPreviewRotationDegrees = 0f
         lastEditedPreviewStamp.set(-1L)
         lastOriginalPreviewStamp.set(-1L)
+        lastUncroppedPreviewStamp.set(-1L)
         val raw = withContext(Dispatchers.IO) {
             storage.loadRawBytes(galleryItem.projectId)
         }
@@ -1708,7 +1781,25 @@ private fun EditorScreen(
                 }
 
                 val parsedHsl = parseHsl(json.optJSONObject("hsl"))
+                val parsedAspectRatio =
+                    if (json.has("aspectRatio") && !json.isNull("aspectRatio")) json.optDouble("aspectRatio", 0.0).toFloat()
+                    else null
+                val parsedCrop = json.optJSONObject("crop")?.let { cropObj ->
+                    CropState(
+                        x = cropObj.optDouble("x", 0.0).toFloat(),
+                        y = cropObj.optDouble("y", 0.0).toFloat(),
+                        width = cropObj.optDouble("width", 1.0).toFloat(),
+                        height = cropObj.optDouble("height", 1.0).toFloat()
+                    ).normalized()
+                }
+
                 adjustments = AdjustmentState(
+                    rotation = json.optDouble("rotation", 0.0).toFloat(),
+                    flipHorizontal = json.optBoolean("flipHorizontal", false),
+                    flipVertical = json.optBoolean("flipVertical", false),
+                    orientationSteps = json.optInt("orientationSteps", 0),
+                    aspectRatio = parsedAspectRatio,
+                    crop = parsedCrop,
                     brightness = json.optDouble("brightness", 0.0).toFloat(),
                     contrast = json.optDouble("contrast", 0.0).toFloat(),
                     highlights = json.optDouble("highlights", 0.0).toFloat(),
@@ -1925,16 +2016,74 @@ private fun EditorScreen(
 
     LaunchedEffect(adjustments, masks, isDraggingMaskHandle, isComparingOriginal) {
         if (isDraggingMaskHandle) return@LaunchedEffect
+        if (isCropMode && !isComparingOriginal) return@LaunchedEffect
         val json = withContext(Dispatchers.Default) {
-            if (isComparingOriginal) AdjustmentState(toneMapper = adjustments.toneMapper).toJson(emptyList())
-            else adjustments.toJson(masks)
+            if (isComparingOriginal) {
+                AdjustmentState(
+                    rotation = adjustments.rotation,
+                    flipHorizontal = adjustments.flipHorizontal,
+                    flipVertical = adjustments.flipVertical,
+                    orientationSteps = adjustments.orientationSteps,
+                    crop = adjustments.crop,
+                    toneMapper = adjustments.toneMapper
+                ).toJson(emptyList())
+            } else {
+                adjustments.toJson(masks)
+            }
         }
         val version = renderVersion.incrementAndGet()
         renderRequests.trySend(
             RenderRequest(
                 version = version,
                 adjustmentsJson = json,
-                isOriginal = isComparingOriginal
+                target = if (isComparingOriginal) RenderTarget.Original else RenderTarget.Edited,
+                rotationDegrees = adjustments.rotation
+            )
+        )
+    }
+
+    val uncroppedRenderKey = remember(adjustments) { adjustments.copy(crop = null, aspectRatio = null) }
+    LaunchedEffect(isCropMode, isComparingOriginal, uncroppedRenderKey, isDraggingMaskHandle, sessionHandle) {
+        if (!isCropMode) return@LaunchedEffect
+        if (isComparingOriginal) return@LaunchedEffect
+        if (sessionHandle == 0L) return@LaunchedEffect
+        if (isDraggingMaskHandle) return@LaunchedEffect
+
+        val json = withContext(Dispatchers.Default) {
+            // Crop tab always renders an uncropped view for a smooth crop UX.
+            uncroppedRenderKey.toJson(emptyList())
+        }
+        val version = renderVersion.incrementAndGet()
+        renderRequests.trySend(
+            RenderRequest(
+                version = version,
+                adjustmentsJson = json,
+                target = RenderTarget.UncroppedEdited,
+                rotationDegrees = uncroppedRenderKey.rotation
+            )
+        )
+    }
+
+    var wasCropMode by remember(galleryItem.projectId) { mutableStateOf(false) }
+    LaunchedEffect(isCropMode, isComparingOriginal, sessionHandle) {
+        if (sessionHandle == 0L) {
+            wasCropMode = isCropMode
+            return@LaunchedEffect
+        }
+
+        val leavingCropMode = wasCropMode && !isCropMode
+        wasCropMode = isCropMode
+        if (!leavingCropMode) return@LaunchedEffect
+        if (isComparingOriginal) return@LaunchedEffect
+
+        val json = withContext(Dispatchers.Default) { adjustments.toJson(masks) }
+        val version = renderVersion.incrementAndGet()
+        renderRequests.trySend(
+            RenderRequest(
+                version = version,
+                adjustmentsJson = json,
+                target = RenderTarget.Edited,
+                rotationDegrees = adjustments.rotation
             )
         )
     }
@@ -1971,7 +2120,8 @@ private fun EditorScreen(
             RenderRequest(
                 version = renderVersion.incrementAndGet(),
                 adjustmentsJson = adjustments.toJson(masks),
-                isOriginal = false
+                target = RenderTarget.Edited,
+                rotationDegrees = adjustments.rotation
             )
         )
 
@@ -1984,19 +2134,33 @@ private fun EditorScreen(
 
             val requestVersion = currentRequest.version
             val requestJson = currentRequest.adjustmentsJson
-            val requestIsOriginal = currentRequest.isOriginal
+            val requestTarget = currentRequest.target
+            val requestRotation = currentRequest.rotationDegrees
 
             fun updateBitmapForRequest(version: Long, quality: Int, bitmap: Bitmap) {
                 val stamp = version * 10L + quality.coerceIn(0, 9).toLong()
-                if (requestIsOriginal) {
-                    if (stamp > lastOriginalPreviewStamp.get()) {
-                        originalBitmap = bitmap
-                        lastOriginalPreviewStamp.set(stamp)
+                when (requestTarget) {
+                    RenderTarget.Original -> {
+                        if (stamp > lastOriginalPreviewStamp.get()) {
+                            originalBitmap = bitmap
+                            lastOriginalPreviewStamp.set(stamp)
+                        }
                     }
-                } else {
-                    if (stamp > lastEditedPreviewStamp.get()) {
-                        editedBitmap = bitmap
-                        lastEditedPreviewStamp.set(stamp)
+
+                    RenderTarget.UncroppedEdited -> {
+                        if (stamp > lastUncroppedPreviewStamp.get()) {
+                            uncroppedBitmap = bitmap
+                            lastUncroppedPreviewStamp.set(stamp)
+                            uncroppedPreviewRotationDegrees = requestRotation
+                        }
+                    }
+
+                    RenderTarget.Edited -> {
+                        if (stamp > lastEditedPreviewStamp.get()) {
+                            editedBitmap = bitmap
+                            lastEditedPreviewStamp.set(stamp)
+                            editedPreviewRotationDegrees = requestRotation
+                        }
                     }
                 }
             }
@@ -2043,7 +2207,7 @@ private fun EditorScreen(
             isLoading = false
 
             val isLatest = requestVersion == renderVersion.get()
-            if (!requestIsOriginal && isLatest) {
+            if (requestTarget == RenderTarget.Edited && isLatest) {
                 errorMessage = if (fullBitmap == null) "Failed to render preview." else null
             }
             if (fullBitmap != null) {
@@ -2051,7 +2215,7 @@ private fun EditorScreen(
             }
 
             // Generate and save thumbnail only for the latest completed render.
-            if (!requestIsOriginal && isLatest) fullBitmap?.let { bmp ->
+            if (requestTarget == RenderTarget.Edited && isLatest) fullBitmap?.let { bmp ->
                 withContext(Dispatchers.IO) {
                     val maxSize = 512
                     val scale = minOf(maxSize.toFloat() / bmp.width, maxSize.toFloat() / bmp.height)
@@ -2262,6 +2426,7 @@ private fun EditorScreen(
                                 isMaskMode = isMaskMode && !isComparingOriginal,
                                 showMaskOverlay = showMaskOverlay && !isComparingOriginal,
                                 maskOverlayBlinkKey = maskOverlayBlinkKey,
+                                maskOverlayBlinkSubMaskId = maskOverlayBlinkSubMaskId,
                                 isPainting = isInteractiveMaskingEnabled && !isComparingOriginal,
                                 brushSize = brushSize,
                                 maskTapMode = if (isComparingOriginal) MaskTapMode.None else maskTapMode,
@@ -2277,12 +2442,43 @@ private fun EditorScreen(
                                         aiSubjectOverrideTarget = maskId to subId
                                         showAiSubjectOverrideDialog = true
                                     }
+                                },
+                                isCropMode = isCropMode && !isComparingOriginal,
+                                cropState = if (isCropMode && !isComparingOriginal) (cropDraft ?: adjustments.crop) else null,
+                                cropAspectRatio = if (isCropMode) adjustments.aspectRatio else null,
+                                extraRotationDegrees = previewRotationDelta,
+                                isStraightenActive = isCropMode && isStraightenActive && !isComparingOriginal,
+                                onStraightenResult = { rotation ->
+                                    beginEditInteraction()
+                                    val baseRatio =
+                                        (cropBaseWidthPx?.toFloat()?.coerceAtLeast(1f) ?: 1f) /
+                                            (cropBaseHeightPx?.toFloat()?.coerceAtLeast(1f) ?: 1f)
+                                    val autoCrop = computeMaxCropNormalized(
+                                        AutoCropParams(
+                                            baseAspectRatio = baseRatio,
+                                            rotationDegrees = rotation,
+                                            aspectRatio = adjustments.aspectRatio
+                                        )
+                                    )
+                                    cropDraft = autoCrop
+                                    rotationDraft = null
+                                    isStraightenActive = false
+                                    adjustments = adjustments.copy(rotation = rotation, crop = autoCrop)
+                                    endEditInteraction()
+                                },
+                                onCropDraftChange = { cropDraft = it },
+                                onCropInteractionStart = { beginEditInteraction() },
+                                onCropInteractionEnd = { crop ->
+                                    cropDraft = crop
+                                    adjustments = adjustments.copy(crop = crop)
+                                    endEditInteraction()
                                 }
                             )
 
                             if (panelTab == EditorPanelTab.Masks) {
                                 MaskManagementOverlay(
                                     masks = masks,
+
                                     maskNumbers = maskNumbers,
                                     selectedMaskId = selectedMaskId,
                                     selectedSubMaskId = selectedSubMaskId,
@@ -2292,7 +2488,7 @@ private fun EditorScreen(
                                     onPaintingMaskChange = { isPaintingMask = it },
                                     onMaskTapModeChange = { maskTapMode = it },
                                     onShowMaskOverlayChange = { showMaskOverlay = it },
-                                    onRequestMaskOverlayBlink = { maskOverlayBlinkKey++ },
+                                    onRequestMaskOverlayBlink = ::requestMaskOverlayBlink,
                                     newSubMaskState = ::newSubMaskState,
                                     duplicateMaskState = ::duplicateMaskState,
                                     modifier = Modifier
@@ -2354,7 +2550,7 @@ private fun EditorScreen(
                                                             selectedMaskId = newMaskId
                                                             selectedSubMaskId = newSubId
                                                             isPaintingMask = (type == SubMaskType.Brush || type == SubMaskType.AiSubject)
-                                                            maskOverlayBlinkKey++
+                                                            requestMaskOverlayBlink(null)
                                             }
                                         )
                                     }
@@ -2397,7 +2593,7 @@ private fun EditorScreen(
                                     onPaintingMaskChange = { isPaintingMask = it },
                                     showMaskOverlay = showMaskOverlay,
                                     onShowMaskOverlayChange = { showMaskOverlay = it },
-                                    onRequestMaskOverlayBlink = { maskOverlayBlinkKey++ },
+                                    onRequestMaskOverlayBlink = ::requestMaskOverlayBlink,
                                     brushSize = brushSize,
                                     onBrushSizeChange = { brushSize = it },
                                     brushTool = brushTool,
@@ -2407,7 +2603,13 @@ private fun EditorScreen(
                                     eraserSoftness = eraserSoftness,
                                     onEraserSoftnessChange = { eraserSoftness = it },
                                     maskTapMode = maskTapMode,
-                                    onMaskTapModeChange = { maskTapMode = it }
+                                    onMaskTapModeChange = { maskTapMode = it },
+                                    cropBaseWidthPx = cropBaseWidthPx,
+                                    cropBaseHeightPx = cropBaseHeightPx,
+                                    rotationDraft = rotationDraft,
+                                    onRotationDraftChange = { rotationDraft = it },
+                                    isStraightenActive = isStraightenActive,
+                                    onStraightenActiveChange = { isStraightenActive = it }
                                 )
                             Spacer(modifier = Modifier.height(16.dp))
 
@@ -2646,6 +2848,7 @@ private fun EditorScreen(
                             isMaskMode = isMaskMode && !isComparingOriginal,
                             showMaskOverlay = showMaskOverlay && !isComparingOriginal,
                             maskOverlayBlinkKey = maskOverlayBlinkKey,
+                            maskOverlayBlinkSubMaskId = maskOverlayBlinkSubMaskId,
                             isPainting = isInteractiveMaskingEnabled && !isComparingOriginal,
                             brushSize = brushSize,
                             maskTapMode = if (isComparingOriginal) MaskTapMode.None else maskTapMode,
@@ -2661,6 +2864,36 @@ private fun EditorScreen(
                                     aiSubjectOverrideTarget = maskId to subId
                                     showAiSubjectOverrideDialog = true
                                 }
+                            },
+                            isCropMode = isCropMode && !isComparingOriginal,
+                            cropState = if (isCropMode && !isComparingOriginal) (cropDraft ?: adjustments.crop) else null,
+                            cropAspectRatio = if (isCropMode) adjustments.aspectRatio else null,
+                            extraRotationDegrees = previewRotationDelta,
+                            isStraightenActive = isCropMode && isStraightenActive && !isComparingOriginal,
+                            onStraightenResult = { rotation ->
+                                beginEditInteraction()
+                                val baseRatio =
+                                    (cropBaseWidthPx?.toFloat()?.coerceAtLeast(1f) ?: 1f) /
+                                        (cropBaseHeightPx?.toFloat()?.coerceAtLeast(1f) ?: 1f)
+                                val autoCrop = computeMaxCropNormalized(
+                                    AutoCropParams(
+                                        baseAspectRatio = baseRatio,
+                                        rotationDegrees = rotation,
+                                        aspectRatio = adjustments.aspectRatio
+                                    )
+                                )
+                                cropDraft = autoCrop
+                                rotationDraft = null
+                                isStraightenActive = false
+                                adjustments = adjustments.copy(rotation = rotation, crop = autoCrop)
+                                endEditInteraction()
+                            },
+                            onCropDraftChange = { cropDraft = it },
+                            onCropInteractionStart = { beginEditInteraction() },
+                            onCropInteractionEnd = { crop ->
+                                cropDraft = crop
+                                adjustments = adjustments.copy(crop = crop)
+                                endEditInteraction()
                             }
                         )
 
@@ -2676,7 +2909,7 @@ private fun EditorScreen(
                                 onPaintingMaskChange = { isPaintingMask = it },
                                 onMaskTapModeChange = { maskTapMode = it },
                                 onShowMaskOverlayChange = { showMaskOverlay = it },
-                                onRequestMaskOverlayBlink = { maskOverlayBlinkKey++ },
+                                onRequestMaskOverlayBlink = ::requestMaskOverlayBlink,
                                 newSubMaskState = ::newSubMaskState,
                                 duplicateMaskState = ::duplicateMaskState,
                                 modifier = Modifier
@@ -2737,7 +2970,7 @@ private fun EditorScreen(
                                             selectedMaskId = newMaskId
                                             selectedSubMaskId = newSubId
                                             isPaintingMask = (type == SubMaskType.Brush || type == SubMaskType.AiSubject)
-                                            maskOverlayBlinkKey++
+                                            requestMaskOverlayBlink(null)
                                         }
                                     )
                                 }
@@ -2809,7 +3042,7 @@ private fun EditorScreen(
                                     onPaintingMaskChange = { isPaintingMask = it },
                                     showMaskOverlay = showMaskOverlay,
                                     onShowMaskOverlayChange = { showMaskOverlay = it },
-                                    onRequestMaskOverlayBlink = { maskOverlayBlinkKey++ },
+                                    onRequestMaskOverlayBlink = ::requestMaskOverlayBlink,
                                     brushSize = brushSize,
                                     onBrushSizeChange = { brushSize = it },
                                     brushTool = brushTool,
@@ -2819,7 +3052,13 @@ private fun EditorScreen(
                                     eraserSoftness = eraserSoftness,
                                     onEraserSoftnessChange = { eraserSoftness = it },
                                     maskTapMode = maskTapMode,
-                                    onMaskTapModeChange = { maskTapMode = it }
+                                    onMaskTapModeChange = { maskTapMode = it },
+                                    cropBaseWidthPx = cropBaseWidthPx,
+                                    cropBaseHeightPx = cropBaseHeightPx,
+                                    rotationDraft = rotationDraft,
+                                    onRotationDraftChange = { rotationDraft = it },
+                                    isStraightenActive = isStraightenActive,
+                                    onStraightenActiveChange = { isStraightenActive = it }
                                 )
                                 Spacer(modifier = Modifier.height(20.dp))
                             }
@@ -2985,7 +3224,7 @@ private fun EditorControlsContent(
     onPaintingMaskChange: (Boolean) -> Unit,
     showMaskOverlay: Boolean,
     onShowMaskOverlayChange: (Boolean) -> Unit,
-    onRequestMaskOverlayBlink: () -> Unit,
+    onRequestMaskOverlayBlink: (String?) -> Unit,
     brushSize: Float,
     onBrushSizeChange: (Float) -> Unit,
     brushTool: BrushTool,
@@ -2995,11 +3234,32 @@ private fun EditorControlsContent(
     eraserSoftness: Float,
     onEraserSoftnessChange: (Float) -> Unit,
     maskTapMode: MaskTapMode,
-    onMaskTapModeChange: (MaskTapMode) -> Unit
+    onMaskTapModeChange: (MaskTapMode) -> Unit,
+    cropBaseWidthPx: Int?,
+    cropBaseHeightPx: Int?,
+    rotationDraft: Float?,
+    onRotationDraftChange: (Float?) -> Unit,
+    isStraightenActive: Boolean,
+    onStraightenActiveChange: (Boolean) -> Unit
 ) {
     val maskTabsByMaskId = remember { mutableStateMapOf<String, Int>() }
 
     when (panelTab) {
+        EditorPanelTab.CropTransform -> {
+            CropTransformControls(
+                adjustments = adjustments,
+                baseImageWidthPx = cropBaseWidthPx,
+                baseImageHeightPx = cropBaseHeightPx,
+                rotationDraft = rotationDraft,
+                onRotationDraftChange = onRotationDraftChange,
+                isStraightenActive = isStraightenActive,
+                onStraightenActiveChange = onStraightenActiveChange,
+                onAdjustmentsChange = onAdjustmentsChange,
+                onBeginEditInteraction = onBeginEditInteraction,
+                onEndEditInteraction = onEndEditInteraction
+            )
+        }
+
         EditorPanelTab.Adjustments -> {
             ToneMapperSection(
                 toneMapper = adjustments.toneMapper,
@@ -4253,6 +4513,52 @@ private fun HslState.withValue(channel: HslChannel, value: HueSatLumState): HslS
     }
 }
 
+private fun hslChannelHueDegrees(channel: HslChannel): Float {
+    val hsv = FloatArray(3)
+    val r = (channel.swatch.red * 255f).roundToInt().coerceIn(0, 255)
+    val g = (channel.swatch.green * 255f).roundToInt().coerceIn(0, 255)
+    val b = (channel.swatch.blue * 255f).roundToInt().coerceIn(0, 255)
+    AndroidColor.RGBToHSV(r, g, b, hsv)
+    return hsv[0]
+}
+
+private fun hslHueTrackBrush(channel: HslChannel): Brush {
+    val channels = HslChannel.entries
+    val idx = channels.indexOf(channel)
+    val prev = channels[(idx - 1 + channels.size) % channels.size]
+    val next = channels[(idx + 1) % channels.size]
+    val v = 0.95f
+    return Brush.horizontalGradient(
+        listOf(
+            Color.hsv(hslChannelHueDegrees(prev), 1f, v),
+            Color.hsv(hslChannelHueDegrees(channel), 1f, v),
+            Color.hsv(hslChannelHueDegrees(next), 1f, v)
+        )
+    )
+}
+
+private fun hslSaturationTrackBrush(channel: HslChannel): Brush {
+    val hue = hslChannelHueDegrees(channel)
+    val v = 0.85f
+    return Brush.horizontalGradient(
+        listOf(
+            Color.hsv(hue, 0f, v),
+            Color.hsv(hue, 1f, v)
+        )
+    )
+}
+
+private fun hslLuminanceTrackBrush(channel: HslChannel): Brush {
+    val hue = hslChannelHueDegrees(channel)
+    return Brush.horizontalGradient(
+        listOf(
+            Color.hsv(hue, 0.9f, 0.12f),
+            Color.hsv(hue, 0.9f, 0.85f),
+            Color.hsv(hue, 0.05f, 1f)
+        )
+    )
+}
+
 @Composable
 private fun HslEditor(
     hsl: HslState,
@@ -4263,6 +4569,9 @@ private fun HslEditor(
     var activeChannel by remember { mutableStateOf(HslChannel.Reds) }
     val current = hsl.valueFor(activeChannel)
     val formatterInt: (Float) -> String = { it.roundToInt().toString() }
+    val hueBrush = remember(activeChannel) { hslHueTrackBrush(activeChannel) }
+    val saturationBrush = remember(activeChannel) { hslSaturationTrackBrush(activeChannel) }
+    val luminanceBrush = remember(activeChannel) { hslLuminanceTrackBrush(activeChannel) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
@@ -4287,40 +4596,51 @@ private fun HslEditor(
             }
         }
 
-        AdjustmentSlider(
+        GradientAdjustmentSlider(
             label = "Hue",
             value = current.hue,
             range = -100f..100f,
             step = 1f,
             defaultValue = 0f,
             formatter = formatterInt,
+            trackBrush = hueBrush,
             onValueChange = { onHslChange(hsl.withValue(activeChannel, current.copy(hue = it))) },
             onInteractionStart = onBeginEditInteraction,
             onInteractionEnd = onEndEditInteraction
         )
-        AdjustmentSlider(
+        GradientAdjustmentSlider(
             label = "Saturation",
             value = current.saturation,
             range = -100f..100f,
             step = 1f,
             defaultValue = 0f,
             formatter = formatterInt,
+            trackBrush = saturationBrush,
             onValueChange = { onHslChange(hsl.withValue(activeChannel, current.copy(saturation = it))) },
             onInteractionStart = onBeginEditInteraction,
             onInteractionEnd = onEndEditInteraction
         )
-        AdjustmentSlider(
+        GradientAdjustmentSlider(
             label = "Luminance",
             value = current.luminance,
             range = -100f..100f,
             step = 1f,
             defaultValue = 0f,
             formatter = formatterInt,
+            trackBrush = luminanceBrush,
             onValueChange = { onHslChange(hsl.withValue(activeChannel, current.copy(luminance = it))) },
             onInteractionStart = onBeginEditInteraction,
             onInteractionEnd = onEndEditInteraction
         )
     }
+}
+
+private enum class CropHandle {
+    Move,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight
 }
 
 @Composable
@@ -4332,6 +4652,7 @@ private fun ImagePreview(
     isMaskMode: Boolean = false,
     showMaskOverlay: Boolean = true,
     maskOverlayBlinkKey: Long = 0L,
+    maskOverlayBlinkSubMaskId: String? = null,
     isPainting: Boolean = false,
     brushSize: Float = 60f,
     maskTapMode: MaskTapMode = MaskTapMode.None,
@@ -4340,7 +4661,16 @@ private fun ImagePreview(
     onLassoFinished: ((List<MaskPoint>) -> Unit)? = null,
     onSubMaskHandleDrag: ((MaskHandle, MaskPoint) -> Unit)? = null,
     onSubMaskHandleDragStateChange: ((Boolean) -> Unit)? = null,
-    onRequestAiSubjectOverride: (() -> Unit)? = null
+    onRequestAiSubjectOverride: (() -> Unit)? = null,
+    isCropMode: Boolean = false,
+    cropState: CropState? = null,
+    cropAspectRatio: Float? = null,
+    extraRotationDegrees: Float = 0f,
+    isStraightenActive: Boolean = false,
+    onStraightenResult: ((Float) -> Unit)? = null,
+    onCropDraftChange: ((CropState) -> Unit)? = null,
+    onCropInteractionStart: (() -> Unit)? = null,
+    onCropInteractionEnd: ((CropState) -> Unit)? = null
 ) {
     var scale by remember { mutableStateOf(1f) }
     var offsetX by remember { mutableStateOf(0f) }
@@ -4349,12 +4679,19 @@ private fun ImagePreview(
     val currentStroke = remember { mutableStateListOf<MaskPoint>() }
     val density = LocalDensity.current
     val activeSubMaskState by rememberUpdatedState(activeSubMask)
+    val cropStateState by rememberUpdatedState(cropState)
+    val cropAspectRatioState by rememberUpdatedState(cropAspectRatio)
+    val onCropDraftChangeState by rememberUpdatedState(onCropDraftChange)
+    val onCropInteractionStartState by rememberUpdatedState(onCropInteractionStart)
+    val onCropInteractionEndState by rememberUpdatedState(onCropInteractionEnd)
+    val onStraightenResultState by rememberUpdatedState(onStraightenResult)
+    val isStraightenActiveState by rememberUpdatedState(isStraightenActive)
 
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .let { base ->
-                if (!isMaskMode) base
+                if (!isMaskMode && !isCropMode) base
                 else base.pointerInput(bitmap) {
                     awaitEachGesture {
                         while (true) {
@@ -4431,7 +4768,7 @@ private fun ImagePreview(
             val imageModifier = Modifier
                 .fillMaxSize()
                 .let { base ->
-                    if (isMaskMode) base
+                    if (isMaskMode || isCropMode) base
                     else base.pointerInput(Unit) {
                         detectTransformGestures { _, pan, zoom, _ ->
                             scale = (scale * zoom).coerceIn(0.5f, 5f)
@@ -4444,7 +4781,9 @@ private fun ImagePreview(
                     scaleX = scale,
                     scaleY = scale,
                     translationX = offsetX,
-                    translationY = offsetY
+                    translationY = offsetY,
+                    rotationZ = if (isCropMode) extraRotationDegrees else 0f,
+                    clip = isCropMode && kotlin.math.abs(extraRotationDegrees) > 0.0001f
                 )
 
             Image(
@@ -4453,6 +4792,314 @@ private fun ImagePreview(
                 contentScale = ContentScale.Fit,
                 modifier = imageModifier
             )
+
+            val cropSnapshot = cropState?.normalized()
+            if (isCropMode && cropSnapshot != null) {
+                val cropLeftPx = left + cropSnapshot.x * displayW
+                val cropTopPx = top + cropSnapshot.y * displayH
+                val cropRightPx = left + (cropSnapshot.x + cropSnapshot.width) * displayW
+                val cropBottomPx = top + (cropSnapshot.y + cropSnapshot.height) * displayH
+
+                var straightenStart by remember { mutableStateOf<MaskPoint?>(null) }
+                var straightenEnd by remember { mutableStateOf<MaskPoint?>(null) }
+                LaunchedEffect(isStraightenActiveState) {
+                    if (!isStraightenActiveState) {
+                        straightenStart = null
+                        straightenEnd = null
+                    }
+                }
+
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offsetX,
+                            translationY = offsetY
+                        )
+                ) {
+                    val dimColor = Color.Black.copy(alpha = 0.55f)
+                    val imageRight = left + displayW
+                    val imageBottom = top + displayH
+
+                    // Dim outside crop (within image bounds).
+                    drawRect(
+                        color = dimColor,
+                        topLeft = Offset(left, top),
+                        size = Size(displayW, (cropTopPx - top).coerceAtLeast(0f))
+                    )
+                    drawRect(
+                        color = dimColor,
+                        topLeft = Offset(left, cropBottomPx),
+                        size = Size(displayW, (imageBottom - cropBottomPx).coerceAtLeast(0f))
+                    )
+                    drawRect(
+                        color = dimColor,
+                        topLeft = Offset(left, cropTopPx),
+                        size = Size((cropLeftPx - left).coerceAtLeast(0f), (cropBottomPx - cropTopPx).coerceAtLeast(0f))
+                    )
+                    drawRect(
+                        color = dimColor,
+                        topLeft = Offset(cropRightPx, cropTopPx),
+                        size = Size((imageRight - cropRightPx).coerceAtLeast(0f), (cropBottomPx - cropTopPx).coerceAtLeast(0f))
+                    )
+
+                    val strokeWidth = with(density) { 2.dp.toPx() } / scale.coerceAtLeast(0.0001f)
+                    val handleRadius = with(density) { 10.dp.toPx() } / scale.coerceAtLeast(0.0001f)
+
+                    drawRect(
+                        color = Color.White,
+                        topLeft = Offset(cropLeftPx, cropTopPx),
+                        size = Size((cropRightPx - cropLeftPx).coerceAtLeast(0f), (cropBottomPx - cropTopPx).coerceAtLeast(0f)),
+                        style = Stroke(width = strokeWidth)
+                    )
+
+                    listOf(
+                        Offset(cropLeftPx, cropTopPx),
+                        Offset(cropRightPx, cropTopPx),
+                        Offset(cropLeftPx, cropBottomPx),
+                        Offset(cropRightPx, cropBottomPx)
+                    ).forEach { p ->
+                        drawCircle(color = Color.White, radius = handleRadius, center = p)
+                    }
+
+                    val s = straightenStart
+                    val e = straightenEnd
+                    if (isStraightenActiveState && s != null && e != null) {
+                        val startPx = Offset(left + s.x * displayW, top + s.y * displayH)
+                        val endPx = Offset(left + e.x * displayW, top + e.y * displayH)
+                        drawLine(
+                            color = Color(0xFFFFC107),
+                            start = startPx,
+                            end = endPx,
+                            strokeWidth = strokeWidth * 1.5f,
+                            cap = StrokeCap.Round
+                        )
+                    }
+                }
+
+                if (isStraightenActiveState) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(bitmap) {
+                                detectDragGestures(
+                                    onDragStart = { start ->
+                                        val p = toImagePoint(start)
+                                        straightenStart = p
+                                        straightenEnd = p
+                                    },
+                                    onDrag = { change, _ ->
+                                        change.consume()
+                                        straightenEnd = toImagePoint(change.position)
+                                    },
+                                    onDragCancel = {
+                                        straightenStart = null
+                                        straightenEnd = null
+                                    },
+                                    onDragEnd = {
+                                        val s = straightenStart
+                                        val e = straightenEnd
+                                        straightenStart = null
+                                        straightenEnd = null
+
+                                        if (s == null || e == null) return@detectDragGestures
+                                        val dx = e.x - s.x
+                                        val dy = e.y - s.y
+                                        if (kotlin.math.abs(dx) <= 0.0001f && kotlin.math.abs(dy) <= 0.0001f) return@detectDragGestures
+
+                                        val angleDeg = (kotlin.math.atan2(dy, dx) * 180.0 / kotlin.math.PI).toFloat()
+                                        val rotation = (-angleDeg).coerceIn(-45f, 45f)
+                                        onStraightenResultState?.invoke(rotation)
+                                    }
+                                )
+                            }
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(bitmap) {
+                                var activeHandle: CropHandle? = null
+                                var startCrop: CropState? = null
+                                var startPointer: MaskPoint? = null
+                                val minSize = 0.05f
+
+                                fun clampCrop(l: Float, t: Float, r: Float, b: Float): CropState {
+                                    var leftN = l.coerceIn(0f, 1f)
+                                    var topN = t.coerceIn(0f, 1f)
+                                    var rightN = r.coerceIn(0f, 1f)
+                                    var bottomN = b.coerceIn(0f, 1f)
+
+                                    if (rightN - leftN < minSize) {
+                                        val mid = (leftN + rightN) / 2f
+                                        leftN = (mid - minSize / 2f).coerceIn(0f, 1f - minSize)
+                                        rightN = (leftN + minSize).coerceIn(minSize, 1f)
+                                    }
+                                    if (bottomN - topN < minSize) {
+                                        val mid = (topN + bottomN) / 2f
+                                        topN = (mid - minSize / 2f).coerceIn(0f, 1f - minSize)
+                                        bottomN = (topN + minSize).coerceIn(minSize, 1f)
+                                    }
+
+                                    return CropState(
+                                        x = leftN.coerceIn(0f, 1f - minSize),
+                                        y = topN.coerceIn(0f, 1f - minSize),
+                                        width = (rightN - leftN).coerceIn(minSize, 1f),
+                                        height = (bottomN - topN).coerceIn(minSize, 1f)
+                                    ).normalized()
+                                }
+
+                                fun applyAspectRatio(handle: CropHandle, crop: CropState, ratio: Float): CropState {
+                                    val l = crop.x
+                                    val t = crop.y
+                                    val r = crop.x + crop.width
+                                    val b = crop.y + crop.height
+                                    val width = (r - l).coerceAtLeast(minSize)
+                                    val height = (b - t).coerceAtLeast(minSize)
+
+                                    return when (handle) {
+                                        CropHandle.TopLeft -> {
+                                            if (width / height > ratio) clampCrop(r - height * ratio, t, r, b)
+                                            else clampCrop(l, b - width / ratio, r, b)
+                                        }
+                                        CropHandle.TopRight -> {
+                                            if (width / height > ratio) clampCrop(l, t, l + height * ratio, b)
+                                            else clampCrop(l, b - width / ratio, r, b)
+                                        }
+                                        CropHandle.BottomLeft -> {
+                                            if (width / height > ratio) clampCrop(r - height * ratio, t, r, b)
+                                            else clampCrop(l, t, r, t + width / ratio)
+                                        }
+                                        CropHandle.BottomRight -> {
+                                            if (width / height > ratio) clampCrop(l, t, l + height * ratio, b)
+                                            else clampCrop(l, t, r, t + width / ratio)
+                                        }
+                                        CropHandle.Move -> crop
+                                    }
+                                }
+
+                                fun dist(a: Offset, b: Offset): Float {
+                                    val dx = a.x - b.x
+                                    val dy = a.y - b.y
+                                    return kotlin.math.sqrt(dx * dx + dy * dy)
+                                }
+
+                                detectDragGestures(
+                                    onDragStart = { start ->
+                                        val current = cropStateState?.normalized() ?: return@detectDragGestures
+                                        val startContent = toContentOffset(start)
+
+                                        val curLeft = left + current.x * displayW
+                                        val curTop = top + current.y * displayH
+                                        val curRight = left + (current.x + current.width) * displayW
+                                        val curBottom = top + (current.y + current.height) * displayH
+
+                                        val handlePx = with(density) { 24.dp.toPx() } / scale.coerceAtLeast(0.0001f)
+                                        val tl = Offset(curLeft, curTop)
+                                        val tr = Offset(curRight, curTop)
+                                        val bl = Offset(curLeft, curBottom)
+                                        val br = Offset(curRight, curBottom)
+
+                                        activeHandle = when {
+                                            dist(startContent, tl) <= handlePx -> CropHandle.TopLeft
+                                            dist(startContent, tr) <= handlePx -> CropHandle.TopRight
+                                            dist(startContent, bl) <= handlePx -> CropHandle.BottomLeft
+                                            dist(startContent, br) <= handlePx -> CropHandle.BottomRight
+                                            startContent.x in curLeft..curRight && startContent.y in curTop..curBottom -> CropHandle.Move
+                                            else -> null
+                                        }
+
+                                        if (activeHandle != null) {
+                                            onCropInteractionStartState?.invoke()
+                                            startCrop = current
+                                            startPointer = toImagePoint(start)
+                                        }
+                                    },
+                                    onDragCancel = {
+                                        val wasActive = activeHandle != null
+                                        activeHandle = null
+                                        startCrop = null
+                                        startPointer = null
+                                        if (wasActive) {
+                                            val final = cropStateState?.normalized() ?: cropSnapshot
+                                            onCropInteractionEndState?.invoke(final)
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        val handle = activeHandle ?: return@detectDragGestures
+                                        activeHandle = null
+                                        startCrop = null
+                                        startPointer = null
+                                        val final = cropStateState?.normalized() ?: return@detectDragGestures
+                                        onCropInteractionEndState?.invoke(final)
+                                    },
+                                    onDrag = { change, _ ->
+                                        val handle = activeHandle ?: return@detectDragGestures
+                                        val baseCrop = startCrop ?: return@detectDragGestures
+                                        change.consume()
+
+                                        val curr = toImagePoint(change.position)
+                                        val ratio = cropAspectRatioState
+                                            ?.takeIf { it.isFinite() && it > 0f }
+
+                                        val next = when (handle) {
+                                            CropHandle.Move -> {
+                                                val sp = startPointer ?: curr
+                                                val dx = curr.x - sp.x
+                                                val dy = curr.y - sp.y
+                                                CropState(
+                                                    x = (baseCrop.x + dx).coerceIn(0f, 1f - baseCrop.width),
+                                                    y = (baseCrop.y + dy).coerceIn(0f, 1f - baseCrop.height),
+                                                    width = baseCrop.width,
+                                                    height = baseCrop.height
+                                                ).normalized()
+                                            }
+                                            CropHandle.TopLeft -> {
+                                                val proposed = clampCrop(
+                                                    curr.x,
+                                                    curr.y,
+                                                    baseCrop.x + baseCrop.width,
+                                                    baseCrop.y + baseCrop.height
+                                                )
+                                                if (ratio == null) proposed else applyAspectRatio(CropHandle.TopLeft, proposed, ratio)
+                                            }
+                                            CropHandle.TopRight -> {
+                                                val proposed = clampCrop(
+                                                    baseCrop.x,
+                                                    curr.y,
+                                                    curr.x,
+                                                    baseCrop.y + baseCrop.height
+                                                )
+                                                if (ratio == null) proposed else applyAspectRatio(CropHandle.TopRight, proposed, ratio)
+                                            }
+                                            CropHandle.BottomLeft -> {
+                                                val proposed = clampCrop(
+                                                    curr.x,
+                                                    baseCrop.y,
+                                                    baseCrop.x + baseCrop.width,
+                                                    curr.y
+                                                )
+                                                if (ratio == null) proposed else applyAspectRatio(CropHandle.BottomLeft, proposed, ratio)
+                                            }
+                                            CropHandle.BottomRight -> {
+                                                val proposed = clampCrop(
+                                                    baseCrop.x,
+                                                    baseCrop.y,
+                                                    curr.x,
+                                                    curr.y
+                                                )
+                                                if (ratio == null) proposed else applyAspectRatio(CropHandle.BottomRight, proposed, ratio)
+                                            }
+                                        }
+                                        onCropDraftChangeState?.invoke(next)
+                                    }
+                                )
+                            }
+                    )
+                }
+            }
 
             if (isMaskMode) {
                 val persistentOverlayVisible = showMaskOverlay && maskOverlay?.adjustments?.isNeutralForMask() == true
@@ -4485,7 +5132,15 @@ private fun ImagePreview(
                 var overlayBitmap by remember { mutableStateOf<Bitmap?>(null) }
                 val overlayMaxDim = if (isPainting) 256 else 512
 
-                LaunchedEffect(maskOverlay, shouldDrawOverlay, bitmap.width, bitmap.height, overlayMaxDim) {
+                LaunchedEffect(
+                    maskOverlay,
+                    shouldDrawOverlay,
+                    overlayIsFlashing,
+                    maskOverlayBlinkSubMaskId,
+                    bitmap.width,
+                    bitmap.height,
+                    overlayMaxDim
+                ) {
                     val overlayMask = maskOverlay ?: run {
                         overlayBitmap = null
                         return@LaunchedEffect
@@ -4501,7 +5156,15 @@ private fun ImagePreview(
                         if (w >= h) overlayMaxDim.toFloat() / w.coerceAtLeast(1) else overlayMaxDim.toFloat() / h.coerceAtLeast(1)
                     val outW = (w * scale).toInt().coerceAtLeast(1)
                     val outH = (h * scale).toInt().coerceAtLeast(1)
-                    overlayBitmap = withContext(Dispatchers.Default) { buildMaskOverlayBitmap(overlayMask, outW, outH) }
+                    val highlightSubMaskId = if (overlayIsFlashing) maskOverlayBlinkSubMaskId else null
+                    overlayBitmap = withContext(Dispatchers.Default) {
+                        buildMaskOverlayBitmap(
+                            overlayMask,
+                            outW,
+                            outH,
+                            highlightSubMaskId = highlightSubMaskId
+                        )
+                    }
                 }
 
                 val overlayBitmapSnapshot = overlayBitmap
@@ -4868,7 +5531,7 @@ private fun MaskManagementOverlay(
     onPaintingMaskChange: (Boolean) -> Unit,
     onMaskTapModeChange: (MaskTapMode) -> Unit,
     onShowMaskOverlayChange: (Boolean) -> Unit,
-    onRequestMaskOverlayBlink: () -> Unit,
+    onRequestMaskOverlayBlink: (String?) -> Unit,
     newSubMaskState: (String, SubMaskMode, SubMaskType) -> SubMaskState,
     duplicateMaskState: (MaskState, Boolean) -> MaskState,
     modifier: Modifier = Modifier
@@ -4936,7 +5599,7 @@ private fun MaskManagementOverlay(
                                 onSelectedMaskIdChange(mask.id)
                                 onSelectedSubMaskIdChange(mask.subMasks.firstOrNull()?.id)
                                 showMaskMenu = false
-                                onRequestMaskOverlayBlink()
+                                onRequestMaskOverlayBlink(null)
                             }
                         }
                 ) {
@@ -4972,7 +5635,7 @@ private fun MaskManagementOverlay(
                                 onSelectedSubMaskIdChange(
                                     duplicated.subMasks.firstOrNull()?.id
                                 )
-                                onRequestMaskOverlayBlink()
+                                onRequestMaskOverlayBlink(null)
                             }
                         )
                         DropdownMenuItem(
@@ -4996,7 +5659,7 @@ private fun MaskManagementOverlay(
                                 onSelectedSubMaskIdChange(
                                     duplicated.subMasks.firstOrNull()?.id
                                 )
-                                onRequestMaskOverlayBlink()
+                                onRequestMaskOverlayBlink(null)
                             }
                         )
                         DropdownMenuItem(
@@ -5182,6 +5845,8 @@ private fun MaskManagementOverlay(
                                                     sub.type == SubMaskType.AiSubject.id
                                             )
                                             showSubMaskMenu = false
+                                            onShowMaskOverlayChange(mask.adjustments.isNeutralForMask())
+                                            onRequestMaskOverlayBlink(sub.id)
                                         }
                                     }
                             ) {
