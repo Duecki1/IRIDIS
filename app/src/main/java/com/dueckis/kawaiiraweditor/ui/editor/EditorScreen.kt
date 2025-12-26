@@ -234,7 +234,7 @@ internal fun EditorScreen(
     var brushTool by remember { mutableStateOf(BrushTool.Brush) }
     var brushSoftness by remember { mutableStateOf(0.5f) }
     var eraserSoftness by remember { mutableStateOf(0.5f) }
-    var showMaskOverlay by remember { mutableStateOf(true) }
+    var showMaskOverlay by remember { mutableStateOf(false) }
     var maskOverlayBlinkKey by remember { mutableStateOf(0L) }
     var maskOverlayBlinkSubMaskId by remember { mutableStateOf<String?>(null) }
     fun requestMaskOverlayBlink(highlightSubMaskId: String?) {
@@ -1131,7 +1131,6 @@ internal fun EditorScreen(
             val onSelectPanelTab: (EditorPanelTab) -> Unit = { tab ->
                 when (tab) {
                     EditorPanelTab.Masks -> {
-                        showMaskOverlay = true
                         maskTapMode = MaskTapMode.None
                     }
                     else -> {
@@ -1220,7 +1219,10 @@ internal fun EditorScreen(
                                     onEndEditInteraction = ::endEditInteraction,
                                     histogramData = histogramData,
                                     masks = masks,
-                                    onMasksChange = { masks = it },
+                                    onMasksChange = { updated ->
+                                        if (panelTab == EditorPanelTab.Masks && showMaskOverlay) showMaskOverlay = false
+                                        masks = updated
+                                    },
                                     maskNumbers = maskNumbers,
                                     selectedMaskId = selectedMaskId,
                                     onSelectedMaskIdChange = { selectedMaskId = it },
@@ -1487,7 +1489,10 @@ internal fun EditorScreen(
                                         onEndEditInteraction = ::endEditInteraction,
                                         histogramData = histogramData,
                                         masks = masks,
-                                        onMasksChange = { masks = it },
+                                        onMasksChange = { updated ->
+                                            if (panelTab == EditorPanelTab.Masks && showMaskOverlay) showMaskOverlay = false
+                                            masks = updated
+                                        },
                                         maskNumbers = maskNumbers,
                                         selectedMaskId = selectedMaskId,
                                         onSelectedMaskIdChange = { selectedMaskId = it },
