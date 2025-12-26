@@ -22,4 +22,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "KawaiiRawEditor"
 include(":app")
+include(":shared")
  

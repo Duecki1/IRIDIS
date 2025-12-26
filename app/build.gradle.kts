@@ -63,6 +63,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":shared"))
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
     implementation("androidx.activity:activity-compose:1.8.2")
@@ -154,6 +155,10 @@ val copyRustLibs = tasks.register<Copy>("copyRustLibs") {
     }
 }
 
-tasks.named("preBuild") {
-    dependsOn(copyRustLibs)
+val skipRust = providers.gradleProperty("skipRust").map { it.toBoolean() }.orElse(false)
+
+if (!skipRust.get()) {
+    tasks.named("preBuild") {
+        dependsOn(copyRustLibs)
+    }
 }

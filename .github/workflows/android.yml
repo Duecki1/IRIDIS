@@ -1,0 +1,39 @@
+name: Android CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-36"
+
+      - name: Configure local.properties
+        run: printf "sdk.dir=%s\n" "$ANDROID_SDK_ROOT" > local.properties
+
+      - name: Ensure Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Build debug APK (skip Rust)
+        run: ./gradlew :app:assembleDebug -PskipRust=true --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
