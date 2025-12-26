@@ -110,6 +110,7 @@ internal fun AdjustmentSlider(
         inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
         thumbColor = MaterialTheme.colorScheme.primary
     )
+    val snappedDefault = snapToStep(defaultValue, step, range)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
             modifier = Modifier
@@ -137,17 +138,33 @@ internal fun AdjustmentSlider(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Slider(
-            value = value,
-            onValueChange = { newValue ->
-                val snapped = snapToStep(newValue, step, range)
-                onInteractionStart?.invoke()
-                onValueChange(snapped)
-            },
-            onValueChangeFinished = { onInteractionEnd?.invoke() },
-            valueRange = range,
-            colors = colors
-        )
+        Box(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .doubleTapSliderThumbToReset(
+                        value = value,
+                        valueRange = range,
+                        onReset = {
+                            onInteractionStart?.invoke()
+                            onValueChange(snappedDefault)
+                            onInteractionEnd?.invoke()
+                        }
+                    )
+        ) {
+            Slider(
+                modifier = Modifier.fillMaxWidth(),
+                value = value,
+                onValueChange = { newValue ->
+                    val snapped = snapToStep(newValue, step, range)
+                    onInteractionStart?.invoke()
+                    onValueChange(snapped)
+                },
+                onValueChangeFinished = { onInteractionEnd?.invoke() },
+                valueRange = range,
+                colors = colors
+            )
+        }
     }
 }
 
@@ -177,6 +194,7 @@ internal fun GradientAdjustmentSlider(
         disabledThumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
     )
 
+    val snappedDefault = snapToStep(defaultValue, step, range)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
             modifier = Modifier
@@ -205,7 +223,21 @@ internal fun GradientAdjustmentSlider(
             )
         }
 
-        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Box(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .doubleTapSliderThumbToReset(
+                        value = value,
+                        valueRange = range,
+                        onReset = {
+                            onInteractionStart?.invoke()
+                            onValueChange(snappedDefault)
+                            onInteractionEnd?.invoke()
+                        }
+                    ),
+            contentAlignment = Alignment.Center
+        ) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()

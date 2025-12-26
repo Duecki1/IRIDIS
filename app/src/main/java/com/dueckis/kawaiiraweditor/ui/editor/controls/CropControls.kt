@@ -39,6 +39,7 @@ import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
 import com.dueckis.kawaiiraweditor.data.model.CropState
 import com.dueckis.kawaiiraweditor.ui.components.AdjustmentSlider
 import com.dueckis.kawaiiraweditor.ui.components.PanelSectionCard
+import com.dueckis.kawaiiraweditor.ui.components.doubleTapSliderThumbToReset
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.min
@@ -341,6 +342,17 @@ internal fun CropTransformControls(
         }
 
         Slider(
+            modifier =
+                Modifier.doubleTapSliderThumbToReset(
+                    value = rotationValue,
+                    valueRange = -45f..45f,
+                    onReset = {
+                        onBeginEditInteraction()
+                        onRotationDraftChange(null)
+                        onAdjustmentsChange(requestAutoCrop(adjustments.copy(rotation = 0f, crop = null)))
+                        onEndEditInteraction()
+                    }
+                ),
             value = rotationValue.coerceIn(-45f, 45f),
             onValueChange = { newValue ->
                 onBeginEditInteraction()

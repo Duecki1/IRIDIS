@@ -58,6 +58,7 @@ import com.dueckis.kawaiiraweditor.domain.HistogramData
 import com.dueckis.kawaiiraweditor.ui.components.AdjustmentSlider
 import com.dueckis.kawaiiraweditor.ui.components.PanelSectionCard
 import com.dueckis.kawaiiraweditor.ui.components.ToneMapperSection
+import com.dueckis.kawaiiraweditor.ui.components.doubleTapSliderThumbToReset
 import com.dueckis.kawaiiraweditor.ui.editor.masking.MaskIcon
 import com.dueckis.kawaiiraweditor.ui.editor.masking.MaskItemCard
 import com.dueckis.kawaiiraweditor.ui.editor.masking.SubMaskItemChip
@@ -518,6 +519,16 @@ internal fun EditorControlsContent(
                         Text("${selectedMask.opacity.roundToInt()}%", style = MaterialTheme.typography.bodySmall)
                     }
                     Slider(
+                        modifier =
+                            Modifier.doubleTapSliderThumbToReset(
+                                value = selectedMask.opacity,
+                                valueRange = 0f..100f,
+                                onReset = {
+                                    onBeginEditInteraction()
+                                    onMasksChange(masks.map { m -> if (m.id == selectedMask.id) m.copy(opacity = 100f) else m })
+                                    onEndEditInteraction()
+                                }
+                            ),
                         value = selectedMask.opacity.coerceIn(0f, 100f),
                         onValueChange = { newValue ->
                             onBeginEditInteraction()
@@ -591,6 +602,16 @@ internal fun EditorControlsContent(
 
                             Text("Brush Size: ${brushSize.roundToInt()} px")
                             Slider(
+                                modifier =
+                                    Modifier.doubleTapSliderThumbToReset(
+                                        value = brushSize,
+                                        valueRange = 2f..400f,
+                                        onReset = {
+                                            onBeginEditInteraction()
+                                            onBrushSizeChange(60f)
+                                            onEndEditInteraction()
+                                        }
+                                    ),
                                 value = brushSize.coerceIn(2f, 400f),
                                 onValueChange = {
                                     onBeginEditInteraction()
@@ -603,6 +624,16 @@ internal fun EditorControlsContent(
                             val softness = if (brushTool == BrushTool.Eraser) eraserSoftness else brushSoftness
                             Text("Softness: ${(softness * 100f).roundToInt()}%")
                             Slider(
+                                modifier =
+                                    Modifier.doubleTapSliderThumbToReset(
+                                        value = softness,
+                                        valueRange = 0f..1f,
+                                        onReset = {
+                                            onBeginEditInteraction()
+                                            if (brushTool == BrushTool.Eraser) onEraserSoftnessChange(0.5f) else onBrushSoftnessChange(0.5f)
+                                            onEndEditInteraction()
+                                        }
+                                    ),
                                 value = softness.coerceIn(0f, 1f),
                                 onValueChange = { newValue ->
                                     onBeginEditInteraction()
@@ -619,6 +650,27 @@ internal fun EditorControlsContent(
 
                             Text("Softness: ${(selectedSubMask.aiSubject.softness.coerceIn(0f, 1f) * 100f).roundToInt()}%")
                             Slider(
+                                modifier =
+                                    Modifier.doubleTapSliderThumbToReset(
+                                        value = selectedSubMask.aiSubject.softness,
+                                        valueRange = 0f..1f,
+                                        onReset = {
+                                            onBeginEditInteraction()
+                                            val updated =
+                                                masks.map { m ->
+                                                    if (m.id != selectedMask.id) m
+                                                    else m.copy(
+                                                        subMasks =
+                                                            m.subMasks.map { s ->
+                                                                if (s.id != selectedSubMask.id) s
+                                                                else s.copy(aiSubject = s.aiSubject.copy(softness = 0.25f))
+                                                            }
+                                                    )
+                                                }
+                                            onMasksChange(updated)
+                                            onEndEditInteraction()
+                                        }
+                                    ),
                                 value = selectedSubMask.aiSubject.softness.coerceIn(0f, 1f),
                                 onValueChange = { newValue ->
                                     onBeginEditInteraction()
@@ -675,6 +727,27 @@ internal fun EditorControlsContent(
 
                             Text("Radius: ${(selectedSubMask.radial.radiusX * 100f).roundToInt()}%")
                             Slider(
+                                modifier =
+                                    Modifier.doubleTapSliderThumbToReset(
+                                        value = selectedSubMask.radial.radiusX,
+                                        valueRange = 0.01f..1.5f,
+                                        onReset = {
+                                            onBeginEditInteraction()
+                                            val updated =
+                                                masks.map { m ->
+                                                    if (m.id != selectedMask.id) m
+                                                    else m.copy(
+                                                        subMasks =
+                                                            m.subMasks.map { s ->
+                                                                if (s.id != selectedSubMask.id) s
+                                                                else s.copy(radial = s.radial.copy(radiusX = 0.35f, radiusY = 0.35f))
+                                                            }
+                                                    )
+                                                }
+                                            onMasksChange(updated)
+                                            onEndEditInteraction()
+                                        }
+                                    ),
                                 value = selectedSubMask.radial.radiusX.coerceIn(0.01f, 1.5f),
                                 onValueChange = { newValue ->
                                     onBeginEditInteraction()
@@ -697,6 +770,26 @@ internal fun EditorControlsContent(
 
                             Text("Softness: ${(selectedSubMask.radial.feather * 100f).roundToInt()}%")
                             Slider(
+                                modifier =
+                                    Modifier.doubleTapSliderThumbToReset(
+                                        value = selectedSubMask.radial.feather,
+                                        valueRange = 0f..1f,
+                                        onReset = {
+                                            onBeginEditInteraction()
+                                            val updated =
+                                                masks.map { m ->
+                                                    if (m.id != selectedMask.id) m
+                                                    else m.copy(
+                                                        subMasks =
+                                                            m.subMasks.map { s ->
+                                                                if (s.id != selectedSubMask.id) s else s.copy(radial = s.radial.copy(feather = 0.5f))
+                                                            }
+                                                    )
+                                                }
+                                            onMasksChange(updated)
+                                            onEndEditInteraction()
+                                        }
+                                    ),
                                 value = selectedSubMask.radial.feather.coerceIn(0f, 1f),
                                 onValueChange = { newValue ->
                                     onBeginEditInteraction()
@@ -741,6 +834,26 @@ internal fun EditorControlsContent(
 
                             Text("Softness: ${(selectedSubMask.linear.range * 100f).roundToInt()}%")
                             Slider(
+                                modifier =
+                                    Modifier.doubleTapSliderThumbToReset(
+                                        value = selectedSubMask.linear.range,
+                                        valueRange = 0.01f..1.5f,
+                                        onReset = {
+                                            onBeginEditInteraction()
+                                            val updated =
+                                                masks.map { m ->
+                                                    if (m.id != selectedMask.id) m
+                                                    else m.copy(
+                                                        subMasks =
+                                                            m.subMasks.map { s ->
+                                                                if (s.id != selectedSubMask.id) s else s.copy(linear = s.linear.copy(range = 0.25f))
+                                                            }
+                                                    )
+                                                }
+                                            onMasksChange(updated)
+                                            onEndEditInteraction()
+                                        }
+                                    ),
                                 value = selectedSubMask.linear.range.coerceIn(0.01f, 1.5f),
                                 onValueChange = { newValue ->
                                     onBeginEditInteraction()

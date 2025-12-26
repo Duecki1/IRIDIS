@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.media.ExportImageFormat
+import com.dueckis.kawaiiraweditor.ui.components.doubleTapSliderThumbToReset
 
 internal data class ExportOptions(
     val format: ExportImageFormat,
@@ -75,11 +76,23 @@ internal fun ExportOptionsDialog(
                             Text("Quality", style = MaterialTheme.typography.bodyMedium)
                             Text("$quality", style = MaterialTheme.typography.bodyMedium)
                         }
-                        Slider(
-                            value = quality.toFloat(),
-                            onValueChange = { quality = it.toInt().coerceIn(1, 100) },
-                            valueRange = 1f..100f
-                        )
+                        Box(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .doubleTapSliderThumbToReset(
+                                        value = quality.toFloat(),
+                                        valueRange = 1f..100f,
+                                        onReset = { quality = 90 }
+                                    )
+                        ) {
+                            Slider(
+                                modifier = Modifier.fillMaxWidth(),
+                                value = quality.toFloat(),
+                                onValueChange = { quality = it.toInt().coerceIn(1, 100) },
+                                valueRange = 1f..100f
+                            )
+                        }
                     }
                 } else {
                     Text("Quality (PNG is lossless)", color = MaterialTheme.colorScheme.onSurfaceVariant)
