@@ -2786,7 +2786,7 @@ fn read_adjustments_json(env: &mut JNIEnv, adjustments: JString) -> Option<Strin
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_createSession(
+pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecoder_createSession(
     env: JNIEnv,
     _: JClass,
     raw_data: JByteArray,
@@ -2810,7 +2810,7 @@ pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_createSess
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_releaseSession(
+pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecoder_releaseSession(
     _env: JNIEnv,
     _: JClass,
     handle: jlong,
@@ -2824,7 +2824,7 @@ pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_releaseSes
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_getMetadataJsonFromSession(
+pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecoder_getMetadataJsonFromSession(
     env: JNIEnv,
     _: JClass,
     handle: jlong,
@@ -2885,7 +2885,7 @@ fn render_from_session(
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_lowlowdecodeFromSession(
+pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecoder_lowlowdecodeFromSession(
     mut env: JNIEnv,
     _: JClass,
     handle: jlong,
@@ -2903,7 +2903,7 @@ pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_lowlowdeco
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_lowdecodeFromSession(
+pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecoder_lowdecodeFromSession(
     mut env: JNIEnv,
     _: JClass,
     handle: jlong,
@@ -2921,7 +2921,7 @@ pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_lowdecodeF
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_decodeFromSession(
+pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecoder_decodeFromSession(
     mut env: JNIEnv,
     _: JClass,
     handle: jlong,
@@ -2939,7 +2939,7 @@ pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_decodeFrom
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_decodeFullResFromSession(
+pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecoder_decodeFullResFromSession(
     mut env: JNIEnv,
     _: JClass,
     handle: jlong,
@@ -2972,7 +2972,7 @@ pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_decodeFull
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_lowdecode(
+pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecoder_lowdecode(
     mut env: JNIEnv,
     _: JClass,
     raw_data: JByteArray,
@@ -2998,7 +2998,7 @@ pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_lowdecode(
 
 
 #[no_mangle]
-pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_lowlowdecode(
+pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecoder_lowlowdecode(
     mut env: JNIEnv,
     _: JClass,
     raw_data: JByteArray,
@@ -3023,7 +3023,7 @@ pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_lowlowdeco
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_decode(
+pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecoder_decode(
     mut env: JNIEnv,
     _: JClass,
     raw_data: JByteArray,
@@ -3048,7 +3048,7 @@ pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_decode(
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_dueckis_kawaiiraweditor_LibRawDecoder_decodeFullRes(
+pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecoder_decodeFullRes(
     mut env: JNIEnv,
     _: JClass,
     raw_data: JByteArray,

@@ -19,7 +19,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "0.1.7"
+        versionName = "0.1.8"
 
         buildConfigField("String", "GITHUB_OWNER", "\"Duecki1\"")
         buildConfigField("String", "GITHUB_REPO", "\"IRIDIS\"")
