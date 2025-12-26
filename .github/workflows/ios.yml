@@ -3,6 +3,7 @@ name: iOS CI (KMP shared)
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -32,11 +33,115 @@ jobs:
       - name: Ensure Gradle wrapper executable
         run: chmod +x ./gradlew
 
-      - name: Build iOS simulator framework
-        run: ./gradlew :shared:linkDebugFrameworkIosSimulatorArm64 --stacktrace
+      - name: Build shared frameworks (device + simulator)
+        run: ./gradlew :shared:linkReleaseFrameworkIosArm64 :shared:linkReleaseFrameworkIosSimulatorArm64 --stacktrace
 
-      - name: Upload framework
+      - name: Create shared.xcframework
+        run: |
+          mkdir -p iosApp/Frameworks
+          rm -rf iosApp/Frameworks/shared.xcframework
+          xcodebuild -create-xcframework \
+            -framework shared/build/bin/iosArm64/releaseFramework/shared.framework \
+            -framework shared/build/bin/iosSimulatorArm64/releaseFramework/shared.framework \
+            -output iosApp/Frameworks/shared.xcframework
+
+      - name: Upload shared.xcframework
         uses: actions/upload-artifact@v4
         with:
-          name: shared-ios-simulator-framework
-          path: shared/build/bin/iosSimulatorArm64/debugFramework
+          name: shared-xcframework
+          path: iosApp/Frameworks/shared.xcframework
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: iosApp
+        run: xcodegen generate
+
+      - name: Build iOS simulator app (unsigned)
+        run: |
+          xcodebuild \
+            -project iosApp/KawaiiRawEditor.xcodeproj \
+            -scheme KawaiiRawEditor \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath iosApp/build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Upload iOS simulator app
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-app
+          path: iosApp/build/DerivedData/Build/Products/Release-iphonesimulator/KawaiiRawEditor.app
+
+      - name: Import signing certificate
+        if: ${{ secrets.IOS_CERT_P12_BASE64 != '' }}
+        env:
+          IOS_CERT_P12_BASE64: ${{ secrets.IOS_CERT_P12_BASE64 }}
+          IOS_CERT_P12_PASSWORD: ${{ secrets.IOS_CERT_P12_PASSWORD }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          echo "$IOS_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$IOS_CERT_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+
+      - name: Install provisioning profile
+        if: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
+        env:
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          PROFILE_PATH="$RUNNER_TEMP/profile.mobileprovision"
+          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          security cms -D -i "$PROFILE_PATH" > "$RUNNER_TEMP/profile.plist"
+          UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$RUNNER_TEMP/profile.plist")
+          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+
+      - name: Archive + export IPA (requires secrets)
+        if: ${{ secrets.IOS_CERT_P12_BASE64 != '' && secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' && secrets.IOS_TEAM_ID != '' }}
+        env:
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>development</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>$IOS_TEAM_ID</string>
+            <key>stripSwiftSymbols</key><true/>
+            <key>compileBitcode</key><false/>
+          </dict>
+          </plist>
+          EOF
+
+          xcodebuild \
+            -project iosApp/KawaiiRawEditor.xcodeproj \
+            -scheme KawaiiRawEditor \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$RUNNER_TEMP/KawaiiRawEditor.xcarchive" \
+            DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
+            archive
+
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$RUNNER_TEMP/KawaiiRawEditor.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+
+      - name: Upload IPA
+        if: ${{ secrets.IOS_CERT_P12_BASE64 != '' && secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' && secrets.IOS_TEAM_ID != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: ${{ runner.temp }}/export/*.ipa

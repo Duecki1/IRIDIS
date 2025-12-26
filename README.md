@@ -38,6 +38,18 @@ Download the newest pre-release here: [Releases](https://github.com/Duecki1/IRID
 
 Inspired by/using backend processing maths from RapidRAW: https://github.com/CyberTimon/RapidRAW
 
+## CI artifacts (GitHub Actions)
+
+- `Android CI` uploads a debug APK artifact.
+- `iOS CI (KMP shared)` always uploads:
+  - `shared-xcframework` (use this in Xcode)
+  - `ios-simulator-app` (runs on simulator only)
+- To also get an installable `ios-ipa` (for a real device), add these repo secrets and rerun the workflow:
+  - `IOS_CERT_P12_BASE64` (your signing cert `.p12`, base64-encoded)
+  - `IOS_CERT_P12_PASSWORD`
+  - `IOS_PROVISIONING_PROFILE_BASE64` (your `.mobileprovision`, base64-encoded)
+  - `IOS_TEAM_ID`
+
 ## Features (current)
 
 - Import RAW files via Android’s document picker (SAF).

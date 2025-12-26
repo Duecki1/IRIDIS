@@ -1,0 +1,37 @@
+name: KawaiiRawEditor
+
+options:
+  bundleIdPrefix: com.dueckis
+  deploymentTarget:
+    iOS: "16.0"
+
+targets:
+  KawaiiRawEditor:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: KawaiiRawEditor
+        UILaunchScreen:
+          UILaunchScreen:
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: "$(PRODUCT_MODULE_NAME).SceneDelegate"
+        UIRequiredDeviceCapabilities: [arm64]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dueckis.kawaiiraweditor.ios
+        SWIFT_VERSION: "5.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        DEVELOPMENT_TEAM: "$(DEVELOPMENT_TEAM)"
+        CODE_SIGN_STYLE: Automatic
+    dependencies:
+      - framework: Frameworks/shared.xcframework
+        embed: true
