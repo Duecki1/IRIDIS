@@ -312,6 +312,12 @@ fun KawaiiApp() {
                     onAddClick = { newItem ->
                         galleryItems = galleryItems + newItem
                     },
+                    onThumbnailReady = { projectId, thumbnail ->
+                        galleryItems =
+                            galleryItems.map { item ->
+                                if (item.projectId == projectId) item.copy(thumbnail = thumbnail) else item
+                            }
+                    },
                     onTagsChanged = { projectId, tags ->
                         galleryItems =
                             galleryItems.map { item -> if (item.projectId == projectId) item.copy(tags = tags) else item }
@@ -336,7 +342,8 @@ fun KawaiiApp() {
                             galleryItems = galleryItems.filterNot { it.projectId in ids }
                         }
                     },
-                    onOpenSettings = { if (currentScreen == Screen.Gallery) currentScreen = Screen.Settings }
+                    onOpenSettings = { if (currentScreen == Screen.Gallery) currentScreen = Screen.Settings },
+                    onRequestRefresh = { refreshTrigger++ }
                 )
 
                 if (editorVisible) {

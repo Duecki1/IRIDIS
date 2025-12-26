@@ -7,6 +7,7 @@ package com.dueckis.kawaiiraweditor.ui.gallery
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.os.Build
 import android.os.SystemClock
 import android.widget.Toast
@@ -37,6 +38,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.History
@@ -105,8 +108,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.min
 import kotlin.math.exp
 
 @Composable
@@ -122,10 +127,12 @@ internal fun GalleryScreen(
     onMetadataChanged: (String, Map<String, String>) -> Unit,
     onOpenItem: (GalleryItem) -> Unit,
     onAddClick: (GalleryItem) -> Unit,
+    onThumbnailReady: (String, Bitmap) -> Unit,
     onTagsChanged: (String, List<String>) -> Unit,
     onRatingChangeMany: (List<String>, Int) -> Unit,
     onDeleteMany: (List<String>) -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onRequestRefresh: () -> Unit
 ) {
     val context = LocalContext.current
     val storage = remember { ProjectStorage(context) }
@@ -225,34 +232,35 @@ internal fun GalleryScreen(
                 )
                 onAddClick(item)
 
-                if (automaticTaggingEnabled) {
-                    maybeRequestNotificationPermission()
-                    coroutineScope.launch {
+                coroutineScope.launch {
+                    val previewBytes = withContext(Dispatchers.Default) {
+                        runCatching { decodePreviewBytesForTagging(bytes, lowQualityPreviewEnabled) }.getOrNull()
+                    }
+                    val previewBitmap = previewBytes?.decodeToBitmap() ?: return@launch
+
+                    val maxSize = 512
+                    val scale = min(maxSize.toFloat() / previewBitmap.width, maxSize.toFloat() / previewBitmap.height)
+                    val scaledWidth = (previewBitmap.width * scale).toInt().coerceAtLeast(1)
+                    val scaledHeight = (previewBitmap.height * scale).toInt().coerceAtLeast(1)
+                    val thumbnail =
+                        if (previewBitmap.width == scaledWidth && previewBitmap.height == scaledHeight) previewBitmap
+                        else Bitmap.createScaledBitmap(previewBitmap, scaledWidth, scaledHeight, true)
+
+                    withContext(Dispatchers.IO) {
+                        val outputStream = ByteArrayOutputStream()
+                        thumbnail.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+                        storage.saveThumbnail(projectId, outputStream.toByteArray())
+                    }
+                    onThumbnailReady(projectId, thumbnail)
+                    if (thumbnail != previewBitmap) previewBitmap.recycle()
+
+                    if (automaticTaggingEnabled) {
+                        maybeRequestNotificationPermission()
                         onTaggingInFlightChange(projectId, true)
                         try {
-                            val meta = withContext(Dispatchers.Default) {
-                                runCatching {
-                                    val handle = LibRawDecoder.createSession(bytes)
-                                    if (handle == 0L) return@runCatching emptyMap<String, String>()
-                                    try {
-                                        val json = LibRawDecoder.getMetadataJsonFromSession(handle)
-                                        parseRawMetadataForSearch(json)
-                                    } finally {
-                                        LibRawDecoder.releaseSession(handle)
-                                    }
-                                }.getOrDefault(emptyMap())
-                            }
-                            if (meta.isNotEmpty()) {
-                                withContext(Dispatchers.IO) { storage.setRawMetadata(projectId, meta) }
-                                onMetadataChanged(projectId, meta)
-                            }
-
                             val tags = withContext(Dispatchers.Default) {
                                 runCatching {
-                                    val previewBytes = decodePreviewBytesForTagging(bytes, lowQualityPreviewEnabled)
-                                    val bmp = previewBytes?.decodeToBitmap()
-                                    if (bmp == null) emptyList()
-                                    else tagger.generateTags(bmp, onProgress = { p -> onTagProgressChange(projectId, p) })
+                                    tagger.generateTags(thumbnail, onProgress = { p -> onTagProgressChange(projectId, p) })
                                 }.getOrDefault(emptyList())
                             }
                             withContext(Dispatchers.IO) { storage.setTags(projectId, tags) }
@@ -262,12 +270,35 @@ internal fun GalleryScreen(
                         }
                     }
                 }
+
+                if (automaticTaggingEnabled) {
+                    coroutineScope.launch {
+                        val meta = withContext(Dispatchers.Default) {
+                            runCatching {
+                                val handle = LibRawDecoder.createSession(bytes)
+                                if (handle == 0L) return@runCatching emptyMap<String, String>()
+                                try {
+                                    val json = LibRawDecoder.getMetadataJsonFromSession(handle)
+                                    parseRawMetadataForSearch(json)
+                                } finally {
+                                    LibRawDecoder.releaseSession(handle)
+                                }
+                            }.getOrDefault(emptyMap())
+                        }
+                        if (meta.isNotEmpty()) {
+                            withContext(Dispatchers.IO) { storage.setRawMetadata(projectId, meta) }
+                            onMetadataChanged(projectId, meta)
+                        }
+                    }
+                }
             }
         }
     }
 
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isBulkExporting by remember { mutableStateOf(false) }
+    var isPastingAdjustments by remember { mutableStateOf(false) }
+    var copiedAdjustmentsJson by remember { mutableStateOf<String?>(null) }
     var bulkExportDone by remember { mutableIntStateOf(0) }
     var bulkExportTotal by remember { mutableIntStateOf(0) }
     var bulkExportStatus by remember { mutableStateOf<String?>(null) }
@@ -374,6 +405,65 @@ internal fun GalleryScreen(
             bulkExportStatus =
                 if (failureCount == 0) "Exported $successCount JPEG(s)."
                 else "Exported $successCount JPEG(s), $failureCount failed."
+        }
+    }
+
+    fun startPasteAdjustments(projectIds: List<String>, adjustmentsJson: String) {
+        if (isBulkExporting || isPastingAdjustments) return
+        if (projectIds.isEmpty()) return
+        isPastingAdjustments = true
+
+        coroutineScope.launch {
+            var successCount = 0
+            var failureCount = 0
+
+            for (projectId in projectIds) {
+                val rawBytes = withContext(Dispatchers.IO) { storage.loadRawBytes(projectId) }
+                if (rawBytes == null) {
+                    failureCount++
+                    continue
+                }
+
+                withContext(Dispatchers.IO) { storage.saveAdjustments(projectId, adjustmentsJson) }
+
+                val previewBytes = withContext(Dispatchers.Default) {
+                    runCatching { LibRawDecoder.decode(rawBytes, adjustmentsJson) }.getOrNull()
+                }
+                val previewBitmap = previewBytes?.decodeToBitmap()
+                if (previewBitmap == null) {
+                    failureCount++
+                    continue
+                }
+
+                withContext(Dispatchers.IO) {
+                    val maxSize = 512
+                    val scale = min(maxSize.toFloat() / previewBitmap.width, maxSize.toFloat() / previewBitmap.height)
+                    val scaledWidth = (previewBitmap.width * scale).toInt().coerceAtLeast(1)
+                    val scaledHeight = (previewBitmap.height * scale).toInt().coerceAtLeast(1)
+                    val thumbnail =
+                        if (previewBitmap.width == scaledWidth && previewBitmap.height == scaledHeight) previewBitmap
+                        else Bitmap.createScaledBitmap(previewBitmap, scaledWidth, scaledHeight, true)
+
+                    val outputStream = ByteArrayOutputStream()
+                    thumbnail.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+                    storage.saveThumbnail(projectId, outputStream.toByteArray())
+
+                    if (thumbnail != previewBitmap) thumbnail.recycle()
+                    previewBitmap.recycle()
+                }
+
+                successCount++
+            }
+
+            isPastingAdjustments = false
+            onRequestRefresh()
+            val msg =
+                when {
+                    failureCount == 0 -> "Pasted adjustments to $successCount image(s)."
+                    successCount == 0 -> "Paste failed."
+                    else -> "Pasted to $successCount image(s), $failureCount failed."
+                }
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -520,7 +610,7 @@ internal fun GalleryScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            val gridBottomPadding = if (selectedIds.isNotEmpty()) 112.dp else 16.dp
+            val gridBottomPadding = if (selectedIds.isNotEmpty()) 176.dp else 16.dp
 
             Column(modifier = Modifier.fillMaxSize()) {
                 if (items.isEmpty()) {
@@ -587,88 +677,129 @@ internal fun GalleryScreen(
             }
 
             if (selectedIds.isNotEmpty()) {
-                HorizontalFloatingToolbar(
-                    expanded = true,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 24.dp)
-                        .padding(horizontal = 16.dp),
-                    colors = FloatingToolbarDefaults.standardFloatingToolbarColors(
-                        toolbarContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        toolbarContentColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    floatingActionButton = {
-                        FloatingToolbarDefaults.StandardFloatingActionButton(
-                            onClick = {
-                                if (!isBulkExporting) {
-                                    startBulkExport(selectedIds.toList())
-                                }
-                            },
-                            containerColor =
-                                if (isBulkExporting) MaterialTheme.colorScheme.surfaceContainerHighest
-                                else MaterialTheme.colorScheme.primaryContainer,
-                            contentColor =
-                                if (isBulkExporting) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                                else MaterialTheme.colorScheme.onPrimaryContainer
+                Column(
+                    modifier =
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 24.dp)
+                            .padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        shape = RoundedCornerShape(28.dp),
+                        tonalElevation = 0.dp
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Filled.Download, contentDescription = "Export Selection")
+                            if (selectedIds.size == 1) {
+                                IconButton(
+                                    enabled = !isBulkExporting && !isPastingAdjustments,
+                                    onClick = {
+                                        val id = selectedIds.first()
+                                        copiedAdjustmentsJson = storage.loadAdjustments(id)
+                                        Toast.makeText(context, "Copied adjustments", Toast.LENGTH_SHORT).show()
+                                    }
+                                ) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy adjustments")
+                                }
+                            }
+
+                            IconButton(
+                                enabled = !isBulkExporting && !isPastingAdjustments && copiedAdjustmentsJson != null,
+                                onClick = {
+                                    val json = copiedAdjustmentsJson ?: return@IconButton
+                                    startPasteAdjustments(selectedIds.toList(), json)
+                                }
+                            ) {
+                                Icon(Icons.Default.ContentPaste, contentDescription = "Paste adjustments")
+                            }
                         }
                     }
-                ) {
-                    IconButton(onClick = { selectedIds = emptySet() }) {
-                        Icon(Icons.Default.Close, contentDescription = "Clear selection")
-                    }
 
-                    Text(
-                        text = "${selectedIds.size} selected",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
-
-                    VerticalDivider(
-                        modifier = Modifier
-                            .height(16.dp)
-                            .padding(horizontal = 8.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant
-                    )
-
-                    IconButton(
-                        enabled = !isBulkExporting,
-                        onClick = {
-                            val next = when (uniformRating) {
-                                null -> 1
-                                5 -> 0
-                                else -> (uniformRating + 1).coerceIn(0, 5)
+                    HorizontalFloatingToolbar(
+                        expanded = true,
+                        colors = FloatingToolbarDefaults.standardFloatingToolbarColors(
+                            toolbarContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            toolbarContentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        floatingActionButton = {
+                            FloatingToolbarDefaults.StandardFloatingActionButton(
+                                onClick = {
+                                    if (!isBulkExporting) {
+                                        startBulkExport(selectedIds.toList())
+                                    }
+                                },
+                                containerColor =
+                                    if (isBulkExporting) MaterialTheme.colorScheme.surfaceContainerHighest
+                                    else MaterialTheme.colorScheme.primaryContainer,
+                                contentColor =
+                                    if (isBulkExporting) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                    else MaterialTheme.colorScheme.onPrimaryContainer
+                            ) {
+                                Icon(Icons.Filled.Download, contentDescription = "Export Selection")
                             }
-                            onRatingChangeMany(selectedIds.toList(), next)
-                        },
-                        colors = IconButtonDefaults.iconButtonColors(
-                            contentColor =
-                                if ((uniformRating ?: 0) > 0) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        }
                     ) {
-                        Icon(
-                            imageVector = if ((uniformRating ?: 0) > 0) Icons.Default.Star else Icons.Default.StarBorder,
-                            contentDescription = "Cycle rating"
+                        IconButton(onClick = { selectedIds = emptySet() }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear selection")
+                        }
+
+                        Text(
+                            text = "${selectedIds.size} selected",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 4.dp)
                         )
-                    }
 
-                    IconButton(
-                        enabled = !isBulkExporting,
-                        onClick = { showDeleteDialog = true }
-                    ) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete selection")
-                    }
+                        VerticalDivider(
+                            modifier = Modifier
+                                .height(16.dp)
+                                .padding(horizontal = 8.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant
+                        )
 
-                    if (selectedIds.size == 1) {
                         IconButton(
                             enabled = !isBulkExporting,
-                            onClick = { showSelectionInfo = true }
+                            onClick = {
+                                val next = when (uniformRating) {
+                                    null -> 1
+                                    5 -> 0
+                                    else -> (uniformRating + 1).coerceIn(0, 5)
+                                }
+                                onRatingChangeMany(selectedIds.toList(), next)
+                            },
+                            colors = IconButtonDefaults.iconButtonColors(
+                                contentColor =
+                                    if ((uniformRating ?: 0) > 0) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         ) {
-                            Icon(Icons.Default.Info, contentDescription = "Selection info")
+                            Icon(
+                                imageVector = if ((uniformRating ?: 0) > 0) Icons.Default.Star else Icons.Default.StarBorder,
+                                contentDescription = "Cycle rating"
+                            )
+                        }
+
+                        IconButton(
+                            enabled = !isBulkExporting && !isPastingAdjustments,
+                            onClick = { showDeleteDialog = true }
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete selection")
+                        }
+
+                        if (selectedIds.size == 1) {
+                            IconButton(
+                                enabled = !isBulkExporting && !isPastingAdjustments,
+                                onClick = { showSelectionInfo = true }
+                            ) {
+                                Icon(Icons.Default.Info, contentDescription = "Selection info")
+                            }
                         }
                     }
                 }
