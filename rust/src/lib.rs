@@ -28,6 +28,7 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::AddAssign;
+use std::panic;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once, OnceLock};
@@ -925,6 +926,14 @@ fn clamp_to_u8(value: f32) -> u8 {
     } else {
         value.clamp(0.0, 255.0).round() as u8
     }
+}
+
+fn try_alloc_vec<T: Clone>(len: usize, default: T) -> Result<Vec<T>> {
+    let mut vec: Vec<T> = Vec::new();
+    vec.try_reserve_exact(len)
+        .context("Out of memory during allocation")?;
+    vec.resize(len, default);
+    Ok(vec)
 }
 
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
@@ -2066,7 +2075,23 @@ fn rotate_about_center_rgba32f(image: &LinearImage, rotation_degrees: f32) -> Li
     let sin_a = rad.sin();
 
     let src = image.as_raw();
-    let mut out = vec![0.0f32; (width as usize) * (height as usize) * 4];
+    let len = match (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|v| v.checked_mul(4))
+    {
+        Some(v) => v,
+        None => {
+            error!("Rotation buffer size overflow for {}x{}", width, height);
+            return image.clone();
+        }
+    };
+    let mut out = match try_alloc_vec(len, 0.0f32) {
+        Ok(v) => v,
+        Err(err) => {
+            error!("OOM during rotation: {}", err);
+            return image.clone();
+        }
+    };
 
     fn get_pixel(src: &[f32], width: u32, x: u32, y: u32) -> [f32; 4] {
         let idx = ((y as usize) * (width as usize) + (x as usize)) * 4;
@@ -2253,7 +2278,11 @@ fn render_linear_with_payload(
     let linear = linear_buffer.as_raw();
     debug_assert_eq!(linear.len(), (width as usize) * (height as usize) * 4);
 
-    let mut rgb = vec![0u8; (width as usize) * (height as usize) * 3];
+    let len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|v| v.checked_mul(3))
+        .context("RGB buffer size overflow")?;
+    let mut rgb = try_alloc_vec(len, 0u8)?;
 
     for (idx, out) in rgb.chunks_exact_mut(3).enumerate() {
         let base = idx * 4;
@@ -2400,7 +2429,11 @@ fn render_linear_roi_with_payload(
     let linear = linear_buffer.as_raw();
     debug_assert_eq!(linear.len(), (width as usize) * (height as usize) * 4);
 
-    let mut rgb = vec![0u8; (roi_w as usize) * (roi_h as usize) * 3];
+    let len = (roi_w as usize)
+        .checked_mul(roi_h as usize)
+        .and_then(|v| v.checked_mul(3))
+        .context("ROI RGB buffer size overflow")?;
+    let mut rgb = try_alloc_vec(len, 0u8)?;
 
     for y in 0..roi_h {
         let full_y = roi_y + y;
@@ -2946,26 +2979,46 @@ pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecode
     adjustments_json: JString,
 ) -> jbyteArray {
     ensure_logger();
-    let adjustments = read_adjustments_json(&mut env, adjustments_json);
-    let session = match get_session(handle) {
-        Some(s) => s,
-        None => {
-            error!("Invalid session handle: {}", handle);
-            return ptr::null_mut();
-        }
-    };
-    let session = match session.lock() {
-        Ok(s) => s,
-        Err(_) => {
-            error!("Session lock poisoned");
-            return ptr::null_mut();
-        }
-    };
+    let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        let adjustments = read_adjustments_json(&mut env, adjustments_json);
+        let session = match get_session(handle) {
+            Some(s) => s,
+            None => {
+                error!("Invalid session handle: {}", handle);
+                return ptr::null_mut();
+            }
+        };
+        let session = match session.lock() {
+            Ok(s) => s,
+            Err(_) => {
+                error!("Session lock poisoned");
+                return ptr::null_mut();
+            }
+        };
 
-    match render_raw(&session.raw_bytes, adjustments.as_deref(), false, None, None) {
-        Ok(payload) => make_byte_array(&env, &payload),
-        Err(err) => {
-            error!("Failed to render full-resolution image: {}", err);
+        match render_raw(&session.raw_bytes, adjustments.as_deref(), false, None, None) {
+            Ok(payload) => make_byte_array(&env, &payload),
+            Err(err) => {
+                error!("Failed to render full-resolution image: {}", err);
+                if err.to_string().contains("Out of memory") {
+                    let _ = env.throw_new(
+                        "java/lang/OutOfMemoryError",
+                        "Native heap limit exceeded during export",
+                    );
+                }
+                ptr::null_mut()
+            }
+        }
+    }));
+
+    match result {
+        Ok(byte_array) => byte_array,
+        Err(_) => {
+            error!("Native panic caught in decodeFullResFromSession (likely OOM)");
+            let _ = env.throw_new(
+                "java/lang/OutOfMemoryError",
+                "Native heap limit exceeded during export",
+            );
             ptr::null_mut()
         }
     }
@@ -3055,17 +3108,37 @@ pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecode
     adjustments_json: JString,
 ) -> jbyteArray {
     ensure_logger();
-    let bytes = match convert_raw_array(&env, raw_data) {
-        Some(b) => b,
-        None => return ptr::null_mut(),
-    };
+    let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        let bytes = match convert_raw_array(&env, raw_data) {
+            Some(b) => b,
+            None => return ptr::null_mut(),
+        };
 
-    let adjustments = read_adjustments_json(&mut env, adjustments_json);
+        let adjustments = read_adjustments_json(&mut env, adjustments_json);
 
-    match render_raw(&bytes, adjustments.as_deref(), false, None, None) {
-        Ok(payload) => make_byte_array(&env, &payload),
-        Err(err) => {
-            error!("Failed to render full-resolution image: {}", err);
+        match render_raw(&bytes, adjustments.as_deref(), false, None, None) {
+            Ok(payload) => make_byte_array(&env, &payload),
+            Err(err) => {
+                error!("Failed to render full-resolution image: {}", err);
+                if err.to_string().contains("Out of memory") {
+                    let _ = env.throw_new(
+                        "java/lang/OutOfMemoryError",
+                        "Native heap limit exceeded during export",
+                    );
+                }
+                ptr::null_mut()
+            }
+        }
+    }));
+
+    match result {
+        Ok(byte_array) => byte_array,
+        Err(_) => {
+            error!("Native panic caught in decodeFullRes (likely OOM)");
+            let _ = env.throw_new(
+                "java/lang/OutOfMemoryError",
+                "Native heap limit exceeded during export",
+            );
             ptr::null_mut()
         }
     }
