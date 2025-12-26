@@ -1465,6 +1465,11 @@ fn generate_mask_bitmap(sub_masks: &[SubMaskPayload], width: u32, height: u32) -
                     apply_submask_bitmap(&mut mask, &bitmap, sub_mask.mode);
                 }
             }
+            "ai-scene" => {
+                if let Some(bitmap) = generate_ai_subject_mask(&sub_mask.parameters, width, height) {
+                    apply_submask_bitmap(&mut mask, &bitmap, sub_mask.mode);
+                }
+            }
             _ => {}
         }
     }

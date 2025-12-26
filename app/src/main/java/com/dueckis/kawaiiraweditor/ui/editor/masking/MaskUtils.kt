@@ -18,6 +18,8 @@ internal fun newSubMaskState(id: String, mode: SubMaskMode, type: SubMaskType): 
             SubMaskState(id = id, type = type.id, mode = mode, radial = RadialMaskParametersState())
         SubMaskType.AiSubject ->
             SubMaskState(id = id, type = type.id, mode = mode, aiSubject = AiSubjectMaskParametersState())
+        SubMaskType.AiScene ->
+            SubMaskState(id = id, type = type.id, mode = mode, aiSubject = AiSubjectMaskParametersState())
     }
 }
 

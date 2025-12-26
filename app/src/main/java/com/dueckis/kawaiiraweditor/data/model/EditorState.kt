@@ -370,6 +370,7 @@ internal enum class SubMaskType(val id: String) {
     Linear("linear"),
     Radial("radial"),
     AiSubject("ai-subject"),
+    AiScene("ai-scene"),
 }
 
 internal enum class MaskTapMode {
@@ -570,6 +571,11 @@ internal fun SubMaskState.toJsonObject(): JSONObject {
                 }
 
                 SubMaskType.AiSubject.id -> JSONObject().apply {
+                    aiSubject.maskDataBase64?.let { put("maskDataBase64", it) }
+                    put("softness", aiSubject.softness.coerceIn(0f, 1f))
+                }
+
+                SubMaskType.AiScene.id -> JSONObject().apply {
                     aiSubject.maskDataBase64?.let { put("maskDataBase64", it) }
                     put("softness", aiSubject.softness.coerceIn(0f, 1f))
                 }
@@ -847,6 +853,26 @@ internal fun buildMaskOverlayBitmap(
             }
 
             SubMaskType.AiSubject.id -> {
+                val dataUrl = sub.aiSubject.maskDataBase64 ?: return@forEach
+                val decoded = decodeMaskDataUrlToBitmap(dataUrl) ?: return@forEach
+                val scaled = if (decoded.width != width || decoded.height != height) {
+                    Bitmap.createScaledBitmap(decoded, width, height, true)
+                } else {
+                    decoded
+                }
+                val pixels = IntArray(width * height)
+                scaled.getPixels(pixels, 0, width, 0, 0, width, height)
+                val maskU8 = IntArray(width * height) { i -> (pixels[i] shr 16) and 0xFF }
+                val radius = (sub.aiSubject.softness.coerceIn(0f, 1f) * 10f).roundToInt()
+                val softened = if (radius >= 1) boxBlurU8(maskU8, radius) else maskU8
+                for (i in softened.indices) {
+                    val v = softened[i]
+                    if (v == 0) continue
+                    plotAndApply(sub.mode, i, v)
+                }
+            }
+
+            SubMaskType.AiScene.id -> {
                 val dataUrl = sub.aiSubject.maskDataBase64 ?: return@forEach
                 val decoded = decodeMaskDataUrlToBitmap(dataUrl) ?: return@forEach
                 val scaled = if (decoded.width != width || decoded.height != height) {

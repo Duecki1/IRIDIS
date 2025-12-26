@@ -50,6 +50,13 @@ class ClipAutoTagger(appContext: Context) {
     @Volatile private var cachedCandidates: List<String>? = null
     @Volatile private var cachedTokenIds: LongArray? = null
     @Volatile private var cachedAttentionMask: LongArray? = null
+    private val customTokenCacheLock = Any()
+    private val customTokenCache: LinkedHashMap<String, Pair<LongArray, LongArray>> =
+        object : LinkedHashMap<String, Pair<LongArray, LongArray>>(8, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<LongArray, LongArray>>?): Boolean {
+                return size > 6
+            }
+        }
     private val modelMutex = Mutex()
     private val tokenizerMutex = Mutex()
 
@@ -158,6 +165,71 @@ class ClipAutoTagger(appContext: Context) {
         }
     }
 
+    suspend fun scoreCandidates(
+        previewBitmap: Bitmap,
+        candidates: List<String>,
+        onProgress: ((Float) -> Unit)? = null
+    ): List<Pair<String, Float>> = withContext(Dispatchers.Default) {
+        if (candidates.isEmpty()) return@withContext emptyList()
+
+        var lastProgress = 0f
+        fun setProgress(p: Float) {
+            val clamped = p.coerceIn(0f, 1f)
+            if (clamped <= lastProgress) return
+            lastProgress = clamped
+            onProgress?.invoke(clamped)
+        }
+
+        setProgress(0.05f)
+        val ortSession = ensureSession(onProgress = { dp -> setProgress(0.05f + 0.45f * dp.coerceIn(0f, 1f)) })
+        setProgress(0.50f)
+
+        val (tokenIds, attentionMask) = ensureTokenizedCandidates(candidates, onProgress = { p -> setProgress(0.50f + 0.30f * p.coerceIn(0f, 1f)) })
+        setProgress(0.80f)
+
+        val imageInput = preprocessClipImage(previewBitmap)
+        setProgress(0.86f)
+
+        val seqLen = CLIP_MAX_TOKENS
+        val inputNames = ortSession.inputNames.toList()
+        val idsName =
+            inputNames.firstOrNull { it.contains("input", ignoreCase = true) && it.contains("id", ignoreCase = true) }
+                ?: inputNames.firstOrNull { it.contains("id", ignoreCase = true) }
+                ?: inputNames.first()
+        val maskName =
+            inputNames.firstOrNull { it.contains("mask", ignoreCase = true) || it.contains("attention", ignoreCase = true) }
+                ?: inputNames.firstOrNull { it.contains("attn", ignoreCase = true) }
+                ?: inputNames.last()
+        val imageName =
+            inputNames.firstOrNull { it.contains("pixel", ignoreCase = true) || it.contains("image", ignoreCase = true) }
+                ?: inputNames.firstOrNull { it != idsName && it != maskName }
+                ?: inputNames.first()
+
+        val idsTensor =
+            OnnxTensor.createTensor(env(), LongBuffer.wrap(tokenIds), longArrayOf(candidates.size.toLong(), seqLen.toLong()))
+        val maskTensor =
+            OnnxTensor.createTensor(env(), LongBuffer.wrap(attentionMask), longArrayOf(candidates.size.toLong(), seqLen.toLong()))
+        val imageTensor = OnnxTensor.createTensor(env(), FloatBuffer.wrap(imageInput), longArrayOf(1L, 3L, 224L, 224L))
+
+        idsTensor.use { ids ->
+            maskTensor.use { mask ->
+                imageTensor.use { image ->
+                    val inputs = mapOf(idsName to ids, imageName to image, maskName to mask)
+                    ortSession.run(inputs).use { results ->
+                        val output = results[0] as OnnxTensor
+                        val fb = output.floatBuffer
+                        val logits = FloatArray(fb.remaining()).also { fb.get(it) }
+                        val probs = softmax(logits)
+                        setProgress(0.98f)
+                        val scored = candidates.mapIndexedNotNull { idx, text -> probs.getOrNull(idx)?.let { text to it } }
+                        setProgress(1f)
+                        scored.sortedByDescending { it.second }
+                    }
+                }
+            }
+        }
+    }
+
     private fun env(): OrtEnvironment = env ?: synchronized(lock) {
         env ?: OrtEnvironment.getEnvironment().also { env = it }
     }
@@ -194,9 +266,19 @@ class ClipAutoTagger(appContext: Context) {
         onProgress: ((Float) -> Unit)? = null
     ): Pair<LongArray, LongArray> =
         withContext(Dispatchers.IO) {
-            val idsExisting = cachedTokenIds
-            val maskExisting = cachedAttentionMask
-            if (idsExisting != null && maskExisting != null) return@withContext idsExisting to maskExisting
+            val mainCandidates = cachedCandidates
+            val isMainCandidateList = mainCandidates != null && candidates === mainCandidates
+            if (isMainCandidateList) {
+                val idsExisting = cachedTokenIds
+                val maskExisting = cachedAttentionMask
+                if (idsExisting != null && maskExisting != null) return@withContext idsExisting to maskExisting
+            } else {
+                val key = candidatesCacheKey(candidates)
+                synchronized(customTokenCacheLock) {
+                    val cached = customTokenCache[key]
+                    if (cached != null) return@withContext cached
+                }
+            }
 
             val tokenizer = ensureTokenizer(onProgress = onProgress)
             val count = candidates.size
@@ -213,11 +295,28 @@ class ClipAutoTagger(appContext: Context) {
                     onProgress?.invoke(idx.toFloat() / count.toFloat())
                 }
             }
-            cachedTokenIds = ids
-            cachedAttentionMask = mask
+            if (isMainCandidateList) {
+                cachedTokenIds = ids
+                cachedAttentionMask = mask
+            } else {
+                val key = candidatesCacheKey(candidates)
+                synchronized(customTokenCacheLock) {
+                    customTokenCache[key] = ids to mask
+                }
+            }
             onProgress?.invoke(1f)
             ids to mask
         }
+
+    private fun candidatesCacheKey(candidates: List<String>): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        for (c in candidates) {
+            val normalized = c.trim().lowercase(Locale.US)
+            digest.update(normalized.toByteArray(Charsets.UTF_8))
+            digest.update(0)
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
 
     private suspend fun ensureTokenizer(onProgress: ((Float) -> Unit)? = null): ClipBpeTokenizer = tokenizerMutex.withLock {
         withContext(Dispatchers.IO) {

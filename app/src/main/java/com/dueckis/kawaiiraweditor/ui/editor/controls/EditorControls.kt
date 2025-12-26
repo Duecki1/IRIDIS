@@ -77,6 +77,7 @@ internal fun EditorControlsContent(
     histogramData: HistogramData?,
     masks: List<MaskState>,
     onMasksChange: (List<MaskState>) -> Unit,
+    onGenerateSceneMasks: () -> Unit,
     maskNumbers: MutableMap<String, Int>,
     selectedMaskId: String?,
     onSelectedMaskIdChange: (String?) -> Unit,
@@ -214,12 +215,25 @@ internal fun EditorControlsContent(
                     }
 
                     DropdownMenu(expanded = showCreateMenu, onDismissRequest = { showCreateMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Auto Scene Masks") },
+                            leadingIcon = { MaskIcon(SubMaskType.AiScene.id) },
+                            onClick = {
+                                showCreateMenu = false
+                                onMaskTapModeChange(MaskTapMode.None)
+                                onPaintingMaskChange(false)
+                                onGenerateSceneMasks()
+                            }
+                        )
+                        HorizontalDivider()
+
                         listOf(SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial).forEach { type ->
                             DropdownMenuItem(
                                 text = {
                                     Text(
                                         when (type) {
                                             SubMaskType.AiSubject -> "Select Subject"
+                                            SubMaskType.AiScene -> "Auto Scene"
                                             SubMaskType.Brush -> "Brush"
                                             SubMaskType.Linear -> "Linear Gradient"
                                             SubMaskType.Radial -> "Radial Gradient"
@@ -399,6 +413,7 @@ internal fun EditorControlsContent(
                                             "  " +
                                                 when (type) {
                                                     SubMaskType.AiSubject -> "Subject"
+                                                    SubMaskType.AiScene -> "Auto Scene"
                                                     SubMaskType.Brush -> "Brush"
                                                     SubMaskType.Linear -> "Gradient"
                                                     SubMaskType.Radial -> "Radial"

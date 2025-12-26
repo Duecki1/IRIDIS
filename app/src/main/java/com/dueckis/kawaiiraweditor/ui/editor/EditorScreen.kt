@@ -97,6 +97,7 @@ import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
 import com.dueckis.kawaiiraweditor.data.storage.ProjectStorage
 import com.dueckis.kawaiiraweditor.domain.HistogramData
 import com.dueckis.kawaiiraweditor.domain.HistogramUtils
+import com.dueckis.kawaiiraweditor.domain.ai.AiSceneMaskGenerator
 import com.dueckis.kawaiiraweditor.domain.ai.AiSubjectMaskGenerator
 import com.dueckis.kawaiiraweditor.domain.ai.NormalizedPoint
 import com.dueckis.kawaiiraweditor.domain.editor.EditorHistoryEntry
@@ -443,6 +444,23 @@ internal fun EditorScreen(
                             }
 
                             SubMaskType.AiSubject.id -> {
+                                val dataUrl = sub.aiSubject.maskDataBase64
+                                if (dataUrl.isNullOrBlank()) sub
+                                else {
+                                    val remapped =
+                                        remapAiMaskDataUrl(
+                                            dataUrl = dataUrl,
+                                            baseWidthPx = baseW,
+                                            baseHeightPx = baseH,
+                                            oldCrop = oldCrop,
+                                            deltaRotation = deltaRotation,
+                                            newCrop = newCrop
+                                        )
+                                    if (remapped == null) sub else sub.copy(aiSubject = sub.aiSubject.copy(maskDataBase64 = remapped))
+                                }
+                            }
+
+                            SubMaskType.AiScene.id -> {
                                 val dataUrl = sub.aiSubject.maskDataBase64
                                 if (dataUrl.isNullOrBlank()) sub
                                 else {
@@ -825,6 +843,19 @@ internal fun EditorScreen(
                                                 com.dueckis.kawaiiraweditor.data.model.AiSubjectMaskParametersState(
                                                     maskDataBase64 = paramsObj.optString("maskDataBase64").takeIf { it.isNotBlank() },
                                                     softness = paramsObj.optDouble("softness", 0.25).toFloat().coerceIn(0f, 1f)
+                                                )
+                                        )
+
+                                    SubMaskType.AiScene.id ->
+                                        SubMaskState(
+                                            id = subId,
+                                            type = SubMaskType.AiScene.id,
+                                            visible = visible,
+                                            mode = mode,
+                                            aiSubject =
+                                                com.dueckis.kawaiiraweditor.data.model.AiSubjectMaskParametersState(
+                                                    maskDataBase64 = paramsObj.optString("maskDataBase64").takeIf { it.isNotBlank() },
+                                                    softness = paramsObj.optDouble("softness", 0.18).toFloat().coerceIn(0f, 1f)
                                                 )
                                         )
 
@@ -1225,6 +1256,80 @@ internal fun EditorScreen(
     }
 
     val aiSubjectMaskGenerator = remember { AiSubjectMaskGenerator(context) }
+    val aiSceneMaskGenerator = remember { AiSceneMaskGenerator(context) }
+    val onGenerateSceneMasksRequested: () -> Unit = onGenerate@{
+        val bmp = editedBitmap
+        if (bmp == null) {
+            statusMessage = "No preview yet."
+            return@onGenerate
+        }
+        if (isGeneratingAiMask) return@onGenerate
+
+        coroutineScope.launch {
+            isGeneratingAiMask = true
+            errorMessage = null
+            statusMessage = "Generating auto masks…"
+
+            val results =
+                runCatching {
+                    aiSceneMaskGenerator.generateSceneMasks(bmp) { _, msg -> statusMessage = msg }
+                }.getOrNull().orEmpty()
+
+            if (results.isEmpty()) {
+                statusMessage = "No auto masks found."
+            } else {
+                val existingNames = masks.map { it.name }.toMutableSet()
+                fun uniqueName(base: String): String {
+                    var name = base
+                    var i = 2
+                    while (name in existingNames) {
+                        name = "$base $i"
+                        i++
+                    }
+                    existingNames += name
+                    return name
+                }
+
+                val newMasks =
+                    results.map { res ->
+                        val label =
+                            res.label.replaceFirstChar { ch -> if (ch.isLowerCase()) ch.titlecase(Locale.US) else ch.toString() }
+                        val maskId = UUID.randomUUID().toString()
+                        val subId = UUID.randomUUID().toString()
+                        MaskState(
+                            id = maskId,
+                            name = uniqueName(label),
+                            subMasks =
+                                listOf(
+                                    SubMaskState(
+                                        id = subId,
+                                        type = SubMaskType.AiScene.id,
+                                        mode = SubMaskMode.Additive,
+                                        aiSubject =
+                                            com.dueckis.kawaiiraweditor.data.model.AiSubjectMaskParametersState(
+                                                maskDataBase64 = res.maskDataUrl,
+                                                softness = 0.18f
+                                            )
+                                    )
+                                )
+                        )
+                    }
+
+                masks = masks + newMasks
+                val first = newMasks.firstOrNull()
+                if (first != null) {
+                    selectedMaskId = first.id
+                    selectedSubMaskId = first.subMasks.firstOrNull()?.id
+                }
+                showMaskOverlay = true
+                statusMessage = "Added ${newMasks.size} auto masks."
+            }
+
+            isGeneratingAiMask = false
+            delay(1500)
+            if (statusMessage == "Added ${results.size} auto masks." || statusMessage == "No auto masks found.") statusMessage = null
+        }
+    }
     val onLassoFinished: (List<MaskPoint>) -> Unit = onLasso@{ points ->
         val maskId = selectedMaskId ?: return@onLasso
         val subId = selectedSubMaskId ?: return@onLasso
@@ -1439,6 +1544,7 @@ internal fun EditorScreen(
                                         if (panelTab == EditorPanelTab.Masks && showMaskOverlay) showMaskOverlay = false
                                         masks = updated
                                     },
+                                    onGenerateSceneMasks = onGenerateSceneMasksRequested,
                                     maskNumbers = maskNumbers,
                                     selectedMaskId = selectedMaskId,
                                     onSelectedMaskIdChange = { selectedMaskId = it },
@@ -1719,6 +1825,7 @@ internal fun EditorScreen(
                                             if (panelTab == EditorPanelTab.Masks && showMaskOverlay) showMaskOverlay = false
                                             masks = updated
                                         },
+                                        onGenerateSceneMasks = onGenerateSceneMasksRequested,
                                         maskNumbers = maskNumbers,
                                         selectedMaskId = selectedMaskId,
                                         onSelectedMaskIdChange = { selectedMaskId = it },
