@@ -2234,21 +2234,23 @@ private fun EditorScreen(
                 }
             }
 
-            if (lowQualityPreviewEnabled && !isViewportRequest) {
-                // Stage 1: super-low quality (fast feedback while dragging).
-                val superLowBitmap = withContext(renderDispatcher) {
-                    val bytes = runCatching { LibRawDecoder.lowlowdecodeFromSession(handle, requestJson) }.getOrNull()
-                    bytes?.decodeToBitmap()
-                }
-                if (superLowBitmap != null) {
-                    updateBitmapForRequest(version = requestVersion, quality = 0, bitmap = superLowBitmap)
-                }
+            if (lowQualityPreviewEnabled) {
+                if (!isViewportRequest) {
+                    // Stage 1: super-low quality (fast feedback while dragging).
+                    val superLowBitmap = withContext(renderDispatcher) {
+                        val bytes = runCatching { LibRawDecoder.lowlowdecodeFromSession(handle, requestJson) }.getOrNull()
+                        bytes?.decodeToBitmap()
+                    }
+                    if (superLowBitmap != null) {
+                        updateBitmapForRequest(version = requestVersion, quality = 0, bitmap = superLowBitmap)
+                    }
 
-                // If the user is still moving the slider, keep updating the super-low preview only.
-                val maybeUpdatedAfterSuperLow = withTimeoutOrNull(60) { renderRequests.receive() }
-                if (maybeUpdatedAfterSuperLow != null) {
-                    currentRequest = maybeUpdatedAfterSuperLow
-                    continue
+                    // If the user is still moving the slider, keep updating the super-low preview only.
+                    val maybeUpdatedAfterSuperLow = withTimeoutOrNull(60) { renderRequests.receive() }
+                    if (maybeUpdatedAfterSuperLow != null) {
+                        currentRequest = maybeUpdatedAfterSuperLow
+                        continue
+                    }
                 }
 
                 // Stage 2: low quality (still fast, but clearer).
@@ -3365,11 +3367,11 @@ private fun EditorScreen(
     }
 }
 
-@Composable
-private fun EditorControlsContent(
-    panelTab: EditorPanelTab,
-    adjustments: AdjustmentState,
-    onAdjustmentsChange: (AdjustmentState) -> Unit,
+	@Composable
+	private fun EditorControlsContent(
+	    panelTab: EditorPanelTab,
+	    adjustments: AdjustmentState,
+	    onAdjustmentsChange: (AdjustmentState) -> Unit,
     onBeginEditInteraction: () -> Unit,
     onEndEditInteraction: () -> Unit,
     histogramData: HistogramData?,
@@ -3398,12 +3400,12 @@ private fun EditorControlsContent(
     cropBaseHeightPx: Int?,
     rotationDraft: Float?,
     onRotationDraftChange: (Float?) -> Unit,
-    isStraightenActive: Boolean,
-    onStraightenActiveChange: (Boolean) -> Unit
-) {
-    val maskTabsByMaskId = remember { mutableStateMapOf<String, Int>() }
+	    isStraightenActive: Boolean,
+	    onStraightenActiveChange: (Boolean) -> Unit
+	) {
+	    val maskTabsByMaskId = remember { mutableStateMapOf<String, Int>() }
 
-    when (panelTab) {
+	    when (panelTab) {
         EditorPanelTab.CropTransform -> {
             CropTransformControls(
                 adjustments = adjustments,
@@ -3449,46 +3451,15 @@ private fun EditorControlsContent(
             }
         }
 
-        EditorPanelTab.Color -> {
-            PanelSectionCard(
-                title = "Curves",
-                subtitle = "Tap to add points • Drag to adjust"
-            ) {
-                CurvesEditor(
-                    adjustments = adjustments,
-                    histogramData = histogramData,
-                    onAdjustmentsChange = onAdjustmentsChange,
-                    onBeginEditInteraction = onBeginEditInteraction,
-                    onEndEditInteraction = onEndEditInteraction
-                )
-            }
-
-            PanelSectionCard(
-                title = "Color Grading",
-                subtitle = "Shadows / Midtones / Highlights"
-            ) {
-                ColorGradingEditor(
-                    colorGrading = adjustments.colorGrading,
-                    onColorGradingChange = { updated ->
-                        onAdjustmentsChange(adjustments.copy(colorGrading = updated))
-                    },
-                    onBeginEditInteraction = onBeginEditInteraction,
-                    onEndEditInteraction = onEndEditInteraction
-                )
-            }
-
-            PanelSectionCard(
-                title = "Color Mixer",
-                subtitle = "Hue / Saturation / Luminance"
-            ) {
-                HslEditor(
-                    hsl = adjustments.hsl,
-                    onHslChange = { updated -> onAdjustmentsChange(adjustments.copy(hsl = updated)) },
-                    onBeginEditInteraction = onBeginEditInteraction,
-                    onEndEditInteraction = onEndEditInteraction
-                )
-            }
-        }
+	        EditorPanelTab.Color -> {
+	            ColorTabControls(
+	                adjustments = adjustments,
+	                histogramData = histogramData,
+	                onAdjustmentsChange = onAdjustmentsChange,
+	                onBeginEditInteraction = onBeginEditInteraction,
+	                onEndEditInteraction = onEndEditInteraction
+	            )
+	        }
 
         EditorPanelTab.Effects -> {
             PanelSectionCard(
@@ -3824,49 +3795,16 @@ private fun EditorControlsContent(
                 onShowMaskOverlayChange(newMask?.adjustments?.isNeutralForMask() == true)
             }
 
-            when (selectedMaskTab) {
-                1 -> {
-                    PanelSectionCard(
-                        title = "Curves",
-                        subtitle = "Tap to add points \u0007 Drag to adjust"
-                    ) {
-                        CurvesEditor(
-                            adjustments = selectedMask.adjustments,
-                            histogramData = histogramData,
-                            onAdjustmentsChange = ::updateSelectedMaskAdjustments,
-                            onBeginEditInteraction = onBeginEditInteraction,
-                            onEndEditInteraction = onEndEditInteraction
-                        )
-                    }
-
-                    PanelSectionCard(
-                        title = "Color Grading",
-                        subtitle = "Shadows / Midtones / Highlights"
-                    ) {
-                        ColorGradingEditor(
-                            colorGrading = selectedMask.adjustments.colorGrading,
-                            onColorGradingChange = { updated ->
-                                updateSelectedMaskAdjustments(selectedMask.adjustments.copy(colorGrading = updated))
-                            },
-                            onBeginEditInteraction = onBeginEditInteraction,
-                            onEndEditInteraction = onEndEditInteraction
-                        )
-                    }
-
-                    PanelSectionCard(
-                        title = "Color Mixer",
-                        subtitle = "Hue / Saturation / Luminance"
-                    ) {
-                        HslEditor(
-                            hsl = selectedMask.adjustments.hsl,
-                            onHslChange = { updated ->
-                                updateSelectedMaskAdjustments(selectedMask.adjustments.copy(hsl = updated))
-                            },
-                            onBeginEditInteraction = onBeginEditInteraction,
-                            onEndEditInteraction = onEndEditInteraction
-                        )
-                    }
-                }
+	            when (selectedMaskTab) {
+	                1 -> {
+	                    ColorTabControls(
+	                        adjustments = selectedMask.adjustments,
+	                        histogramData = histogramData,
+	                        onAdjustmentsChange = ::updateSelectedMaskAdjustments,
+	                        onBeginEditInteraction = onBeginEditInteraction,
+	                        onEndEditInteraction = onEndEditInteraction
+	                    )
+	                }
 
                 else -> {
                     PanelSectionCard(title = "Mask Adjustments", subtitle = "Edits inside this mask") {
@@ -4382,38 +4320,145 @@ private fun buildCurvePath(points: List<CurvePointState>, size: Size): Path {
         val end = map(p1)
         path.cubicTo(cp1.x, cp1.y, cp2.x, cp2.y, end.x, end.y)
     }
-    return path
-}
+	    return path
+	}
 
-@Composable
-private fun ColorGradingEditor(
-    colorGrading: ColorGradingState,
-    onColorGradingChange: (ColorGradingState) -> Unit,
-    onBeginEditInteraction: () -> Unit,
-    onEndEditInteraction: () -> Unit
-) {
-    val formatterInt: (Float) -> String = { it.roundToInt().toString() }
-    val isWide = LocalConfiguration.current.screenWidthDp >= 600
+	@Composable
+	private fun ColorTabControls(
+	    adjustments: AdjustmentState,
+	    histogramData: HistogramData?,
+	    onAdjustmentsChange: (AdjustmentState) -> Unit,
+	    onBeginEditInteraction: () -> Unit,
+	    onEndEditInteraction: () -> Unit
+	) {
+	    val isPhoneLayout = LocalConfiguration.current.screenWidthDp < 600
 
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val midWheelSize = if (isWide) 240.dp else minOf(maxWidth, 220.dp)
-        val sideWheelSize = minOf((maxWidth / 2) - 10.dp, if (isWide) 220.dp else 170.dp)
+	    if (isPhoneLayout) {
+	        Row(
+	            modifier = Modifier.fillMaxWidth(),
+	            horizontalArrangement = Arrangement.spacedBy(12.dp),
+	            verticalAlignment = Alignment.Top
+	        ) {
+	            PanelSectionCard(
+	                title = "Curves",
+	                subtitle = "Tap to add points • Drag to adjust",
+	                modifier = Modifier.weight(1f)
+	            ) {
+	                CurvesEditor(
+	                    adjustments = adjustments,
+	                    histogramData = histogramData,
+	                    onAdjustmentsChange = onAdjustmentsChange,
+	                    onBeginEditInteraction = onBeginEditInteraction,
+	                    onEndEditInteraction = onEndEditInteraction
+	                )
+	            }
 
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            ColorWheelControl(
-                label = "Midtones",
-                wheelSize = midWheelSize,
-                modifier = Modifier.fillMaxWidth(),
-                value = colorGrading.midtones,
-                defaultValue = HueSatLumState(),
-                onValueChange = { onColorGradingChange(colorGrading.copy(midtones = it)) },
-                onBeginEditInteraction = onBeginEditInteraction,
-                onEndEditInteraction = onEndEditInteraction
-            )
+	            PanelSectionCard(
+	                title = "Midtones",
+	                modifier = Modifier.weight(1f)
+	            ) {
+	                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+	                    val wheelSize = minOf(maxWidth, 170.dp)
+	                    ColorWheelControl(
+	                        label = "Midtones",
+	                        wheelSize = wheelSize,
+	                        modifier = Modifier.fillMaxWidth(),
+	                        value = adjustments.colorGrading.midtones,
+	                        defaultValue = HueSatLumState(),
+	                        onValueChange = { updated ->
+	                            onAdjustmentsChange(adjustments.copy(colorGrading = adjustments.colorGrading.copy(midtones = updated)))
+	                        },
+	                        onBeginEditInteraction = onBeginEditInteraction,
+	                        onEndEditInteraction = onEndEditInteraction
+	                    )
+	                }
+	            }
+	        }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+	        PanelSectionCard(
+	            title = "Color Grading",
+	            subtitle = "Shadows / Highlights"
+	        ) {
+	            ColorGradingEditor(
+	                colorGrading = adjustments.colorGrading,
+	                onColorGradingChange = { updated -> onAdjustmentsChange(adjustments.copy(colorGrading = updated)) },
+	                onBeginEditInteraction = onBeginEditInteraction,
+	                onEndEditInteraction = onEndEditInteraction,
+	                showMidtones = false
+	            )
+	        }
+	    } else {
+	        PanelSectionCard(
+	            title = "Curves",
+	            subtitle = "Tap to add points • Drag to adjust"
+	        ) {
+	            CurvesEditor(
+	                adjustments = adjustments,
+	                histogramData = histogramData,
+	                onAdjustmentsChange = onAdjustmentsChange,
+	                onBeginEditInteraction = onBeginEditInteraction,
+	                onEndEditInteraction = onEndEditInteraction
+	            )
+	        }
+
+	        PanelSectionCard(
+	            title = "Color Grading",
+	            subtitle = "Shadows / Midtones / Highlights"
+	        ) {
+	            ColorGradingEditor(
+	                colorGrading = adjustments.colorGrading,
+	                onColorGradingChange = { updated -> onAdjustmentsChange(adjustments.copy(colorGrading = updated)) },
+	                onBeginEditInteraction = onBeginEditInteraction,
+	                onEndEditInteraction = onEndEditInteraction
+	            )
+	        }
+	    }
+
+	    PanelSectionCard(
+	        title = "Color Mixer",
+	        subtitle = "Hue / Saturation / Luminance"
+	    ) {
+	        HslEditor(
+	            hsl = adjustments.hsl,
+	            onHslChange = { updated -> onAdjustmentsChange(adjustments.copy(hsl = updated)) },
+	            onBeginEditInteraction = onBeginEditInteraction,
+	            onEndEditInteraction = onEndEditInteraction
+	        )
+	    }
+	}
+
+	@Composable
+	private fun ColorGradingEditor(
+	    colorGrading: ColorGradingState,
+	    onColorGradingChange: (ColorGradingState) -> Unit,
+	    onBeginEditInteraction: () -> Unit,
+	    onEndEditInteraction: () -> Unit,
+	    showMidtones: Boolean = true
+	) {
+	    val formatterInt: (Float) -> String = { it.roundToInt().toString() }
+	    val isWide = LocalConfiguration.current.screenWidthDp >= 600
+
+	    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+	        val midWheelSize = if (isWide) 240.dp else minOf(maxWidth, 220.dp)
+	        val sideWheelSize = minOf((maxWidth / 2) - 10.dp, if (isWide) 220.dp else 170.dp)
+
+	        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+	            if (showMidtones) {
+	                ColorWheelControl(
+	                    label = "Midtones",
+	                    wheelSize = midWheelSize,
+	                    modifier = Modifier.fillMaxWidth(),
+	                    value = colorGrading.midtones,
+	                    defaultValue = HueSatLumState(),
+	                    onValueChange = { onColorGradingChange(colorGrading.copy(midtones = it)) },
+	                    onBeginEditInteraction = onBeginEditInteraction,
+	                    onEndEditInteraction = onEndEditInteraction
+	                )
+	            }
+
+	            Row(
+	                modifier = Modifier.fillMaxWidth(),
+	                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 ColorWheelControl(
                     label = "Shadows",
@@ -4463,11 +4508,11 @@ private fun ColorGradingEditor(
     }
 }
 
-@Composable
-private fun ColorWheelControl(
-    label: String,
-    wheelSize: Dp,
-    modifier: Modifier = Modifier,
+	@Composable
+	private fun ColorWheelControl(
+	    label: String,
+	    wheelSize: Dp,
+	    modifier: Modifier = Modifier,
     value: HueSatLumState,
     defaultValue: HueSatLumState,
     onValueChange: (HueSatLumState) -> Unit,
@@ -4479,34 +4524,31 @@ private fun ColorWheelControl(
     val latestOnValueChange by rememberUpdatedState(onValueChange)
     val handleHitRadiusPx = with(LocalDensity.current) { 28.dp.toPx() }
 
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(text = label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "H ${value.hue.roundToInt()}  S ${value.saturation.roundToInt()}  L ${value.luminance.roundToInt()}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                TextButton(
-                    onClick = {
-                        onBeginEditInteraction()
-                        onValueChange(defaultValue)
-                        onEndEditInteraction()
-                    },
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Text("Reset")
-                }
-            }
-        }
+	    Column(
+	        modifier = modifier,
+	        verticalArrangement = Arrangement.spacedBy(8.dp)
+	    ) {
+	        Column(
+	            modifier = Modifier.fillMaxWidth(),
+	            verticalArrangement = Arrangement.spacedBy(2.dp)
+	        ) {
+	            Text(text = label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+	            Text(
+	                text = "H ${value.hue.roundToInt()}  S ${value.saturation.roundToInt()}  L ${value.luminance.roundToInt()}",
+	                style = MaterialTheme.typography.labelMedium,
+	                color = MaterialTheme.colorScheme.onSurfaceVariant
+	            )
+	            TextButton(
+	                onClick = {
+	                    onBeginEditInteraction()
+	                    onValueChange(defaultValue)
+	                    onEndEditInteraction()
+	                },
+	                contentPadding = PaddingValues(0.dp)
+	            ) {
+	                Text("Reset")
+	            }
+	        }
 
         Box(
             modifier = Modifier
@@ -4528,12 +4570,12 @@ private fun ColorWheelControl(
                         var hue = (kotlin.math.atan2(dy, dx) * 180.0 / kotlin.math.PI).toFloat()
                         if (hue < 0f) hue += 360f
                         return latestValue.copy(hue = hue, saturation = sat)
-                    }
+	}
 
-                    fun handleOffsetFor(v: HueSatLumState): Offset {
-                        val w = size.width.toFloat().coerceAtLeast(1f)
-                        val h = size.height.toFloat().coerceAtLeast(1f)
-                        val cx = w / 2f
+	                    fun handleOffsetFor(v: HueSatLumState): Offset {
+	                        val w = size.width.toFloat().coerceAtLeast(1f)
+	                        val h = size.height.toFloat().coerceAtLeast(1f)
+	                        val cx = w / 2f
                         val cy = h / 2f
                         val radius = kotlin.math.min(cx, cy)
                         val angleRad = (v.hue / 180f) * kotlin.math.PI.toFloat()

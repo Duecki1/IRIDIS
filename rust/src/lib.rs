@@ -2856,12 +2856,16 @@ fn render_from_session(
     let effective_kind;
     let linear = if payload.preview.use_zoom {
         let requested = payload.preview.max_dimension;
-        let min_dim = 1280;
         let max_dim = 2304;
-        let step = 128;
+        let stage_cap = match kind {
+            PreviewKind::SuperLow => 64,
+            PreviewKind::Low => 256,
+            PreviewKind::Preview | PreviewKind::Zoom => max_dim,
+        };
+        let (min_dim, step) = if stage_cap <= 256 { (64, 64) } else { (1280, 128) };
         let default_dim = max_dim;
-        let clamped = requested.unwrap_or(default_dim).clamp(min_dim, max_dim);
-        let max_dim = (clamped / step) * step;
+        let clamped = requested.unwrap_or(default_dim).clamp(min_dim, max_dim).min(stage_cap);
+        let max_dim = ((clamped / step) * step).max(min_dim);
         effective_kind = PreviewKind::Zoom;
         session.zoom_linear_for(max_dim, max_dim)?
     } else {

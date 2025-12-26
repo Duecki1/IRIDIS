@@ -193,24 +193,24 @@ internal fun CropTransformControls(
                 Icon(Icons.Filled.Refresh, contentDescription = "Reset")
             }
         }
-    ) {
-        Text(
-            text = "Aspect Ratio",
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface
-        )
+	    ) {
+	        val isOrientationToggleDisabled =
+	            adjustments.aspectRatio == null || adjustments.aspectRatio == 1f || activePreset?.ratio == 0f
+	        Row(
+	            modifier = Modifier.fillMaxWidth(),
+	            horizontalArrangement = Arrangement.SpaceBetween,
+	            verticalAlignment = Alignment.CenterVertically
+	        ) {
+	            Text(
+	                text = "Aspect Ratio",
+	                style = MaterialTheme.typography.titleSmall,
+	                color = MaterialTheme.colorScheme.onSurface
+	            )
 
-        val isOrientationToggleDisabled =
-            adjustments.aspectRatio == null || adjustments.aspectRatio == 1f || activePreset?.ratio == 0f
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(
-                enabled = !isOrientationToggleDisabled,
-                onClick = {
-                    val current = adjustments.aspectRatio ?: return@IconButton
+	            IconButton(
+	                enabled = !isOrientationToggleDisabled,
+	                onClick = {
+	                    val current = adjustments.aspectRatio ?: return@IconButton
                     onAdjustmentsChange(requestAutoCrop(adjustments.copy(aspectRatio = 1f / current, crop = null)))
                 }
             ) {
