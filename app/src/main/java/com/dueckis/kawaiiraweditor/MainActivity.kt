@@ -3477,15 +3477,75 @@ private fun EditorScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("Masks", style = MaterialTheme.typography.titleMedium)
-                IconButton(
-                    enabled = masks.firstOrNull { it.id == selectedMaskId }?.adjustments?.isNeutralForMask() == true,
-                    onClick = { onShowMaskOverlayChange(!showMaskOverlay) }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = if (showMaskOverlay) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
-                        contentDescription = "Toggle Overlay",
-                        tint = if (showMaskOverlay) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    var showCreateMenu by remember { mutableStateOf(false) }
+                    FilledTonalButton(
+                        onClick = { showCreateMenu = true },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Add Mask", style = MaterialTheme.typography.labelSmall)
+                    }
+
+                    DropdownMenu(
+                        expanded = showCreateMenu,
+                        onDismissRequest = { showCreateMenu = false }
+                    ) {
+                        listOf(
+                            SubMaskType.AiSubject,
+                            SubMaskType.Brush,
+                            SubMaskType.Linear,
+                            SubMaskType.Radial
+                        ).forEach { type ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        when (type) {
+                                            SubMaskType.AiSubject -> "Select Subject"
+                                            SubMaskType.Brush -> "Brush"
+                                            SubMaskType.Linear -> "Linear Gradient"
+                                            SubMaskType.Radial -> "Radial Gradient"
+                                        }
+                                    )
+                                },
+                                leadingIcon = { MaskIcon(type.id) },
+                                onClick = {
+                                    showCreateMenu = false
+                                    onMaskTapModeChange(MaskTapMode.None)
+                                    val newMaskId = UUID.randomUUID().toString()
+                                    val newSubId = UUID.randomUUID().toString()
+                                    val newMask = MaskState(
+                                        id = newMaskId,
+                                        name = "Mask ${masks.size + 1}",
+                                        subMasks = listOf(newSubMaskState(newSubId, SubMaskMode.Additive, type))
+                                    )
+                                    assignMaskNumber(newMaskId)
+                                    onMasksChange(masks + newMask)
+                                    onSelectedMaskIdChange(newMaskId)
+                                    onSelectedSubMaskIdChange(newSubId)
+                                    onPaintingMaskChange(type == SubMaskType.Brush || type == SubMaskType.AiSubject)
+                                    onRequestMaskOverlayBlink(null)
+                                }
+                            )
+                        }
+                    }
+
+                    IconButton(
+                        enabled = masks.any { it.id == selectedMaskId },
+                        onClick = { onShowMaskOverlayChange(!showMaskOverlay) }
+                    ) {
+                        Icon(
+                            imageVector = if (showMaskOverlay) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
+                            contentDescription = "Toggle Overlay",
+                            tint = if (showMaskOverlay) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
@@ -3493,64 +3553,6 @@ private fun EditorScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(vertical = 8.dp)
             ) {
-                item {
-                    var showCreateMenu by remember { mutableStateOf(false) }
-                    Card(
-                        onClick = { showCreateMenu = true },
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        modifier = Modifier.size(width = 50.dp, height = 72.dp)
-                    ) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Add, contentDescription = "New Mask")
-                            DropdownMenu(
-                                expanded = showCreateMenu,
-                                onDismissRequest = { showCreateMenu = false }
-                            ) {
-                                listOf(
-                                    SubMaskType.AiSubject,
-                                    SubMaskType.Brush,
-                                    SubMaskType.Linear,
-                                    SubMaskType.Radial
-                                ).forEach { type ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                when (type) {
-                                                    SubMaskType.AiSubject -> "Select Subject"
-                                                    SubMaskType.Brush -> "Brush"
-                                                    SubMaskType.Linear -> "Linear Gradient"
-                                                    SubMaskType.Radial -> "Radial Gradient"
-                                                }
-                                            )
-                                        },
-                                        leadingIcon = { MaskIcon(type.id) },
-                                        onClick = {
-                                            showCreateMenu = false
-                                            onMaskTapModeChange(MaskTapMode.None)
-                                            val newMaskId = UUID.randomUUID().toString()
-                                            val newSubId = UUID.randomUUID().toString()
-                                            val newMask = MaskState(
-                                                id = newMaskId,
-                                                name = "Mask ${masks.size + 1}",
-                                                subMasks = listOf(newSubMaskState(newSubId, SubMaskMode.Additive, type))
-                                            )
-                                            assignMaskNumber(newMaskId)
-                                            onMasksChange(masks + newMask)
-                                            onSelectedMaskIdChange(newMaskId)
-                                            onSelectedSubMaskIdChange(newSubId)
-                                            onPaintingMaskChange(type == SubMaskType.Brush || type == SubMaskType.AiSubject)
-                                            onRequestMaskOverlayBlink(null)
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
                 items(masks.size) { index ->
                     val mask = masks[index]
                     val isSelected = mask.id == selectedMaskId
@@ -3888,7 +3890,7 @@ private fun EditorScreen(
                         Switch(
                             checked = showMaskOverlay,
                             onCheckedChange = { checked -> onShowMaskOverlayChange(checked) },
-                            enabled = selectedMask.adjustments.isNeutralForMask()
+                            enabled = true
                         )
                     }
 
@@ -4135,8 +4137,6 @@ private fun EditorScreen(
                     if (m.id != selectedMask.id) m else m.copy(adjustments = updatedAdjustments)
                 }
                 onMasksChange(updated)
-                val newMask = updated.firstOrNull { it.id == selectedMask.id }
-                onShowMaskOverlayChange(newMask?.adjustments?.isNeutralForMask() == true)
             }
 
             when (selectedMaskTab) {
@@ -5729,7 +5729,7 @@ private fun ImagePreview(
             }
 
             if (isMaskMode) {
-                val persistentOverlayVisible = showMaskOverlay && maskOverlay?.adjustments?.isNeutralForMask() == true
+                val persistentOverlayVisible = showMaskOverlay && maskOverlay != null
                 val latestPersistentOverlayVisible by rememberUpdatedState(persistentOverlayVisible)
 
                 var overlayIsFlashing by remember { mutableStateOf(false) }
