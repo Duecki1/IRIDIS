@@ -2,7 +2,11 @@ package com.dueckis.kawaiiraweditor.ui.editor
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Matrix
+import android.graphics.Paint
 import android.os.SystemClock
+import android.util.Base64
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.PredictiveBackHandler
@@ -120,8 +124,11 @@ import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 @OptIn(kotlinx.coroutines.FlowPreview::class)
 @Composable
@@ -259,6 +266,214 @@ internal fun EditorScreen(
     val editedBitmapForUi = if (isCropMode) (uncroppedBitmap ?: editedBitmap) else editedBitmap
     val displayBitmap = if (isComparingOriginal) (originalBitmap ?: editedBitmapForUi) else editedBitmapForUi
 
+    fun normalizedCropOrFull(crop: CropState?): CropState {
+        val c = crop?.normalized()
+        val w = c?.width ?: 1f
+        val h = c?.height ?: 1f
+        if (c == null || w <= 0.0001f || h <= 0.0001f) return CropState(0f, 0f, 1f, 1f)
+        return c
+    }
+
+    fun rotatePointNormalized(point: MaskPoint, angleDegrees: Float, widthPx: Float, heightPx: Float): MaskPoint {
+        val w = widthPx.coerceAtLeast(1f)
+        val h = heightPx.coerceAtLeast(1f)
+        val rad = (angleDegrees.toDouble() * PI) / 180.0
+        val cosA = cos(rad).toFloat()
+        val sinA = sin(rad).toFloat()
+        val ux = (point.x - 0.5f) * w
+        val uy = (point.y - 0.5f) * h
+        val rx = ux * cosA - uy * sinA
+        val ry = ux * sinA + uy * cosA
+        return MaskPoint(x = (rx / w) + 0.5f, y = (ry / h) + 0.5f)
+    }
+
+    fun remapPointForTransform(
+        point: MaskPoint,
+        oldCrop: CropState,
+        oldRotation: Float,
+        newCrop: CropState,
+        newRotation: Float,
+        baseWidthPx: Float,
+        baseHeightPx: Float
+    ): MaskPoint {
+        val preCrop =
+            MaskPoint(
+                x = oldCrop.x + point.x * oldCrop.width,
+                y = oldCrop.y + point.y * oldCrop.height
+            )
+        val unrotated = rotatePointNormalized(preCrop, -oldRotation, baseWidthPx, baseHeightPx)
+        val rotatedNew = rotatePointNormalized(unrotated, newRotation, baseWidthPx, baseHeightPx)
+        val outX = if (newCrop.width <= 0.0001f) rotatedNew.x else (rotatedNew.x - newCrop.x) / newCrop.width
+        val outY = if (newCrop.height <= 0.0001f) rotatedNew.y else (rotatedNew.y - newCrop.y) / newCrop.height
+        return MaskPoint(x = outX, y = outY)
+    }
+
+    fun decodeDataUrlBitmap(dataUrl: String): Bitmap? {
+        val idx = dataUrl.indexOf("base64,")
+        if (idx < 0) return null
+        val b64 = dataUrl.substring(idx + "base64,".length)
+        val bytes = runCatching { Base64.decode(b64, Base64.DEFAULT) }.getOrNull() ?: return null
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    }
+
+    fun encodeBitmapToPngDataUrl(bitmap: Bitmap): String? {
+        return runCatching {
+            val outputStream = java.io.ByteArrayOutputStream()
+            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)) return@runCatching null
+            val b64 = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
+            "data:image/png;base64,$b64"
+        }.getOrNull()
+    }
+
+    fun rotateBitmapInPlaceSameSize(src: Bitmap, angleDegrees: Float): Bitmap {
+        if (angleDegrees == 0f) return src.copy(src.config ?: Bitmap.Config.ARGB_8888, true)
+        val w = src.width.coerceAtLeast(1)
+        val h = src.height.coerceAtLeast(1)
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
+        val matrix = Matrix().apply { postRotate(angleDegrees, w / 2f, h / 2f) }
+        canvas.drawBitmap(src, matrix, paint)
+        return out
+    }
+
+    fun remapAiMaskDataUrl(
+        dataUrl: String,
+        baseWidthPx: Int,
+        baseHeightPx: Int,
+        oldCrop: CropState,
+        deltaRotation: Float,
+        newCrop: CropState
+    ): String? {
+        val decoded = decodeDataUrlBitmap(dataUrl) ?: return null
+        val baseW = baseWidthPx.coerceAtLeast(1)
+        val baseH = baseHeightPx.coerceAtLeast(1)
+        val preCrop = Bitmap.createBitmap(baseW, baseH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(preCrop)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
+
+        val left = (oldCrop.x * baseW).coerceIn(0f, baseW.toFloat())
+        val top = (oldCrop.y * baseH).coerceIn(0f, baseH.toFloat())
+        val right = ((oldCrop.x + oldCrop.width) * baseW).coerceIn(0f, baseW.toFloat())
+        val bottom = ((oldCrop.y + oldCrop.height) * baseH).coerceIn(0f, baseH.toFloat())
+        if (right - left < 1f || bottom - top < 1f) {
+            decoded.recycle()
+            preCrop.recycle()
+            return null
+        }
+        val destRect = android.graphics.RectF(left, top, right, bottom)
+        canvas.drawBitmap(decoded, null, destRect, paint)
+
+        val rotated =
+            if (deltaRotation == 0f) preCrop
+            else rotateBitmapInPlaceSameSize(preCrop, deltaRotation).also { preCrop.recycle() }
+        decoded.recycle()
+
+        val cropLeft = (newCrop.x * baseW).roundToInt().coerceIn(0, baseW - 1)
+        val cropTop = (newCrop.y * baseH).roundToInt().coerceIn(0, baseH - 1)
+        val cropW = (newCrop.width * baseW).roundToInt().coerceAtLeast(1).coerceAtMost(baseW - cropLeft)
+        val cropH = (newCrop.height * baseH).roundToInt().coerceAtLeast(1).coerceAtMost(baseH - cropTop)
+        val cropped = Bitmap.createBitmap(rotated, cropLeft, cropTop, cropW, cropH)
+        if (rotated != cropped) rotated.recycle()
+
+        val encoded = encodeBitmapToPngDataUrl(cropped)
+        cropped.recycle()
+        return encoded
+    }
+
+    fun remapMasksForTransform(old: AdjustmentState, next: AdjustmentState, currentMasks: List<MaskState>): List<MaskState> {
+        if (currentMasks.isEmpty()) return currentMasks
+        val oldCrop = normalizedCropOrFull(old.crop)
+        val newCrop = normalizedCropOrFull(next.crop)
+        val oldRotation = old.rotation
+        val newRotation = next.rotation
+        if (oldCrop == newCrop && oldRotation == newRotation) return currentMasks
+
+        val baseBitmap = (uncroppedBitmap ?: editedBitmap) ?: return currentMasks
+        val baseW = baseBitmap.width.coerceAtLeast(1)
+        val baseH = baseBitmap.height.coerceAtLeast(1)
+        val baseWf = baseW.toFloat()
+        val baseHf = baseH.toFloat()
+        val deltaRotation = newRotation - oldRotation
+
+        fun remapPoint(p: MaskPoint): MaskPoint {
+            val mapped =
+                remapPointForTransform(
+                    point = p,
+                    oldCrop = oldCrop,
+                    oldRotation = oldRotation,
+                    newCrop = newCrop,
+                    newRotation = newRotation,
+                    baseWidthPx = baseWf,
+                    baseHeightPx = baseHf
+                )
+            return MaskPoint(x = mapped.x.coerceIn(-1f, 2f), y = mapped.y.coerceIn(-1f, 2f))
+        }
+
+        return currentMasks.map { mask ->
+            mask.copy(
+                subMasks =
+                    mask.subMasks.map { sub ->
+                        when (sub.type) {
+                            SubMaskType.Brush.id ->
+                                sub.copy(
+                                    lines =
+                                        sub.lines.map { line ->
+                                            line.copy(points = line.points.map(::remapPoint))
+                                        }
+                                )
+
+                            SubMaskType.Linear.id -> {
+                                val start = remapPoint(MaskPoint(sub.linear.startX, sub.linear.startY))
+                                val end = remapPoint(MaskPoint(sub.linear.endX, sub.linear.endY))
+                                sub.copy(
+                                    linear =
+                                        sub.linear.copy(
+                                            startX = start.x,
+                                            startY = start.y,
+                                            endX = end.x,
+                                            endY = end.y,
+                                        )
+                                )
+                            }
+
+                            SubMaskType.Radial.id -> {
+                                val center = remapPoint(MaskPoint(sub.radial.centerX, sub.radial.centerY))
+                                sub.copy(radial = sub.radial.copy(centerX = center.x, centerY = center.y))
+                            }
+
+                            SubMaskType.AiSubject.id -> {
+                                val dataUrl = sub.aiSubject.maskDataBase64
+                                if (dataUrl.isNullOrBlank()) sub
+                                else {
+                                    val remapped =
+                                        remapAiMaskDataUrl(
+                                            dataUrl = dataUrl,
+                                            baseWidthPx = baseW,
+                                            baseHeightPx = baseH,
+                                            oldCrop = oldCrop,
+                                            deltaRotation = deltaRotation,
+                                            newCrop = newCrop
+                                        )
+                                    if (remapped == null) sub else sub.copy(aiSubject = sub.aiSubject.copy(maskDataBase64 = remapped))
+                                }
+                            }
+
+                            else -> sub
+                        }
+                    }
+            )
+        }
+    }
+
+    fun applyAdjustmentsPreservingMasks(next: AdjustmentState) {
+        val old = adjustments
+        if (masks.isNotEmpty()) {
+            masks = remapMasksForTransform(old = old, next = next, currentMasks = masks)
+        }
+        adjustments = next
+    }
+
     LaunchedEffect(isCropMode) {
         if (!isCropMode) {
             cropDraft = null
@@ -286,7 +501,7 @@ internal fun EditorScreen(
                 )
             cropDraft = auto
             if (adjustments.rotation != 0f || adjustments.aspectRatio != null) {
-                adjustments = adjustments.copy(crop = auto)
+                applyAdjustmentsPreservingMasks(adjustments.copy(crop = auto))
             }
         } else if (cropDraft == null) {
             cropDraft = adjustments.crop
@@ -1191,14 +1406,14 @@ internal fun EditorScreen(
                                     cropDraft = autoCrop
                                     rotationDraft = null
                                     isStraightenActive = false
-                                    adjustments = adjustments.copy(rotation = rotation, crop = autoCrop)
+                                    applyAdjustmentsPreservingMasks(adjustments.copy(rotation = rotation, crop = autoCrop))
                                     endEditInteraction()
                                 },
                                 onCropDraftChange = { cropDraft = it },
                                 onCropInteractionStart = { beginEditInteraction() },
                                 onCropInteractionEnd = { crop ->
                                     cropDraft = crop
-                                    adjustments = adjustments.copy(crop = crop)
+                                    applyAdjustmentsPreservingMasks(adjustments.copy(crop = crop))
                                     endEditInteraction()
                                 }
                             )
@@ -1215,7 +1430,7 @@ internal fun EditorScreen(
                                 EditorControlsContent(
                                     panelTab = panelTab,
                                     adjustments = adjustments,
-                                    onAdjustmentsChange = { adjustments = it },
+                                    onAdjustmentsChange = { applyAdjustmentsPreservingMasks(it) },
                                     onBeginEditInteraction = ::beginEditInteraction,
                                     onEndEditInteraction = ::endEditInteraction,
                                     histogramData = histogramData,
@@ -1465,14 +1680,14 @@ internal fun EditorScreen(
                                     cropDraft = autoCrop
                                     rotationDraft = null
                                     isStraightenActive = false
-                                    adjustments = adjustments.copy(rotation = rotation, crop = autoCrop)
+                                    applyAdjustmentsPreservingMasks(adjustments.copy(rotation = rotation, crop = autoCrop))
                                     endEditInteraction()
                                 },
                                 onCropDraftChange = { cropDraft = it },
                                 onCropInteractionStart = { beginEditInteraction() },
                                 onCropInteractionEnd = { crop ->
                                     cropDraft = crop
-                                    adjustments = adjustments.copy(crop = crop)
+                                    applyAdjustmentsPreservingMasks(adjustments.copy(crop = crop))
                                     endEditInteraction()
                                 }
                             )
@@ -1492,15 +1707,15 @@ internal fun EditorScreen(
                                     errorMessage?.let { Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                                     statusMessage?.let { Text(text = it, color = Color(0xFF1B5E20), style = MaterialTheme.typography.bodySmall) }
 
-                                    EditorControlsContent(
-                                        panelTab = panelTab,
-                                        adjustments = adjustments,
-                                        onAdjustmentsChange = { adjustments = it },
-                                        onBeginEditInteraction = ::beginEditInteraction,
-                                        onEndEditInteraction = ::endEditInteraction,
-                                        histogramData = histogramData,
-                                        masks = masks,
-                                        onMasksChange = { updated ->
+                                        EditorControlsContent(
+                                            panelTab = panelTab,
+                                            adjustments = adjustments,
+                                            onAdjustmentsChange = { applyAdjustmentsPreservingMasks(it) },
+                                            onBeginEditInteraction = ::beginEditInteraction,
+                                            onEndEditInteraction = ::endEditInteraction,
+                                            histogramData = histogramData,
+                                            masks = masks,
+                                            onMasksChange = { updated ->
                                             if (panelTab == EditorPanelTab.Masks && showMaskOverlay) showMaskOverlay = false
                                             masks = updated
                                         },
