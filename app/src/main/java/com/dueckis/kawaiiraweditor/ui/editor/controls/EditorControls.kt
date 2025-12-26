@@ -77,7 +77,7 @@ internal fun EditorControlsContent(
     histogramData: HistogramData?,
     masks: List<MaskState>,
     onMasksChange: (List<MaskState>) -> Unit,
-    onGenerateSceneMasks: () -> Unit,
+    onShowSceneMaskSuggestions: () -> Unit,
     maskNumbers: MutableMap<String, Int>,
     selectedMaskId: String?,
     onSelectedMaskIdChange: (String?) -> Unit,
@@ -216,13 +216,13 @@ internal fun EditorControlsContent(
 
                     DropdownMenu(expanded = showCreateMenu, onDismissRequest = { showCreateMenu = false }) {
                         DropdownMenuItem(
-                            text = { Text("Auto Scene Masks") },
+                            text = { Text("Suggested Masks…") },
                             leadingIcon = { MaskIcon(SubMaskType.AiScene.id) },
                             onClick = {
                                 showCreateMenu = false
                                 onMaskTapModeChange(MaskTapMode.None)
                                 onPaintingMaskChange(false)
-                                onGenerateSceneMasks()
+                                onShowSceneMaskSuggestions()
                             }
                         )
                         HorizontalDivider()

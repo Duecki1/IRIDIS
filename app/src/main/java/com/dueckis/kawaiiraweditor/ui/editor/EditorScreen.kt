@@ -1257,78 +1257,121 @@ internal fun EditorScreen(
 
     val aiSubjectMaskGenerator = remember { AiSubjectMaskGenerator(context) }
     val aiSceneMaskGenerator = remember { AiSceneMaskGenerator(context) }
-    val onGenerateSceneMasksRequested: () -> Unit = onGenerate@{
+
+    var showSceneSuggestionsDialog by remember { mutableStateOf(false) }
+    var sceneSuggestions by remember { mutableStateOf(emptyList<com.dueckis.kawaiiraweditor.domain.ai.AiSceneLabelSuggestion>()) }
+    var isLoadingSceneSuggestions by remember { mutableStateOf(false) }
+    var sceneSuggestionsError by remember { mutableStateOf<String?>(null) }
+
+    val onShowSceneMaskSuggestionsRequested: () -> Unit = onShow@{
         val bmp = editedBitmap
         if (bmp == null) {
             statusMessage = "No preview yet."
-            return@onGenerate
+            return@onShow
         }
-        if (isGeneratingAiMask) return@onGenerate
+        if (isGeneratingAiMask) return@onShow
 
+        showSceneSuggestionsDialog = true
         coroutineScope.launch {
-            isGeneratingAiMask = true
-            errorMessage = null
-            statusMessage = "Generating auto masks…"
-
-            val results =
+            isLoadingSceneSuggestions = true
+            sceneSuggestionsError = null
+            sceneSuggestions = emptyList()
+            val suggestions =
                 runCatching {
-                    aiSceneMaskGenerator.generateSceneMasks(bmp) { _, msg -> statusMessage = msg }
-                }.getOrNull().orEmpty()
-
-            if (results.isEmpty()) {
-                statusMessage = "No auto masks found."
+                    aiSceneMaskGenerator.suggestLabels(bmp) { _, msg -> statusMessage = msg }
+                }.getOrNull()
+            if (suggestions == null) {
+                sceneSuggestionsError = "Failed to analyze photo."
             } else {
-                val existingNames = masks.map { it.name }.toMutableSet()
-                fun uniqueName(base: String): String {
-                    var name = base
-                    var i = 2
-                    while (name in existingNames) {
-                        name = "$base $i"
-                        i++
-                    }
-                    existingNames += name
-                    return name
-                }
-
-                val newMasks =
-                    results.map { res ->
-                        val label =
-                            res.label.replaceFirstChar { ch -> if (ch.isLowerCase()) ch.titlecase(Locale.US) else ch.toString() }
-                        val maskId = UUID.randomUUID().toString()
-                        val subId = UUID.randomUUID().toString()
-                        MaskState(
-                            id = maskId,
-                            name = uniqueName(label),
-                            subMasks =
-                                listOf(
-                                    SubMaskState(
-                                        id = subId,
-                                        type = SubMaskType.AiScene.id,
-                                        mode = SubMaskMode.Additive,
-                                        aiSubject =
-                                            com.dueckis.kawaiiraweditor.data.model.AiSubjectMaskParametersState(
-                                                maskDataBase64 = res.maskDataUrl,
-                                                softness = 0.18f
-                                            )
-                                    )
-                                )
-                        )
-                    }
-
-                masks = masks + newMasks
-                val first = newMasks.firstOrNull()
-                if (first != null) {
-                    selectedMaskId = first.id
-                    selectedSubMaskId = first.subMasks.firstOrNull()?.id
-                }
-                showMaskOverlay = true
-                statusMessage = "Added ${newMasks.size} auto masks."
+                sceneSuggestions = suggestions
             }
-
-            isGeneratingAiMask = false
-            delay(1500)
-            if (statusMessage == "Added ${results.size} auto masks." || statusMessage == "No auto masks found.") statusMessage = null
+            isLoadingSceneSuggestions = false
+            if (statusMessage == "Done") statusMessage = null
         }
+    }
+
+    if (showSceneSuggestionsDialog) {
+        AlertDialog(
+            onDismissRequest = { showSceneSuggestionsDialog = false },
+            title = { Text("Suggested masks") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (isLoadingSceneSuggestions) {
+                        Text("Analyzing…", style = MaterialTheme.typography.bodySmall)
+                    }
+                    sceneSuggestionsError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                    if (!isLoadingSceneSuggestions && sceneSuggestions.isEmpty() && sceneSuggestionsError == null) {
+                        Text("No suggestions for this photo.", style = MaterialTheme.typography.bodySmall)
+                    }
+
+                    sceneSuggestions.forEach { suggestion ->
+                        val label =
+                            suggestion.label.replaceFirstChar { ch -> if (ch.isLowerCase()) ch.titlecase(Locale.US) else ch.toString() }
+                        val pct = (suggestion.confidence.coerceIn(0f, 1f) * 100f).roundToInt()
+                        TextButton(
+                            enabled = !isGeneratingAiMask,
+                            onClick = {
+                                val bmp = editedBitmap ?: return@TextButton
+                                coroutineScope.launch {
+                                    isGeneratingAiMask = true
+                                    statusMessage = "Generating $label mask…"
+                                    val dataUrl =
+                                        runCatching { aiSceneMaskGenerator.generateMaskDataUrl(bmp, suggestion.label) }.getOrNull()
+                                    if (dataUrl.isNullOrBlank()) {
+                                        statusMessage = "Failed to generate $label mask."
+                                    } else {
+                                        val existingNames = masks.map { it.name }.toMutableSet()
+                                        fun uniqueName(base: String): String {
+                                            var name = base
+                                            var i = 2
+                                            while (name in existingNames) {
+                                                name = "$base $i"
+                                                i++
+                                            }
+                                            existingNames += name
+                                            return name
+                                        }
+
+                                        val maskId = UUID.randomUUID().toString()
+                                        val subId = UUID.randomUUID().toString()
+                                        val newMask =
+                                            MaskState(
+                                                id = maskId,
+                                                name = uniqueName(label),
+                                                subMasks =
+                                                    listOf(
+                                                        SubMaskState(
+                                                            id = subId,
+                                                            type = SubMaskType.AiScene.id,
+                                                            mode = SubMaskMode.Additive,
+                                                            aiSubject =
+                                                                com.dueckis.kawaiiraweditor.data.model.AiSubjectMaskParametersState(
+                                                                    maskDataBase64 = dataUrl,
+                                                                    softness = 0.18f
+                                                                )
+                                                        )
+                                                    )
+                                            )
+                                        masks = masks + newMask
+                                        selectedMaskId = newMask.id
+                                        selectedSubMaskId = newMask.subMasks.firstOrNull()?.id
+                                        showMaskOverlay = true
+                                        statusMessage = "$label mask added."
+                                    }
+                                    isGeneratingAiMask = false
+                                    delay(1200)
+                                    if (statusMessage == "$label mask added.") statusMessage = null
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("$label ($pct%)", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showSceneSuggestionsDialog = false }) { Text("Close") } }
+        )
     }
     val onLassoFinished: (List<MaskPoint>) -> Unit = onLasso@{ points ->
         val maskId = selectedMaskId ?: return@onLasso
@@ -1544,7 +1587,7 @@ internal fun EditorScreen(
                                         if (panelTab == EditorPanelTab.Masks && showMaskOverlay) showMaskOverlay = false
                                         masks = updated
                                     },
-                                    onGenerateSceneMasks = onGenerateSceneMasksRequested,
+                                    onShowSceneMaskSuggestions = onShowSceneMaskSuggestionsRequested,
                                     maskNumbers = maskNumbers,
                                     selectedMaskId = selectedMaskId,
                                     onSelectedMaskIdChange = { selectedMaskId = it },
@@ -1825,7 +1868,7 @@ internal fun EditorScreen(
                                             if (panelTab == EditorPanelTab.Masks && showMaskOverlay) showMaskOverlay = false
                                             masks = updated
                                         },
-                                        onGenerateSceneMasks = onGenerateSceneMasksRequested,
+                                        onShowSceneMaskSuggestions = onShowSceneMaskSuggestionsRequested,
                                         maskNumbers = maskNumbers,
                                         selectedMaskId = selectedMaskId,
                                         onSelectedMaskIdChange = { selectedMaskId = it },
