@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.SystemClock
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -1332,7 +1333,12 @@ internal fun EditorScreen(
                                 onExportComplete = { success, message ->
                                     isExporting = false
                                     if (success) {
-                                        statusMessage = message
+                                        if (message.startsWith("Saved to ")) {
+                                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                            statusMessage = null
+                                        } else {
+                                            statusMessage = message
+                                        }
                                         errorMessage = null
                                     } else {
                                         errorMessage = message
@@ -1399,7 +1405,12 @@ internal fun EditorScreen(
                                     onExportComplete = { success, message ->
                                         isExporting = false
                                         if (success) {
-                                            statusMessage = message
+                                            if (message.startsWith("Saved to ")) {
+                                                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                                statusMessage = null
+                                            } else {
+                                                statusMessage = message
+                                            }
                                             errorMessage = null
                                         } else {
                                             errorMessage = message
