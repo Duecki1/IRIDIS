@@ -171,6 +171,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -180,13 +181,16 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -213,6 +217,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.debounce
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -224,12 +229,14 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.Executors
 import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.ranges.ClosedFloatingPointRange
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -1450,6 +1457,7 @@ private fun GalleryItemCard(
     }
 }
 
+@OptIn(kotlinx.coroutines.FlowPreview::class)
 @Composable
 private fun EditorScreen(
     galleryItem: GalleryItem?,
@@ -1483,6 +1491,25 @@ private fun EditorScreen(
         }
     }
     var editedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var editedViewportBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var editedViewportRoi by remember { mutableStateOf<CropState?>(null) }
+    val currentViewportRoi = remember { AtomicReference<CropState?>(null) }
+    var viewportScale by remember { mutableFloatStateOf(1f) }
+    var viewportRoiForDebounce by remember { mutableStateOf<CropState?>(null) }
+    var fullPreviewDirtyByViewport by remember { mutableStateOf(false) }
+
+    fun zoomMaxDimensionForScale(scale: Float): Int {
+        val minDim = 1280
+        val maxDim = 2304
+        val minScale = 1.1f
+        val maxScale = 5f
+        val t = ((scale - minScale) / (maxScale - minScale)).coerceIn(0f, 1f)
+        val desired = (minDim + (maxDim - minDim) * t).roundToInt()
+        val clamped = desired.coerceIn(minDim, maxDim)
+        val step = 128
+        return (clamped / step) * step
+    }
+
     var originalBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var uncroppedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var editedPreviewRotationDegrees by remember(galleryItem.projectId) { mutableFloatStateOf(0f) }
@@ -1660,6 +1687,7 @@ private fun EditorScreen(
 
     val renderVersion = remember { AtomicLong(0L) }
     val lastEditedPreviewStamp = remember { AtomicLong(-1L) } // version*10 + quality
+    val lastEditedViewportStamp = remember { AtomicLong(-1L) } // version*10 + quality
     val lastOriginalPreviewStamp = remember { AtomicLong(-1L) } // version*10 + quality
     val lastUncroppedPreviewStamp = remember { AtomicLong(-1L) } // version*10 + quality
     val renderRequests = remember { Channel<RenderRequest>(capacity = Channel.CONFLATED) }
@@ -1693,10 +1721,17 @@ private fun EditorScreen(
         isComparingOriginal = false
         originalBitmap = null
         editedBitmap = null
+        editedViewportBitmap = null
+        editedViewportRoi = null
+        currentViewportRoi.set(null)
+        viewportScale = 1f
+        viewportRoiForDebounce = null
+        fullPreviewDirtyByViewport = false
         uncroppedBitmap = null
         editedPreviewRotationDegrees = 0f
         uncroppedPreviewRotationDegrees = 0f
         lastEditedPreviewStamp.set(-1L)
+        lastEditedViewportStamp.set(-1L)
         lastOriginalPreviewStamp.set(-1L)
         lastUncroppedPreviewStamp.set(-1L)
         val raw = withContext(Dispatchers.IO) {
@@ -2017,8 +2052,28 @@ private fun EditorScreen(
     LaunchedEffect(adjustments, masks, isDraggingMaskHandle, isComparingOriginal) {
         if (isDraggingMaskHandle) return@LaunchedEffect
         if (isCropMode && !isComparingOriginal) return@LaunchedEffect
+        val viewportRoi = currentViewportRoi.get()
+        val useViewportRender = viewportRoi != null && !isComparingOriginal && !isCropMode
+        val viewportMaxDim = if (useViewportRender) zoomMaxDimensionForScale(viewportScale) else 0
         val json = withContext(Dispatchers.Default) {
-            if (isComparingOriginal) {
+            if (useViewportRender) {
+                adjustments.toJsonObject(includeToneMapper = true).apply {
+                    put(
+                        "masks",
+                        JSONArray().apply {
+                            masks.forEach { put(it.toJsonObject()) }
+                        }
+                    )
+                    put(
+                        "preview",
+                        JSONObject().apply {
+                            put("useZoom", true)
+                            put("roi", viewportRoi?.toJsonObject() ?: JSONObject.NULL)
+                            put("maxDimension", viewportMaxDim)
+                        }
+                    )
+                }.toString()
+            } else if (isComparingOriginal) {
                 AdjustmentState(
                     rotation = adjustments.rotation,
                     flipHorizontal = adjustments.flipHorizontal,
@@ -2037,9 +2092,15 @@ private fun EditorScreen(
                 version = version,
                 adjustmentsJson = json,
                 target = if (isComparingOriginal) RenderTarget.Original else RenderTarget.Edited,
-                rotationDegrees = adjustments.rotation
+                rotationDegrees = adjustments.rotation,
+                previewRoi = if (useViewportRender) viewportRoi else null
             )
         )
+        if (useViewportRender) {
+            fullPreviewDirtyByViewport = true
+        } else if (!isComparingOriginal) {
+            fullPreviewDirtyByViewport = false
+        }
     }
 
     val uncroppedRenderKey = remember(adjustments) { adjustments.copy(crop = null, aspectRatio = null) }
@@ -2136,6 +2197,8 @@ private fun EditorScreen(
             val requestJson = currentRequest.adjustmentsJson
             val requestTarget = currentRequest.target
             val requestRotation = currentRequest.rotationDegrees
+            val requestPreviewRoi = currentRequest.previewRoi
+            val isViewportRequest = requestTarget == RenderTarget.Edited && requestPreviewRoi != null
 
             fun updateBitmapForRequest(version: Long, quality: Int, bitmap: Bitmap) {
                 val stamp = version * 10L + quality.coerceIn(0, 9).toLong()
@@ -2156,7 +2219,13 @@ private fun EditorScreen(
                     }
 
                     RenderTarget.Edited -> {
-                        if (stamp > lastEditedPreviewStamp.get()) {
+                        if (requestPreviewRoi != null) {
+                            if (stamp > lastEditedViewportStamp.get()) {
+                                editedViewportBitmap = bitmap
+                                editedViewportRoi = requestPreviewRoi
+                                lastEditedViewportStamp.set(stamp)
+                            }
+                        } else if (stamp > lastEditedPreviewStamp.get()) {
                             editedBitmap = bitmap
                             lastEditedPreviewStamp.set(stamp)
                             editedPreviewRotationDegrees = requestRotation
@@ -2165,7 +2234,7 @@ private fun EditorScreen(
                 }
             }
 
-            if (lowQualityPreviewEnabled) {
+            if (lowQualityPreviewEnabled && !isViewportRequest) {
                 // Stage 1: super-low quality (fast feedback while dragging).
                 val superLowBitmap = withContext(renderDispatcher) {
                     val bytes = runCatching { LibRawDecoder.lowlowdecodeFromSession(handle, requestJson) }.getOrNull()
@@ -2207,7 +2276,7 @@ private fun EditorScreen(
             isLoading = false
 
             val isLatest = requestVersion == renderVersion.get()
-            if (requestTarget == RenderTarget.Edited && isLatest) {
+            if (requestTarget == RenderTarget.Edited && requestPreviewRoi == null && isLatest) {
                 errorMessage = if (fullBitmap == null) "Failed to render preview." else null
             }
             if (fullBitmap != null) {
@@ -2215,7 +2284,7 @@ private fun EditorScreen(
             }
 
             // Generate and save thumbnail only for the latest completed render.
-            if (requestTarget == RenderTarget.Edited && isLatest) fullBitmap?.let { bmp ->
+            if (requestTarget == RenderTarget.Edited && requestPreviewRoi == null && isLatest) fullBitmap?.let { bmp ->
                 withContext(Dispatchers.IO) {
                     val maxSize = 512
                     val scale = minOf(maxSize.toFloat() / bmp.width, maxSize.toFloat() / bmp.height)
@@ -2404,6 +2473,76 @@ private fun EditorScreen(
                 applyEditHistoryEntry(entry)
             }
 
+            val onPreviewViewportRoiChange: (CropState?, Float) -> Unit = { roi, scale ->
+                viewportScale = scale
+                viewportRoiForDebounce = roi
+                currentViewportRoi.set(roi)
+                if (roi == null) {
+                    editedViewportBitmap = null
+                    editedViewportRoi = null
+                }
+            }
+
+            LaunchedEffect(sessionHandle, isCropMode, isComparingOriginal) {
+                val handle = sessionHandle
+                if (handle == 0L) return@LaunchedEffect
+                if (isCropMode) return@LaunchedEffect
+                if (isComparingOriginal) return@LaunchedEffect
+
+                snapshotFlow { viewportRoiForDebounce?.normalized() to viewportScale }
+                    .debounce(1000)
+                    .collect { (roi, scale) ->
+                        if (isDraggingMaskHandle) return@collect
+                        if (sessionHandle != handle) return@collect
+                        if (isCropMode) return@collect
+                        if (isComparingOriginal) return@collect
+
+                        if (roi != null) {
+                            val maxDim = zoomMaxDimensionForScale(scale)
+                            val json = withContext(Dispatchers.Default) {
+                                adjustments.toJsonObject(includeToneMapper = true).apply {
+                                    put(
+                                        "masks",
+                                        JSONArray().apply {
+                                            masks.forEach { put(it.toJsonObject()) }
+                                        }
+                                    )
+                                    put(
+                                        "preview",
+                                        JSONObject().apply {
+                                            put("useZoom", true)
+                                            put("roi", roi.toJsonObject())
+                                            put("maxDimension", maxDim)
+                                        }
+                                    )
+                                }.toString()
+                            }
+                            val version = renderVersion.incrementAndGet()
+                            renderRequests.trySend(
+                                RenderRequest(
+                                    version = version,
+                                    adjustmentsJson = json,
+                                    target = RenderTarget.Edited,
+                                    rotationDegrees = adjustments.rotation,
+                                    previewRoi = roi
+                                )
+                            )
+                        } else if (fullPreviewDirtyByViewport) {
+                            fullPreviewDirtyByViewport = false
+                            val json = withContext(Dispatchers.Default) { adjustments.toJson(masks) }
+                            val version = renderVersion.incrementAndGet()
+                            renderRequests.trySend(
+                                RenderRequest(
+                                    version = version,
+                                    adjustmentsJson = json,
+                                    target = RenderTarget.Edited,
+                                    rotationDegrees = adjustments.rotation
+                                )
+                            )
+                        }
+                    }
+            }
+
             Box(modifier = Modifier.fillMaxSize()) {
             if (isTablet) {
                 // Tablet layout: Full screen content with top bars overlaid
@@ -2417,14 +2556,17 @@ private fun EditorScreen(
                                 .weight(3f)
                                 .fillMaxHeight()
                                 .background(Color.Black)
-                        ) {
-                            ImagePreview(
-                                bitmap = displayBitmap,
-                                isLoading = isLoading || isGeneratingAiMask,
-                                maskOverlay = selectedMaskForOverlay,
-                                activeSubMask = selectedSubMaskForEdit,
-                                isMaskMode = isMaskMode && !isComparingOriginal,
-                                showMaskOverlay = showMaskOverlay && !isComparingOriginal,
+	                        ) {
+	                            ImagePreview(
+	                                bitmap = displayBitmap,
+	                                isLoading = isLoading || isGeneratingAiMask,
+	                                viewportBitmap = if (isComparingOriginal || isCropMode) null else editedViewportBitmap,
+	                                viewportRoi = if (isComparingOriginal || isCropMode) null else editedViewportRoi,
+	                                onViewportRoiChange = onPreviewViewportRoiChange,
+	                                maskOverlay = selectedMaskForOverlay,
+	                                activeSubMask = selectedSubMaskForEdit,
+	                                isMaskMode = isMaskMode && !isComparingOriginal,
+	                                showMaskOverlay = showMaskOverlay && !isComparingOriginal,
                                 maskOverlayBlinkKey = maskOverlayBlinkKey,
                                 maskOverlayBlinkSubMaskId = maskOverlayBlinkSubMaskId,
                                 isPainting = isInteractiveMaskingEnabled && !isComparingOriginal,
@@ -2473,13 +2615,19 @@ private fun EditorScreen(
                                     adjustments = adjustments.copy(crop = crop)
                                     endEditInteraction()
                                 }
-                            )
+	                            )
 
-                            if (panelTab == EditorPanelTab.Masks) {
-                                MaskManagementOverlay(
-                                    masks = masks,
+	                            if (panelTab == EditorPanelTab.Masks) {
+	                                Box(
+	                                    modifier = Modifier
+	                                        .fillMaxSize()
+	                                        .windowInsetsPadding(WindowInsets.statusBars)
+	                                        .padding(top = 56.dp)
+	                                ) {
+	                                MaskManagementOverlay(
+	                                    masks = masks,
 
-                                    maskNumbers = maskNumbers,
+	                                    maskNumbers = maskNumbers,
                                     selectedMaskId = selectedMaskId,
                                     selectedSubMaskId = selectedSubMaskId,
                                     onMasksChange = { masks = it },
@@ -2489,17 +2637,18 @@ private fun EditorScreen(
                                     onMaskTapModeChange = { maskTapMode = it },
                                     onShowMaskOverlayChange = { showMaskOverlay = it },
                                     onRequestMaskOverlayBlink = ::requestMaskOverlayBlink,
-                                    newSubMaskState = ::newSubMaskState,
-                                    duplicateMaskState = ::duplicateMaskState,
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .fillMaxHeight()
-                                )
-                                // Floating add-mask FAB anchored bottom-left of preview
-                                var showAddMaskMenuFab by remember { mutableStateOf(false) }
-                                FloatingActionButton(
-                                    onClick = { showAddMaskMenuFab = true },
-                                    containerColor = MaterialTheme.colorScheme.primary,
+	                                    newSubMaskState = ::newSubMaskState,
+	                                    duplicateMaskState = ::duplicateMaskState,
+	                                    modifier = Modifier
+	                                        .align(Alignment.TopEnd)
+	                                        .fillMaxHeight()
+	                                )
+	                                }
+	                                // Floating add-mask FAB anchored bottom-left of preview
+	                                var showAddMaskMenuFab by remember { mutableStateOf(false) }
+	                                FloatingActionButton(
+	                                    onClick = { showAddMaskMenuFab = true },
+	                                    containerColor = MaterialTheme.colorScheme.primary,
                                     contentColor = MaterialTheme.colorScheme.onPrimary,
                                     modifier = Modifier
                                         .align(Alignment.BottomStart)
@@ -2839,14 +2988,17 @@ private fun EditorScreen(
                             .fillMaxWidth()
                             .weight(1f)
                             .background(Color.Black)
-                    ) {
-                        ImagePreview(
-                            bitmap = displayBitmap,
-                            isLoading = isLoading || isGeneratingAiMask,
-                            maskOverlay = selectedMaskForOverlay,
-                            activeSubMask = selectedSubMaskForEdit,
-                            isMaskMode = isMaskMode && !isComparingOriginal,
-                            showMaskOverlay = showMaskOverlay && !isComparingOriginal,
+	                    ) {
+	                        ImagePreview(
+	                            bitmap = displayBitmap,
+	                            isLoading = isLoading || isGeneratingAiMask,
+	                            viewportBitmap = if (isComparingOriginal || isCropMode) null else editedViewportBitmap,
+	                            viewportRoi = if (isComparingOriginal || isCropMode) null else editedViewportRoi,
+	                            onViewportRoiChange = onPreviewViewportRoiChange,
+	                            maskOverlay = selectedMaskForOverlay,
+	                            activeSubMask = selectedSubMaskForEdit,
+	                            isMaskMode = isMaskMode && !isComparingOriginal,
+	                            showMaskOverlay = showMaskOverlay && !isComparingOriginal,
                             maskOverlayBlinkKey = maskOverlayBlinkKey,
                             maskOverlayBlinkSubMaskId = maskOverlayBlinkSubMaskId,
                             isPainting = isInteractiveMaskingEnabled && !isComparingOriginal,
@@ -2895,13 +3047,19 @@ private fun EditorScreen(
                                 adjustments = adjustments.copy(crop = crop)
                                 endEditInteraction()
                             }
-                        )
+	                        )
 
-                        if (panelTab == EditorPanelTab.Masks) {
-                            MaskManagementOverlay(
-                                masks = masks,
-                                maskNumbers = maskNumbers,
-                                selectedMaskId = selectedMaskId,
+	                        if (panelTab == EditorPanelTab.Masks) {
+	                            Box(
+	                                modifier = Modifier
+	                                    .fillMaxSize()
+	                                    .windowInsetsPadding(WindowInsets.statusBars)
+	                                    .padding(top = 56.dp)
+	                            ) {
+	                            MaskManagementOverlay(
+	                                masks = masks,
+	                                maskNumbers = maskNumbers,
+	                                selectedMaskId = selectedMaskId,
                                 selectedSubMaskId = selectedSubMaskId,
                                 onMasksChange = { masks = it },
                                 onSelectedMaskIdChange = { selectedMaskId = it },
@@ -2910,17 +3068,18 @@ private fun EditorScreen(
                                 onMaskTapModeChange = { maskTapMode = it },
                                 onShowMaskOverlayChange = { showMaskOverlay = it },
                                 onRequestMaskOverlayBlink = ::requestMaskOverlayBlink,
-                                newSubMaskState = ::newSubMaskState,
-                                duplicateMaskState = ::duplicateMaskState,
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .fillMaxHeight()
-                            )
-                            // Floating add-mask FAB anchored bottom-left of preview (phone)
-                            var showAddMaskMenuFabPhone by remember { mutableStateOf(false) }
-                            FloatingActionButton(
-                                onClick = { showAddMaskMenuFabPhone = true },
-                                containerColor = MaterialTheme.colorScheme.primary,
+	                                newSubMaskState = ::newSubMaskState,
+	                                duplicateMaskState = ::duplicateMaskState,
+	                                modifier = Modifier
+	                                    .align(Alignment.TopEnd)
+	                                    .fillMaxHeight()
+	                            )
+	                            }
+	                            // Floating add-mask FAB anchored bottom-left of preview (phone)
+	                            var showAddMaskMenuFabPhone by remember { mutableStateOf(false) }
+	                            FloatingActionButton(
+	                                onClick = { showAddMaskMenuFabPhone = true },
+	                                containerColor = MaterialTheme.colorScheme.primary,
                                 contentColor = MaterialTheme.colorScheme.onPrimary,
                                 modifier = Modifier
                                     .align(Alignment.BottomStart)
@@ -4647,6 +4806,9 @@ private enum class CropHandle {
 private fun ImagePreview(
     bitmap: Bitmap?,
     isLoading: Boolean,
+    viewportBitmap: Bitmap? = null,
+    viewportRoi: CropState? = null,
+    onViewportRoiChange: ((CropState?, Float) -> Unit)? = null,
     maskOverlay: MaskState? = null,
     activeSubMask: SubMaskState? = null,
     isMaskMode: Boolean = false,
@@ -4679,6 +4841,7 @@ private fun ImagePreview(
     val currentStroke = remember { mutableStateListOf<MaskPoint>() }
     val density = LocalDensity.current
     val activeSubMaskState by rememberUpdatedState(activeSubMask)
+    val onViewportRoiChangeState by rememberUpdatedState(onViewportRoiChange)
     val cropStateState by rememberUpdatedState(cropState)
     val cropAspectRatioState by rememberUpdatedState(cropAspectRatio)
     val onCropDraftChangeState by rememberUpdatedState(onCropDraftChange)
@@ -4690,6 +4853,7 @@ private fun ImagePreview(
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
+            .clipToBounds()
             .let { base ->
                 if (!isMaskMode && !isCropMode) base
                 else base.pointerInput(bitmap) {
@@ -4765,6 +4929,52 @@ private fun ImagePreview(
                 return MaskPoint(x = nx, y = ny)
             }
 
+            fun computeVisibleViewportRoi(s: Float, ox: Float, oy: Float): CropState? {
+                if (s <= 1.1f) return null
+                if (displayW <= 0.0001f || displayH <= 0.0001f) return null
+
+                fun toImageNormUnclamped(pos: Offset): Offset {
+                    val pivot = Offset(containerW / 2f, containerH / 2f)
+                    val x = pivot.x + (pos.x - ox - pivot.x) / s
+                    val y = pivot.y + (pos.y - oy - pivot.y) / s
+                    return Offset((x - left) / displayW, (y - top) / displayH)
+                }
+
+                val corners = listOf(
+                    Offset(0f, 0f),
+                    Offset(containerW, 0f),
+                    Offset(0f, containerH),
+                    Offset(containerW, containerH)
+                )
+                val points = corners.map { toImageNormUnclamped(it) }
+                val minX = points.minOf { it.x }
+                val maxX = points.maxOf { it.x }
+                val minY = points.minOf { it.y }
+                val maxY = points.maxOf { it.y }
+
+                val x0 = minX.coerceIn(0f, 1f)
+                val x1 = maxX.coerceIn(0f, 1f)
+                val y0 = minY.coerceIn(0f, 1f)
+                val y1 = maxY.coerceIn(0f, 1f)
+                val w = (x1 - x0).coerceAtLeast(0f)
+                val h = (y1 - y0).coerceAtLeast(0f)
+                if (w >= 0.999f && h >= 0.999f) return null
+                if (w <= 0.0005f || h <= 0.0005f) return null
+                return CropState(x = x0, y = y0, width = w, height = h)
+            }
+
+            LaunchedEffect(onViewportRoiChangeState, bitmap, isCropMode, containerW, containerH) {
+                val callback = onViewportRoiChangeState ?: return@LaunchedEffect
+                if (isCropMode) {
+                    callback(null, 1f)
+                    return@LaunchedEffect
+                }
+                snapshotFlow { Triple(scale, offsetX, offsetY) }
+                    .map { (s, ox, oy) -> computeVisibleViewportRoi(s = s, ox = ox, oy = oy) to s }
+                    .distinctUntilChanged()
+                    .collect { (roi, s) -> callback(roi, s) }
+            }
+
             val imageModifier = Modifier
                 .fillMaxSize()
                 .let { base ->
@@ -4790,8 +5000,39 @@ private fun ImagePreview(
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = "Processed preview",
                 contentScale = ContentScale.Fit,
+                filterQuality = FilterQuality.High,
                 modifier = imageModifier
             )
+
+            val viewportBmp = viewportBitmap
+            val viewportRoiSnapshot = viewportRoi?.normalized()
+            if (!isCropMode && viewportBmp != null && viewportRoiSnapshot != null) {
+                val viewportPaint = remember { android.graphics.Paint().apply { isFilterBitmap = true } }
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offsetX,
+                            translationY = offsetY
+                        )
+                ) {
+                    val roiLeftPx = left + viewportRoiSnapshot.x * displayW
+                    val roiTopPx = top + viewportRoiSnapshot.y * displayH
+                    val roiWPx = (viewportRoiSnapshot.width * displayW).coerceAtLeast(1f)
+                    val roiHPx = (viewportRoiSnapshot.height * displayH).coerceAtLeast(1f)
+                    val dst = android.graphics.RectF(
+                        roiLeftPx,
+                        roiTopPx,
+                        roiLeftPx + roiWPx,
+                        roiTopPx + roiHPx
+                    )
+                    drawIntoCanvas { canvas ->
+                        canvas.nativeCanvas.drawBitmap(viewportBmp, null, dst, viewportPaint)
+                    }
+                }
+            }
 
             val cropSnapshot = cropState?.normalized()
             if (isCropMode && cropSnapshot != null) {

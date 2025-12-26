@@ -629,6 +629,14 @@ struct CropPayload {
 
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+struct PreviewPayload {
+    use_zoom: bool,
+    roi: Option<CropPayload>,
+    max_dimension: Option<u32>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 struct AdjustmentsPayload {
     #[serde(default)]
     rotation: f32,
@@ -672,6 +680,8 @@ struct AdjustmentsPayload {
     color_grading: ColorGradingPayload,
     #[serde(default)]
     hsl: HslPanelPayload,
+    #[serde(default)]
+    preview: PreviewPayload,
     masks: Vec<Value>,
 }
 
@@ -2154,6 +2164,40 @@ fn apply_crop_linear(image: &LinearImage, crop: &CropPayload) -> LinearImage {
     image::imageops::crop_imm(image, x_u, y_u, w_u, h_u).to_image()
 }
 
+fn crop_rect_pixels(img_w: u32, img_h: u32, crop: &CropPayload) -> (u32, u32, u32, u32) {
+    if img_w == 0 || img_h == 0 {
+        return (0, 0, 0, 0);
+    }
+
+    let is_normalized = crop.x <= 1.5 && crop.y <= 1.5 && crop.width <= 1.5 && crop.height <= 1.5;
+
+    let fw = img_w as f32;
+    let fh = img_h as f32;
+
+    let mut x = crop.x;
+    let mut y = crop.y;
+    let mut w = crop.width;
+    let mut h = crop.height;
+
+    if is_normalized {
+        x *= fw;
+        y *= fh;
+        w *= fw;
+        h *= fh;
+    }
+
+    let x_u = x.round().clamp(0.0, (img_w.saturating_sub(1)) as f32) as u32;
+    let y_u = y.round().clamp(0.0, (img_h.saturating_sub(1)) as f32) as u32;
+
+    let max_w = (img_w - x_u).max(1);
+    let max_h = (img_h - y_u).max(1);
+
+    let w_u = w.round().clamp(1.0, max_w as f32) as u32;
+    let h_u = h.round().clamp(1.0, max_h as f32) as u32;
+
+    (x_u, y_u, w_u, h_u)
+}
+
 fn apply_transformations<'a>(linear: &'a LinearImage, payload: &AdjustmentsPayload) -> Cow<'a, LinearImage> {
     let steps = payload.orientation_steps % 4;
     let flip_h = payload.flip_horizontal;
@@ -2330,6 +2374,161 @@ fn render_linear_with_payload(
     Ok(encoded)
 }
 
+fn render_linear_roi_with_payload(
+    linear_buffer: &LinearImage,
+    payload: &AdjustmentsPayload,
+    mask_runtimes: &[MaskRuntime],
+    fast_demosaic: bool,
+    roi: &CropPayload,
+) -> Result<Vec<u8>> {
+    let adjustment_values = payload.to_values().normalized(&ADJUSTMENT_SCALES);
+    let use_basic_tone_mapper = matches!(adjustment_values.tone_mapper, ToneMapper::Basic);
+    let global_curves = CurvesRuntime::from_payload(&payload.curves);
+    let curves_are_active = !global_curves.is_default() || mask_runtimes.iter().any(|m| m.curves_are_active);
+
+    let width = linear_buffer.width();
+    let height = linear_buffer.height();
+    if width == 0 || height == 0 {
+        return Err(anyhow::anyhow!("Invalid source dimensions"));
+    }
+
+    let (roi_x, roi_y, roi_w, roi_h) = crop_rect_pixels(width, height, roi);
+    if roi_w == 0 || roi_h == 0 {
+        return Err(anyhow::anyhow!("Invalid ROI dimensions"));
+    }
+
+    let linear = linear_buffer.as_raw();
+    debug_assert_eq!(linear.len(), (width as usize) * (height as usize) * 4);
+
+    let mut rgb = vec![0u8; (roi_w as usize) * (roi_h as usize) * 3];
+
+    for y in 0..roi_h {
+        let full_y = roi_y + y;
+        for x in 0..roi_w {
+            let full_x = roi_x + x;
+            let idx_full = ((full_y * width + full_x) as usize).min((width as usize * height as usize).saturating_sub(1));
+            let base = idx_full * 4;
+
+            // Start with linear RAW pixel data
+            let mut colors = [linear[base], linear[base + 1], linear[base + 2]];
+
+            // Apply default RAW processing (brightness + contrast boost for Basic tone mapper)
+            colors = apply_default_raw_processing(colors, use_basic_tone_mapper);
+
+            // RapidRAW-like mask compositing: apply globals once, then for each mask
+            // mix toward a separately-adjusted result by mask influence.
+            let mut composite = apply_color_adjustments(colors, &adjustment_values);
+            for mask in mask_runtimes {
+                let mut selection = if let Some(bitmap) = &mask.bitmap {
+                    bitmap.get(idx_full).copied().unwrap_or(0) as f32 / 255.0
+                } else {
+                    1.0
+                };
+                if mask.invert {
+                    selection = 1.0 - selection;
+                }
+                let influence = (selection * mask.opacity_factor).clamp(0.0, 1.0);
+                if influence <= 0.001 {
+                    continue;
+                }
+
+                let mask_adjusted = apply_color_adjustments(composite, &mask.adjustments);
+                composite = [
+                    composite[0] + (mask_adjusted[0] - composite[0]) * influence,
+                    composite[1] + (mask_adjusted[1] - composite[1]) * influence,
+                    composite[2] + (mask_adjusted[2] - composite[2]) * influence,
+                ];
+            }
+
+            let mut srgb = [
+                linear_to_srgb(composite[0]),
+                linear_to_srgb(composite[1]),
+                linear_to_srgb(composite[2]),
+            ];
+
+            if curves_are_active {
+                srgb = global_curves.apply_all(srgb);
+
+                for mask in mask_runtimes {
+                    if !mask.curves_are_active {
+                        continue;
+                    }
+
+                    let mut selection = if let Some(bitmap) = &mask.bitmap {
+                        bitmap.get(idx_full).copied().unwrap_or(0) as f32 / 255.0
+                    } else {
+                        1.0
+                    };
+                    if mask.invert {
+                        selection = 1.0 - selection;
+                    }
+                    let influence = (selection * mask.opacity_factor).clamp(0.0, 1.0);
+                    if influence <= 0.001 {
+                        continue;
+                    }
+
+                    let mask_curved = mask.curves.apply_all(srgb);
+                    srgb = [
+                        srgb[0] + (mask_curved[0] - srgb[0]) * influence,
+                        srgb[1] + (mask_curved[1] - srgb[1]) * influence,
+                        srgb[2] + (mask_curved[2] - srgb[2]) * influence,
+                    ];
+                }
+            }
+
+            if adjustment_values.vignette_amount.abs() > 0.00001 {
+                let v_amount = adjustment_values.vignette_amount.clamp(-1.0, 1.0);
+                let v_mid = adjustment_values.vignette_midpoint.clamp(0.0, 1.0);
+                let v_round = (1.0 - adjustment_values.vignette_roundness).clamp(0.01, 4.0);
+                let v_feather = adjustment_values.vignette_feather.clamp(0.0, 1.0) * 0.5;
+
+                let full_w = width as f32;
+                let full_h = height as f32;
+                let aspect = if full_w > 0.0 { full_h / full_w } else { 1.0 };
+
+                let uv_x = (full_x as f32 / full_w - 0.5) * 2.0;
+                let uv_y = (full_y as f32 / full_h - 0.5) * 2.0;
+
+                let sign_x = if uv_x > 0.0 { 1.0 } else if uv_x < 0.0 { -1.0 } else { 0.0 };
+                let sign_y = if uv_y > 0.0 { 1.0 } else if uv_y < 0.0 { -1.0 } else { 0.0 };
+
+                let uv_round_x = sign_x * uv_x.abs().powf(v_round);
+                let uv_round_y = sign_y * uv_y.abs().powf(v_round);
+                let d = ((uv_round_x * uv_round_x) + (uv_round_y * aspect) * (uv_round_y * aspect)).sqrt() * 0.5;
+
+                let vignette_mask = smoothstep(v_mid - v_feather, v_mid + v_feather, d);
+                if v_amount < 0.0 {
+                    let mult = (1.0 + v_amount * vignette_mask).clamp(0.0, 2.0);
+                    srgb = [srgb[0] * mult, srgb[1] * mult, srgb[2] * mult];
+                } else {
+                    let t = (v_amount * vignette_mask).clamp(0.0, 1.0);
+                    srgb = [
+                        srgb[0] + (1.0 - srgb[0]) * t,
+                        srgb[1] + (1.0 - srgb[1]) * t,
+                        srgb[2] + (1.0 - srgb[2]) * t,
+                    ];
+                }
+                srgb = [
+                    srgb[0].clamp(0.0, 1.0),
+                    srgb[1].clamp(0.0, 1.0),
+                    srgb[2].clamp(0.0, 1.0),
+                ];
+            }
+
+            let out_base = ((y * roi_w + x) as usize) * 3;
+            rgb[out_base] = clamp_to_u8(srgb[0] * 255.0);
+            rgb[out_base + 1] = clamp_to_u8(srgb[1] * 255.0);
+            rgb[out_base + 2] = clamp_to_u8(srgb[2] * 255.0);
+        }
+    }
+
+    let mut encoded = Vec::new();
+    let quality = if fast_demosaic { 88 } else { 96 };
+    let mut encoder = JpegEncoder::new_with_quality(&mut encoded, quality);
+    encoder.encode(&rgb, roi_w, roi_h, ExtendedColorType::Rgb8)?;
+    Ok(encoded)
+}
+
 fn render_raw(
     raw_bytes: &[u8],
     adjustments_json: Option<&str>,
@@ -2366,6 +2565,7 @@ enum PreviewKind {
     SuperLow,
     Low,
     Preview,
+    Zoom,
 }
 
 impl PreviewKind {
@@ -2374,6 +2574,7 @@ impl PreviewKind {
             PreviewKind::SuperLow => (64, 64),
             PreviewKind::Low => (256, 256),
             PreviewKind::Preview => (1280, 720),
+            PreviewKind::Zoom => (2304, 2304),
         }
     }
 }
@@ -2420,6 +2621,12 @@ fn extract_metadata_json(raw_bytes: &[u8]) -> Result<String> {
     Ok(payload.to_string())
 }
 
+struct ZoomCache {
+    max_w: u32,
+    max_h: u32,
+    image: Arc<LinearImage>,
+}
+
 struct Session {
     raw_bytes: Vec<u8>,
     metadata_json: String,
@@ -2427,10 +2634,12 @@ struct Session {
     super_low: Option<Arc<LinearImage>>,
     low: Option<Arc<LinearImage>>,
     preview: Option<Arc<LinearImage>>,
+    zoom: Option<ZoomCache>,
 
     masks_super_low: Option<MasksCache>,
     masks_low: Option<MasksCache>,
     masks_preview: Option<MasksCache>,
+    masks_zoom: Option<MasksCache>,
 }
 
 impl Session {
@@ -2442,17 +2651,42 @@ impl Session {
             super_low: None,
             low: None,
             preview: None,
+            zoom: None,
             masks_super_low: None,
             masks_low: None,
             masks_preview: None,
+            masks_zoom: None,
         }
     }
 
+    fn zoom_linear_for(&mut self, max_w: u32, max_h: u32) -> Result<Arc<LinearImage>> {
+        if let Some(cache) = self.zoom.as_ref() {
+            if cache.max_w == max_w && cache.max_h == max_h {
+                return Ok(Arc::clone(&cache.image));
+            }
+        }
+
+        let linear = develop_preview_linear(&self.raw_bytes, true, Some(max_w), Some(max_h))?;
+        let shared = Arc::new(linear);
+        self.zoom = Some(ZoomCache {
+            max_w,
+            max_h,
+            image: Arc::clone(&shared),
+        });
+        Ok(shared)
+    }
+
     fn linear_for(&mut self, kind: PreviewKind) -> Result<Arc<LinearImage>> {
+        if let PreviewKind::Zoom = kind {
+            let (max_w, max_h) = kind.max_dims();
+            return self.zoom_linear_for(max_w, max_h);
+        }
+
         let slot = match kind {
             PreviewKind::SuperLow => &mut self.super_low,
             PreviewKind::Low => &mut self.low,
             PreviewKind::Preview => &mut self.preview,
+            PreviewKind::Zoom => unreachable!("Zoom handled above"),
         };
         if let Some(img) = slot.as_ref() {
             return Ok(Arc::clone(img));
@@ -2476,6 +2710,7 @@ impl Session {
             PreviewKind::SuperLow => &mut self.masks_super_low,
             PreviewKind::Low => &mut self.masks_low,
             PreviewKind::Preview => &mut self.masks_preview,
+            PreviewKind::Zoom => &mut self.masks_zoom,
         };
 
         let cache_hit = slot.as_ref().is_some_and(|cache| {
@@ -2617,14 +2852,32 @@ fn render_from_session(
     let session = get_session(handle).context("Invalid session handle")?;
     let mut session = session.lock().map_err(|_| anyhow::anyhow!("Session lock poisoned"))?;
 
-    let linear = session.linear_for(kind)?;
     let payload = parse_adjustments_payload(adjustments_json);
+    let effective_kind;
+    let linear = if payload.preview.use_zoom {
+        let requested = payload.preview.max_dimension;
+        let min_dim = 1280;
+        let max_dim = 2304;
+        let step = 128;
+        let default_dim = max_dim;
+        let clamped = requested.unwrap_or(default_dim).clamp(min_dim, max_dim);
+        let max_dim = (clamped / step) * step;
+        effective_kind = PreviewKind::Zoom;
+        session.zoom_linear_for(max_dim, max_dim)?
+    } else {
+        effective_kind = kind;
+        session.linear_for(kind)?
+    };
     let transformed = apply_transformations(linear.as_ref(), &payload);
     let width = transformed.width();
     let height = transformed.height();
-    let masks = session.masks_for(kind, &payload.masks, width, height);
+    let masks = session.masks_for(effective_kind, &payload.masks, width, height);
 
-    render_linear_with_payload(transformed.as_ref(), &payload, masks, true)
+    if let Some(roi) = payload.preview.roi.as_ref() {
+        render_linear_roi_with_payload(transformed.as_ref(), &payload, masks, true, roi)
+    } else {
+        render_linear_with_payload(transformed.as_ref(), &payload, masks, true)
+    }
 }
 
 #[no_mangle]
