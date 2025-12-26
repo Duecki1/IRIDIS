@@ -25,15 +25,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
@@ -49,8 +50,6 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.ExpandedFullScreenContainedSearchBar
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FloatingToolbarDefaults
 import androidx.compose.material3.HorizontalFloatingToolbar
@@ -62,16 +61,13 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SearchBarDefaults
-import androidx.compose.material3.SearchBarValue
-import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.VerticalDivider
-import androidx.compose.material3.rememberSearchBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -80,6 +76,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -151,24 +148,8 @@ internal fun GalleryScreen(
     val notificationPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
-    val searchBarState = rememberSearchBarState()
-    val textFieldState = androidx.compose.foundation.text.input.rememberTextFieldState()
-    val queryLower = remember(textFieldState.text) { textFieldState.text.toString().trim().lowercase(Locale.US) }
-    val tagCounts = remember(items) {
-        val counts = mutableMapOf<String, Int>()
-        items.flatMap { it.tags }.forEach { tag ->
-            val t = tag.trim()
-            if (t.isNotBlank()) counts[t] = (counts[t] ?: 0) + 1
-        }
-        counts.toList().sortedByDescending { it.second }.map { it.first to it.second }
-    }
-    val tagSuggestions = remember(tagCounts, queryLower) {
-        val base = tagCounts.map { it.first }
-        val filtered =
-            if (queryLower.isBlank()) base
-            else base.filter { it.lowercase(Locale.US).contains(queryLower) }
-        filtered.take(20)
-    }
+    var queryText by rememberSaveable { mutableStateOf("") }
+    val queryLower = remember(queryText) { queryText.trim().lowercase(Locale.US) }
 
     fun matchesQuery(item: GalleryItem): Boolean {
         if (queryLower.isBlank()) return true
@@ -186,21 +167,6 @@ internal fun GalleryScreen(
     }
 
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
-    val queryText = remember(textFieldState.text) { textFieldState.text.toString() }
-    val isSearchExpanded = searchBarState.targetValue == SearchBarValue.Expanded
-
-    fun collapseSearch() {
-        coroutineScope.launch { searchBarState.animateToCollapsed() }
-    }
-
-    fun expandSearch() {
-        coroutineScope.launch { searchBarState.animateToExpanded() }
-    }
-
-    fun setQueryAndCollapse(text: String) {
-        textFieldState.setTextAndPlaceCursorAtEnd(text)
-        collapseSearch()
-    }
 
     fun maybeRequestNotificationPermission() {
         if (Build.VERSION.SDK_INT < 33) return
@@ -480,28 +446,43 @@ internal fun GalleryScreen(
             .nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             Column {
-                if (!isSearchExpanded) {
-                    CenterAlignedTopAppBar(
-                        title = { Text("IRIDIS", fontWeight = FontWeight.SemiBold) },
-                        scrollBehavior = scrollBehavior,
-                        colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                            containerColor = MaterialTheme.colorScheme.background,
-                            scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
-                        ),
-                        navigationIcon = {
-                            IconButton(onClick = onOpenSettings) {
-                                Icon(Icons.Default.Settings, contentDescription = "Settings")
+                Surface(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .windowInsetsPadding(TopAppBarDefaults.windowInsets),
+                    color = MaterialTheme.colorScheme.surface
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = queryText,
+                            onValueChange = { queryText = it },
+                            modifier =
+                                Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 56.dp),
+                            singleLine = true,
+                            shape = CircleShape,
+                            placeholder = { Text("Search RAWs") },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                            trailingIcon = {
+                                if (queryText.isNotBlank()) {
+                                    IconButton(onClick = { queryText = "" }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Clear")
+                                    }
+                                }
                             }
-                        },
-                        actions = {
-                            IconButton(
-                                enabled = selectedIds.isEmpty() && !isBulkExporting,
-                                onClick = { expandSearch() }
-                            ) {
-                                Icon(Icons.Default.Search, contentDescription = "Search")
-                            }
+                        )
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        IconButton(onClick = onOpenSettings) {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings")
                         }
-                    )
+                    }
                 }
 
                 if (isBulkExporting) {
@@ -524,87 +505,6 @@ internal fun GalleryScreen(
             }
         }
     ) { padding ->
-        ExpandedFullScreenContainedSearchBar(
-            state = searchBarState,
-            inputField = {
-                SearchBarDefaults.InputField(
-                    textFieldState = textFieldState,
-                    searchBarState = searchBarState,
-                    onSearch = { collapseSearch() },
-                    placeholder = { Text("Search RAWs") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (queryText.isNotBlank()) {
-                            IconButton(onClick = { textFieldState.setTextAndPlaceCursorAtEnd("") }) {
-                                Icon(Icons.Default.Close, contentDescription = "Clear")
-                            }
-                        } else {
-                            IconButton(onClick = { collapseSearch() }) {
-                                Icon(Icons.Default.Close, contentDescription = "Cancel")
-                            }
-                        }
-                    },
-                    shape = CircleShape
-                )
-            }
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    val chips = (tagCounts.take(24).map { it.first })
-                    items(chips.size) { idx ->
-                        val tag = chips[idx]
-                        SuggestionChip(
-                            onClick = { setQueryAndCollapse(tag) },
-                            label = { Text(tag, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            shape = CircleShape
-                        )
-                    }
-                }
-
-                LazyColumn(
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    item {
-                        Text(
-                            text = "Top tags",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 8.dp)
-                        )
-                    }
-
-                    val list =
-                        if (tagSuggestions.isNotEmpty()) tagSuggestions else tagCounts.take(12).map { it.first }
-                    items(list.size) { idx ->
-                        val tag = list[idx]
-                        Surface(
-                            onClick = { setQueryAndCollapse(tag) },
-                            shape = RoundedCornerShape(16.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainer,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            ListItem(
-                                headlineContent = { Text(tag, fontWeight = FontWeight.Medium) },
-                                supportingContent = { Text("Tag") },
-                                leadingContent = { Icon(Icons.Default.History, contentDescription = null) },
-                                trailingContent = {
-                                    Icon(
-                                        Icons.AutoMirrored.Filled.ArrowForward,
-                                        contentDescription = null
-                                    )
-                                },
-                                colors = ListItemDefaults.colors(containerColor = Color.Transparent)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
         Box(
             modifier = Modifier
                 .fillMaxSize()
