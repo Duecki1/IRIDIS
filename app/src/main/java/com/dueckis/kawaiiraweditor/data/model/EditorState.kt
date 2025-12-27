@@ -22,6 +22,7 @@ import kotlin.math.roundToInt
 import kotlin.ranges.ClosedFloatingPointRange
 
 internal enum class AdjustmentField {
+    Exposure,
     Brightness,
     Contrast,
     Highlights,
@@ -208,6 +209,7 @@ internal data class AdjustmentState(
     val orientationSteps: Int = 0,
     val aspectRatio: Float? = null,
     val crop: CropState? = null,
+    val exposure: Float = 0f,
     val brightness: Float = 0f,
     val contrast: Float = 0f,
     val highlights: Float = 0f,
@@ -231,7 +233,7 @@ internal data class AdjustmentState(
     val colorNoiseReduction: Float = 0f,
     val chromaticAberrationRedCyan: Float = 0f,
     val chromaticAberrationBlueYellow: Float = 0f,
-    val toneMapper: String = "basic",
+    val toneMapper: String = "agx",
     val curves: CurvesState = CurvesState(),
     val colorGrading: ColorGradingState = ColorGradingState(),
     val hsl: HslState = HslState()
@@ -246,6 +248,7 @@ internal data class AdjustmentState(
                 put("aspectRatio", aspectRatio ?: JSONObject.NULL)
                 put("crop", crop?.toJsonObject() ?: JSONObject.NULL)
             }
+            put("exposure", exposure)
             put("brightness", brightness)
             put("contrast", contrast)
             put("highlights", highlights)
@@ -280,6 +283,7 @@ internal data class AdjustmentState(
 
     fun valueFor(field: AdjustmentField): Float {
         return when (field) {
+            AdjustmentField.Exposure -> exposure
             AdjustmentField.Brightness -> brightness
             AdjustmentField.Contrast -> contrast
             AdjustmentField.Highlights -> highlights
@@ -309,6 +313,7 @@ internal data class AdjustmentState(
 
     fun withValue(field: AdjustmentField, value: Float): AdjustmentState {
         return when (field) {
+            AdjustmentField.Exposure -> copy(exposure = value)
             AdjustmentField.Brightness -> copy(brightness = value)
             AdjustmentField.Contrast -> copy(contrast = value)
             AdjustmentField.Highlights -> copy(highlights = value)
@@ -482,6 +487,7 @@ internal fun AdjustmentState.isNeutralForMask(): Boolean {
         orientationSteps == 0 &&
         aspectRatio == null &&
         crop == null &&
+        nearZero(exposure) &&
         nearZero(brightness) &&
         nearZero(contrast) &&
         nearZero(highlights) &&
@@ -512,7 +518,8 @@ internal fun AdjustmentState.isNeutralForMask(): Boolean {
 
 internal data class MaskPoint(
     val x: Float,
-    val y: Float
+    val y: Float,
+    val pressure: Float = 1f
 )
 
 internal data class BrushLineState(
@@ -590,6 +597,7 @@ internal fun SubMaskState.toJsonObject(): JSONObject {
                                                         JSONObject().apply {
                                                             put("x", point.x)
                                                             put("y", point.y)
+                                                            put("pressure", point.pressure)
                                                         }
                                                     )
                                                 }
@@ -735,6 +743,15 @@ internal fun buildMaskOverlayBitmap(
         return (px / 2f).coerceAtLeast(1f)
     }
 
+    fun pressureScale(pressure: Float): Float {
+        val p = pressure.coerceIn(0f, 1f)
+        return 0.2f + (0.8f * p)
+    }
+
+    fun brushRadiusPx(brushSizeRaw: Float, pressure: Float): Float {
+        return (brushRadiusPx(brushSizeRaw) * pressureScale(pressure)).coerceAtLeast(1f)
+    }
+
     fun denormPoint(p: MaskPoint): Pair<Float, Float> {
         return denorm(p.x, width) to denorm(p.y, height)
     }
@@ -813,24 +830,27 @@ internal fun buildMaskOverlayBitmap(
 
                 events.forEach { event ->
                     if (event.points.isEmpty()) return@forEach
-                    val radius = brushRadiusPx(event.brushSize)
                     val feather = event.feather.coerceIn(0f, 1f)
                     if (event.points.size == 1) {
                         val (x, y) = denormPoint(event.points[0])
+                        val radius = brushRadiusPx(event.brushSize, event.points[0].pressure)
                         applyCircle(event.mode, x, y, radius, feather)
                         return@forEach
                     }
 
-                    val step = (radius * 0.5f).coerceAtLeast(0.75f)
                     event.points.windowed(2, 1, false).forEach { (p0, p1) ->
                         val (x0, y0) = denormPoint(p0)
                         val (x1, y1) = denormPoint(p1)
                         val dx = x1 - x0
                         val dy = y1 - y0
                         val dist = kotlin.math.sqrt(dx * dx + dy * dy).coerceAtLeast(0.001f)
+                        val r0 = brushRadiusPx(event.brushSize, p0.pressure)
+                        val r1 = brushRadiusPx(event.brushSize, p1.pressure)
+                        val step = (maxOf(r0, r1) * 0.5f).coerceAtLeast(0.75f)
                         val steps = (dist / step).roundToInt().coerceAtLeast(1)
                         for (i in 0..steps) {
                             val t = i.toFloat() / steps.toFloat()
+                            val radius = r0 + (r1 - r0) * t
                             applyCircle(event.mode, x0 + dx * t, y0 + dy * t, radius, feather)
                         }
                     }

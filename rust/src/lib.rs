@@ -397,11 +397,17 @@ fn default_brush_feather() -> f32 {
     0.5
 }
 
+fn default_brush_pressure() -> f32 {
+    1.0
+}
+
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct BrushPointPayload {
     x: f32,
     y: f32,
+    #[serde(default = "default_brush_pressure")]
+    pressure: f32,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -1117,8 +1123,8 @@ struct BrushEvent {
     order: u64,
     mode: SubMaskMode,
     feather: f32,
-    radius: f32,
-    points: Vec<(f32, f32)>,
+    base_radius: f32,
+    points: Vec<(f32, f32, f32)>,
 }
 
 fn apply_brush_submask(target: &mut [u8], sub_mask: &SubMaskPayload, width: u32, height: u32) {
@@ -1145,6 +1151,10 @@ fn apply_brush_submask(target: &mut [u8], sub_mask: &SubMaskPayload, width: u32,
     let params: BrushMaskParameters = serde_json::from_value(sub_mask.parameters.clone()).unwrap_or_default();
     let mut events: Vec<BrushEvent> = Vec::new();
 
+    fn pressure_scale(pressure: f32) -> f32 {
+        0.2 + 0.8 * pressure.clamp(0.0, 1.0)
+    }
+
     for line in params.lines {
         if line.points.is_empty() {
             continue;
@@ -1161,20 +1171,20 @@ fn apply_brush_submask(target: &mut [u8], sub_mask: &SubMaskPayload, width: u32,
         } else {
             line.brush_size
         };
-        let radius = (brush_size_px / 2.0).max(1.0);
+        let base_radius = (brush_size_px / 2.0).max(1.0);
         let feather = line.feather.clamp(0.0, 1.0);
 
-        let points: Vec<(f32, f32)> = line
+        let points: Vec<(f32, f32, f32)> = line
             .points
             .into_iter()
-            .map(|p| (denorm(p.x, w_f), denorm(p.y, h_f)))
+            .map(|p| (denorm(p.x, w_f), denorm(p.y, h_f), p.pressure.clamp(0.0, 1.0)))
             .collect();
 
         events.push(BrushEvent {
             order: line.order,
             mode: effective_mode,
             feather,
-            radius,
+            base_radius,
             points,
         });
     }
@@ -1182,34 +1192,35 @@ fn apply_brush_submask(target: &mut [u8], sub_mask: &SubMaskPayload, width: u32,
     events.sort_by_key(|e| e.order);
 
     for event in events {
-        let inner = event.radius * (1.0 - event.feather);
-        let mut step_size = (inner / 3.0).max(0.75);
-        step_size = step_size.min(event.radius * 0.25).max(0.75);
-
-        let apply_circle = |mask: &mut [u8], cx: f32, cy: f32| {
+        let apply_circle = |mask: &mut [u8], cx: f32, cy: f32, radius: f32| {
             if event.mode == SubMaskMode::Additive {
-                apply_feathered_circle_add(mask, width, height, cx, cy, event.radius, event.feather);
+                apply_feathered_circle_add(mask, width, height, cx, cy, radius, event.feather);
             } else {
-                apply_feathered_circle_sub(mask, width, height, cx, cy, event.radius, event.feather);
+                apply_feathered_circle_sub(mask, width, height, cx, cy, radius, event.feather);
             }
         };
 
         if event.points.len() == 1 {
-            let (x, y) = event.points[0];
-            apply_circle(target, x, y);
+            let (x, y, p) = event.points[0];
+            let radius = (event.base_radius * pressure_scale(p)).max(1.0);
+            apply_circle(target, x, y, radius);
             continue;
         }
 
         for pair in event.points.windows(2) {
-            let (x1, y1) = pair[0];
-            let (x2, y2) = pair[1];
+            let (x1, y1, p1) = pair[0];
+            let (x2, y2, p2) = pair[1];
             let dx = x2 - x1;
             let dy = y2 - y1;
             let dist = (dx * dx + dy * dy).sqrt().max(0.001);
+            let r1 = (event.base_radius * pressure_scale(p1)).max(1.0);
+            let r2 = (event.base_radius * pressure_scale(p2)).max(1.0);
+            let step_size = ((r1.max(r2)) * 0.5).max(0.75);
             let steps = (dist / step_size).ceil() as i32;
             for i in 0..=steps {
                 let t = i as f32 / steps.max(1) as f32;
-                apply_circle(target, x1 + dx * t, y1 + dy * t);
+                let radius = r1 + (r2 - r1) * t;
+                apply_circle(target, x1 + dx * t, y1 + dy * t, radius);
             }
         }
     }
@@ -1868,6 +1879,14 @@ fn apply_highlights_adjustment(mut colors: [f32; 3], highlights: f32) -> [f32; 3
 }
 
 fn apply_color_adjustments(mut colors: [f32; 3], settings: &AdjustmentValues) -> [f32; 3] {
+    // Exposure (linear, RapidRAW-like): color *= 2^exposure
+    if settings.exposure != 0.0 {
+        let factor = 2f32.powf(settings.exposure);
+        colors[0] *= factor;
+        colors[1] *= factor;
+        colors[2] *= factor;
+    }
+
     // Temperature and Tint adjustment (applied early like RapidRAW)
     // RapidRAW: temp_kelvin_mult = vec3(1.0 + temp * 0.2, 1.0 + temp * 0.05, 1.0 - temp * 0.2)
     // RapidRAW: tint_mult = vec3(1.0 + tnt * 0.25, 1.0 - tnt * 0.25, 1.0 + tnt * 0.25)
@@ -1974,18 +1993,73 @@ fn apply_color_adjustments(mut colors: [f32; 3], settings: &AdjustmentValues) ->
         *channel += sharpness_gain * detail_mask;
     }
     
-    // Clamp final values
+    // Keep HDR headroom for tone mapping later, but clamp for safety to avoid NaNs/inf and
+    // runaway values on extreme slider settings.
+    const MAX_HDR: f32 = 64.0;
     for channel in colors.iter_mut() {
-        *channel = channel.clamp(0.0, 1.0);
+        if !channel.is_finite() {
+            *channel = 0.0;
+            continue;
+        }
+        *channel = channel.clamp(0.0, MAX_HDR);
     }
 
     colors
 }
 
+fn tonemap_aces_fitted(x: f32) -> f32 {
+    // Narkowicz 2015, "ACES Filmic Tone Mapping Curve"
+    // https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
+    let x = x.max(0.0);
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    let y = (x * (a * x + b)) / (x * (c * x + d) + e);
+    if y.is_finite() { y.clamp(0.0, 1.0) } else { 0.0 }
+}
+
+fn tone_map_basic(colors: [f32; 3]) -> [f32; 3] {
+    [
+        tonemap_aces_fitted(colors[0]),
+        tonemap_aces_fitted(colors[1]),
+        tonemap_aces_fitted(colors[2]),
+    ]
+}
+
+fn tone_map_agx(colors: [f32; 3]) -> [f32; 3] {
+    // Luma-preserving ACES fit + gentle highlight desaturation.
+    let rgb = [colors[0].max(0.0), colors[1].max(0.0), colors[2].max(0.0)];
+    let luma = get_luma(rgb);
+    if !luma.is_finite() || luma <= 1.0e-6 {
+        return [0.0, 0.0, 0.0];
+    }
+
+    let mapped_luma = tonemap_aces_fitted(luma);
+    let scale = mapped_luma / luma;
+    let mut out = [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale];
+
+    let out_luma = get_luma(out);
+    let desat = smoothstep(0.75, 1.0, out_luma);
+    for c in out.iter_mut() {
+        *c = *c + (out_luma - *c) * desat * 0.25;
+        *c = c.clamp(0.0, 1.0);
+    }
+
+    out
+}
+
+fn tone_map(colors: [f32; 3], mapper: ToneMapper) -> [f32; 3] {
+    match mapper {
+        ToneMapper::Basic => tone_map_basic(colors),
+        ToneMapper::Agx => tone_map_agx(colors),
+    }
+}
+
 fn linear_to_srgb(linear: f32) -> f32 {
-    // Match RapidRAW shader behavior: clamp linear input to display range before encoding.
-    // Prevents artifacts on blown highlights when values have headroom (> 1.0).
-    let v = linear.clamp(0.0, 1.0);
+    // Encode scene-linear (extended range allowed) into sRGB.
+    let v = linear.max(0.0);
     if v <= 0.0031308 {
         12.92 * v
     } else {
@@ -2012,11 +2086,11 @@ fn apply_default_raw_processing(colors: [f32; 3], use_basic_tone_mapper: bool) -
     const BRIGHTNESS_GAMMA: f32 = 1.1;
     const CONTRAST_MIX: f32 = 0.75;
     
-    // Convert to sRGB
+    // Convert to sRGB (clamped to display range for the "basic look" curve).
     let srgb = [
-        linear_to_srgb(colors[0]),
-        linear_to_srgb(colors[1]),
-        linear_to_srgb(colors[2]),
+        linear_to_srgb(colors[0].clamp(0.0, 1.0)),
+        linear_to_srgb(colors[1].clamp(0.0, 1.0)),
+        linear_to_srgb(colors[2].clamp(0.0, 1.0)),
     ];
     
     // Apply brightness gamma
@@ -2340,6 +2414,8 @@ fn render_linear_with_payload(
             ];
         }
 
+        composite = tone_map(composite, adjustment_values.tone_mapper);
+
         let mut srgb = [
             linear_to_srgb(composite[0]),
             linear_to_srgb(composite[1]),
@@ -2494,6 +2570,8 @@ fn render_linear_roi_with_payload(
                     composite[2] + (mask_adjusted[2] - composite[2]) * influence,
                 ];
             }
+
+            composite = tone_map(composite, adjustment_values.tone_mapper);
 
             let mut srgb = [
                 linear_to_srgb(composite[0]),

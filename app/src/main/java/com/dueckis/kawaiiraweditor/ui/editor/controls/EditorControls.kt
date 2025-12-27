@@ -139,7 +139,11 @@ internal fun EditorControlsContent(
         EditorPanelTab.Adjustments -> {
             ToneMapperSection(
                 toneMapper = adjustments.toneMapper,
-                onToneMapperChange = { mapper -> onAdjustmentsChange(adjustments.withToneMapper(mapper)) }
+                exposure = adjustments.exposure,
+                onToneMapperChange = { mapper -> onAdjustmentsChange(adjustments.withToneMapper(mapper)) },
+                onExposureChange = { value -> onAdjustmentsChange(adjustments.copy(exposure = value)) },
+                onInteractionStart = onBeginEditInteraction,
+                onInteractionEnd = onEndEditInteraction
             )
 
             adjustmentSections.forEach { (sectionTitle, controls) ->
