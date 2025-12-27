@@ -63,6 +63,7 @@ Inspired by/using backend processing maths from RapidRAW: https://github.com/Cyb
 - Be able to reorder subtract and add masks
 - UI needs to be improved for masking. (And more)
 - Fix overlapping Add and subtract submasks generate hard cut
+- Widget
 
 ## License
 
