@@ -23,10 +23,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -133,41 +137,53 @@ internal fun CurvesEditor(
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                CurveChannel.entries.forEach { channel ->
-                    val selected = channel == activeChannel
-                    val accent =
-                        when (channel) {
-                            CurveChannel.Luma -> MaterialTheme.colorScheme.primary
-                            CurveChannel.Red -> Color(0xFFFF6B6B)
-                            CurveChannel.Green -> Color(0xFF6BCB77)
-                            CurveChannel.Blue -> Color(0xFF4D96FF)
+            val channels = remember { listOf(CurveChannel.Luma, CurveChannel.Red, CurveChannel.Green, CurveChannel.Blue) }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                channels.chunked(2).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        row.forEach { channel ->
+                            val selected = channel == activeChannel
+                            val accent =
+                                when (channel) {
+                                    CurveChannel.Luma -> MaterialTheme.colorScheme.primary
+                                    CurveChannel.Red -> Color(0xFFFF6B6B)
+                                    CurveChannel.Green -> Color(0xFF6BCB77)
+                                    CurveChannel.Blue -> Color(0xFF4D96FF)
+                                }
+                            FilledTonalButton(
+                                onClick = { activeChannel = channel },
+                                colors =
+                                    ButtonDefaults.filledTonalButtonColors(
+                                        containerColor =
+                                            if (selected) accent.copy(alpha = 0.25f)
+                                            else MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        contentColor = if (selected) MaterialTheme.colorScheme.onSurface else accent
+                                    ),
+                                modifier =
+                                    Modifier
+                                        .size(32.dp)
+                                        .then(if (selected) Modifier.border(2.dp, accent, CircleShape) else Modifier),
+                                shape = CircleShape,
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Text(channel.label, style = MaterialTheme.typography.labelSmall)
+                            }
                         }
-                    FilledTonalButton(
-                        onClick = { activeChannel = channel },
-                        colors =
-                            ButtonDefaults.filledTonalButtonColors(
-                                containerColor =
-                                    if (selected) accent.copy(alpha = 0.25f)
-                                    else MaterialTheme.colorScheme.surfaceContainerHighest,
-                                contentColor = if (selected) MaterialTheme.colorScheme.onSurface else accent
-                            ),
-                        modifier =
-                            Modifier
-                                .size(40.dp)
-                                .then(if (selected) Modifier.border(2.dp, accent, CircleShape) else Modifier),
-                        shape = CircleShape,
-                        contentPadding = PaddingValues(0.dp)
-                    ) {
-                        Text(channel.label)
                     }
                 }
             }
-            OutlinedButton(onClick = resetChannel, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
-                Text("Reset")
+            IconButton(
+                onClick = resetChannel,
+                colors =
+                    IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+            ) {
+                Icon(Icons.Filled.RestartAlt, contentDescription = "Reset")
             }
         }
 
@@ -641,4 +657,3 @@ internal fun HslEditor(
         )
     }
 }
-

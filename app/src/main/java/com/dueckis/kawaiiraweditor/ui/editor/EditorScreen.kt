@@ -137,6 +137,7 @@ import kotlin.math.sin
 internal fun EditorScreen(
     galleryItem: GalleryItem?,
     lowQualityPreviewEnabled: Boolean,
+    environmentMaskingEnabled: Boolean,
     onBackClick: () -> Unit,
     onPredictiveBackProgress: (Float) -> Unit,
     onPredictiveBackCancelled: () -> Unit,
@@ -166,6 +167,14 @@ internal fun EditorScreen(
     var adjustments by remember { mutableStateOf(AdjustmentState()) }
     var masks by remember { mutableStateOf<List<MaskState>>(emptyList()) }
     val maskNumbers = remember { mutableStateMapOf<String, Int>() }
+
+    fun masksForRender(source: List<MaskState>): List<MaskState> {
+        if (environmentMaskingEnabled) return source
+        return source.mapNotNull { mask ->
+            val remaining = mask.subMasks.filterNot { it.type == SubMaskType.AiEnvironment.id }
+            if (remaining.isEmpty()) null else mask.copy(subMasks = remaining)
+        }
+    }
 
     fun assignNumber(maskId: String) {
         if (maskId !in maskNumbers) {
@@ -975,7 +984,7 @@ internal fun EditorScreen(
                         toneMapper = adjustments.toneMapper
                     ).toJson(emptyList())
                 } else {
-                    adjustments.toJson(masks)
+                    adjustments.toJson(masksForRender(masks))
                 }
             }
         val version = renderVersion.incrementAndGet()
@@ -1021,7 +1030,7 @@ internal fun EditorScreen(
         if (!leavingCropMode) return@LaunchedEffect
         if (isComparingOriginal) return@LaunchedEffect
 
-        val json = withContext(Dispatchers.Default) { adjustments.toJson(masks) }
+        val json = withContext(Dispatchers.Default) { adjustments.toJson(masksForRender(masks)) }
         val version = renderVersion.incrementAndGet()
         renderRequests.trySend(
             RenderRequest(version = version, adjustmentsJson = json, target = RenderTarget.Edited, rotationDegrees = adjustments.rotation)
@@ -1067,7 +1076,7 @@ internal fun EditorScreen(
         renderRequests.trySend(
             RenderRequest(
                 version = renderVersion.incrementAndGet(),
-                adjustmentsJson = adjustments.toJson(masks),
+                adjustmentsJson = adjustments.toJson(masksForRender(masks)),
                 target = RenderTarget.Edited,
                 rotationDegrees = adjustments.rotation
             )
@@ -1271,7 +1280,7 @@ internal fun EditorScreen(
     }
 
     val aiSubjectMaskGenerator = remember { AiSubjectMaskGenerator(context) }
-    val aiEnvironmentMaskGenerator = remember { AiEnvironmentMaskGenerator(context) }
+    val aiEnvironmentMaskGenerator = remember(environmentMaskingEnabled) { if (environmentMaskingEnabled) AiEnvironmentMaskGenerator(context) else null }
     val onLassoFinished: (List<MaskPoint>) -> Unit = onLasso@{ points ->
         val maskId = selectedMaskId ?: return@onLasso
         val subId = selectedSubMaskId ?: return@onLasso
@@ -1311,14 +1320,14 @@ internal fun EditorScreen(
         }
     }
 
-    val onGenerateAiEnvironmentMask: () -> Unit = onEnv@{
-        val maskId = selectedMaskId ?: return@onEnv
-        val subId = selectedSubMaskId ?: return@onEnv
-        val bmp = editedBitmap ?: return@onEnv
+    val onGenerateAiEnvironmentMask: (() -> Unit)? = if (!environmentMaskingEnabled) null else fun() {
+        val maskId = selectedMaskId ?: return
+        val subId = selectedSubMaskId ?: return
+        val bmp = editedBitmap ?: return
         val sub =
             masks.firstOrNull { it.id == maskId }?.subMasks?.firstOrNull { it.id == subId }
-                ?: return@onEnv
-        if (sub.type != SubMaskType.AiEnvironment.id) return@onEnv
+                ?: return
+        if (sub.type != SubMaskType.AiEnvironment.id) return
 
         val category = AiEnvironmentCategory.fromId(sub.aiEnvironment.category)
         coroutineScope.launch {
@@ -1326,7 +1335,8 @@ internal fun EditorScreen(
             statusMessage = "Generating ${category.label.lowercase()} mask…"
             val result =
                 runCatching {
-                    aiEnvironmentMaskGenerator.generateEnvironmentMaskDataUrl(
+                    val generator = aiEnvironmentMaskGenerator ?: error("Environment masking disabled.")
+                    generator.generateEnvironmentMaskDataUrl(
                         previewBitmap = bmp,
                         category = category
                     )
@@ -1357,16 +1367,17 @@ internal fun EditorScreen(
         }
     }
 
-    val onDetectAiEnvironmentCategories: () -> Unit = onDetect@{
-        if (isDetectingAiEnvironmentCategories) return@onDetect
-        if (detectedAiEnvironmentCategories != null) return@onDetect
-        val bmp = editedBitmap ?: return@onDetect
+    val onDetectAiEnvironmentCategories: (() -> Unit)? = if (!environmentMaskingEnabled) null else fun() {
+        if (isDetectingAiEnvironmentCategories) return
+        if (detectedAiEnvironmentCategories != null) return
+        val bmp = editedBitmap ?: return
 
         coroutineScope.launch {
             isDetectingAiEnvironmentCategories = true
             val detected =
                 runCatching {
-                    aiEnvironmentMaskGenerator.detectAvailableCategories(bmp)
+                    val generator = aiEnvironmentMaskGenerator ?: error("Environment masking disabled.")
+                    generator.detectAvailableCategories(bmp)
                 }.getOrNull()
             if (detected != null) detectedAiEnvironmentCategories = detected
             isDetectingAiEnvironmentCategories = false
@@ -1419,7 +1430,7 @@ internal fun EditorScreen(
                     val json =
                         withContext(Dispatchers.Default) {
                             adjustments.toJsonObject(includeToneMapper = true).apply {
-                                put("masks", JSONArray().apply { masks.forEach { put(it.toJsonObject()) } })
+                                put("masks", JSONArray().apply { masksForRender(masks).forEach { put(it.toJsonObject()) } })
                                 put(
                                     "preview",
                                     JSONObject().apply {
@@ -1442,7 +1453,7 @@ internal fun EditorScreen(
                     )
                 } else if (fullPreviewDirtyByViewport) {
                     fullPreviewDirtyByViewport = false
-                    val json = withContext(Dispatchers.Default) { adjustments.toJson(masks) }
+                    val json = withContext(Dispatchers.Default) { adjustments.toJson(masksForRender(masks)) }
                     val version = renderVersion.incrementAndGet()
                     renderRequests.trySend(
                         RenderRequest(version = version, adjustmentsJson = json, target = RenderTarget.Edited, rotationDegrees = adjustments.rotation)
@@ -1574,6 +1585,7 @@ internal fun EditorScreen(
                                     onRotationDraftChange = { rotationDraft = it },
                                     isStraightenActive = isStraightenActive,
                                     onStraightenActiveChange = { isStraightenActive = it },
+                                    environmentMaskingEnabled = environmentMaskingEnabled,
                                     isGeneratingAiMask = isGeneratingAiMask,
                                     onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask,
                                     detectedAiEnvironmentCategories = detectedAiEnvironmentCategories,
@@ -1654,7 +1666,7 @@ internal fun EditorScreen(
                             ExportButton(
                                 sessionHandle = sessionHandle,
                                 adjustments = adjustments,
-                                masks = masks,
+                                masks = masksForRender(masks),
                                 isExporting = isExporting,
                                 nativeDispatcher = renderDispatcher,
                                 context = context,
@@ -1726,7 +1738,7 @@ internal fun EditorScreen(
                                 ExportButton(
                                     sessionHandle = sessionHandle,
                                     adjustments = adjustments,
-                                    masks = masks,
+                                    masks = masksForRender(masks),
                                     isExporting = isExporting,
                                     nativeDispatcher = renderDispatcher,
                                     context = context,
@@ -1859,6 +1871,7 @@ internal fun EditorScreen(
                                         onRotationDraftChange = { rotationDraft = it },
                                         isStraightenActive = isStraightenActive,
                                         onStraightenActiveChange = { isStraightenActive = it },
+                                        environmentMaskingEnabled = environmentMaskingEnabled,
                                         isGeneratingAiMask = isGeneratingAiMask,
                                         onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask,
                                         detectedAiEnvironmentCategories = detectedAiEnvironmentCategories,

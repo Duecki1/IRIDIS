@@ -36,8 +36,10 @@ import com.dueckis.kawaiiraweditor.ui.dialogs.AboutDialog
 internal fun SettingsScreen(
     lowQualityPreviewEnabled: Boolean,
     automaticTaggingEnabled: Boolean,
+    environmentMaskingEnabled: Boolean,
     onLowQualityPreviewEnabledChange: (Boolean) -> Unit,
     onAutomaticTaggingEnabledChange: (Boolean) -> Unit,
+    onEnvironmentMaskingEnabledChange: (Boolean) -> Unit,
     onBackClick: () -> Unit
 ) {
     var showInfoDialog by remember { mutableStateOf(false) }
@@ -101,6 +103,23 @@ internal fun SettingsScreen(
                     )
                 },
                 modifier = Modifier.clickable { onAutomaticTaggingEnabledChange(!automaticTaggingEnabled) }
+            )
+            ListItem(
+                headlineContent = { Text("Enable environment AI masks") },
+                supportingContent = {
+                    Text(
+                        "Adds an AI-driven environment mask tool that detects scene elements and generates masks. This is disabled by default.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                trailingContent = {
+                    Switch(
+                        checked = environmentMaskingEnabled,
+                        onCheckedChange = onEnvironmentMaskingEnabledChange
+                    )
+                },
+                modifier = Modifier.clickable { onEnvironmentMaskingEnabledChange(!environmentMaskingEnabled) }
             )
         }
     }

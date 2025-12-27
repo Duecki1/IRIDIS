@@ -111,6 +111,7 @@ internal fun EditorControlsContent(
     onRotationDraftChange: (Float?) -> Unit,
     isStraightenActive: Boolean,
     onStraightenActiveChange: (Boolean) -> Unit,
+    environmentMaskingEnabled: Boolean,
     isGeneratingAiMask: Boolean,
     onGenerateAiEnvironmentMask: (() -> Unit)?,
     detectedAiEnvironmentCategories: List<AiEnvironmentCategory>?,
@@ -199,6 +200,13 @@ internal fun EditorControlsContent(
         }
 
         EditorPanelTab.Masks -> {
+            val availableSubMaskTypes =
+                if (environmentMaskingEnabled) {
+                    listOf(SubMaskType.AiEnvironment, SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial)
+                } else {
+                    listOf(SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial)
+                }
+
             fun assignMaskNumber(maskId: String): Int {
                 if (maskId !in maskNumbers) {
                     val next = (maskNumbers.values.maxOrNull() ?: 0) + 1
@@ -227,7 +235,7 @@ internal fun EditorControlsContent(
                     }
 
                     DropdownMenu(expanded = showCreateMenu, onDismissRequest = { showCreateMenu = false }) {
-                        listOf(SubMaskType.AiEnvironment, SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial).forEach { type ->
+                        availableSubMaskTypes.forEach { type ->
                             DropdownMenuItem(
                                 text = {
                                     Text(
@@ -406,7 +414,7 @@ internal fun EditorControlsContent(
                     DropdownMenu(expanded = showAddSubMenu, onDismissRequest = { showAddSubMenu = false }) {
                         listOf("Add" to SubMaskMode.Additive, "Subtract" to SubMaskMode.Subtractive).forEach { (label, mode) ->
                             DropdownMenuItem(text = { Text(label, fontWeight = FontWeight.SemiBold) }, onClick = {}, enabled = false)
-                            listOf(SubMaskType.AiEnvironment, SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial).forEach { type ->
+                            availableSubMaskTypes.forEach { type ->
                                 DropdownMenuItem(
                                     text = {
                                         Text(
@@ -730,80 +738,146 @@ internal fun EditorControlsContent(
                         }
 
                         SubMaskType.AiEnvironment.id -> {
-                            Text("Auto-detect a scene element and generate an AI mask.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (!environmentMaskingEnabled) {
+                                Text(
+                                    "Environment AI masks are disabled in Settings and won't be applied.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
 
-                            val selectedCategory = AiEnvironmentCategory.fromId(selectedSubMask.aiEnvironment.category)
-                            var showCategoryMenu by remember(selectedSubMask.id) { mutableStateOf(false) }
-                            var envGenerateRequestKey by remember(selectedSubMask.id) { mutableStateOf(0L) }
-
-                            LaunchedEffect(showCategoryMenu) {
-                                if (showCategoryMenu && detectedAiEnvironmentCategories == null && !isDetectingAiEnvironmentCategories) {
-                                    onDetectAiEnvironmentCategories?.invoke()
+                                val hasMask = selectedSubMask.aiEnvironment.maskDataBase64 != null
+                                FilledTonalButton(
+                                    enabled = hasMask,
+                                    onClick = {
+                                        val updated =
+                                            masks.map { m ->
+                                                if (m.id != selectedMask.id) m
+                                                else m.copy(
+                                                    subMasks =
+                                                        m.subMasks.map { s ->
+                                                            if (s.id != selectedSubMask.id) s
+                                                            else s.copy(aiEnvironment = s.aiEnvironment.copy(maskDataBase64 = null))
+                                                        }
+                                                )
+                                            }
+                                        onMasksChange(updated)
+                                        onShowMaskOverlayChange(true)
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Clear AI Mask")
                                 }
-                            }
+                            } else {
+                                Text("Auto-detect a scene element and generate an AI mask.", color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-                            LaunchedEffect(envGenerateRequestKey) {
-                                if (envGenerateRequestKey == 0L) return@LaunchedEffect
-                                if (isGeneratingAiMask) return@LaunchedEffect
-                                onGenerateAiEnvironmentMask?.invoke()
-                            }
+                                val selectedCategory = AiEnvironmentCategory.fromId(selectedSubMask.aiEnvironment.category)
+                                var showCategoryMenu by remember(selectedSubMask.id) { mutableStateOf(false) }
+                                var envGenerateRequestKey by remember(selectedSubMask.id) { mutableStateOf(0L) }
 
-                            LaunchedEffect(detectedAiEnvironmentCategories, selectedSubMask.id) {
+                                LaunchedEffect(showCategoryMenu) {
+                                    if (showCategoryMenu && detectedAiEnvironmentCategories == null && !isDetectingAiEnvironmentCategories) {
+                                        onDetectAiEnvironmentCategories?.invoke()
+                                    }
+                                }
+
+                                LaunchedEffect(envGenerateRequestKey) {
+                                    if (envGenerateRequestKey == 0L) return@LaunchedEffect
+                                    if (isGeneratingAiMask) return@LaunchedEffect
+                                    onGenerateAiEnvironmentMask?.invoke()
+                                }
+
+                                LaunchedEffect(detectedAiEnvironmentCategories, selectedSubMask.id) {
+                                    val detected = detectedAiEnvironmentCategories
+                                    if (detected.isNullOrEmpty()) return@LaunchedEffect
+                                    if (selectedCategory !in detected) {
+                                        val fallback = detected.first()
+                                        val updated =
+                                            masks.map { m ->
+                                                if (m.id != selectedMask.id) m
+                                                else m.copy(
+                                                    subMasks =
+                                                        m.subMasks.map { s ->
+                                                            if (s.id != selectedSubMask.id) s
+                                                            else s.copy(aiEnvironment = s.aiEnvironment.copy(category = fallback.id, maskDataBase64 = null))
+                                                        }
+                                                )
+                                            }
+                                        onMasksChange(updated)
+                                        onShowMaskOverlayChange(true)
+                                        envGenerateRequestKey = System.nanoTime()
+                                    }
+                                }
+
                                 val detected = detectedAiEnvironmentCategories
-                                if (detected.isNullOrEmpty()) return@LaunchedEffect
-                                if (selectedCategory !in detected) {
-                                    val fallback = detected.first()
-                                    val updated =
-                                        masks.map { m ->
-                                            if (m.id != selectedMask.id) m
-                                            else m.copy(
-                                                subMasks =
-                                                    m.subMasks.map { s ->
-                                                        if (s.id != selectedSubMask.id) s
-                                                        else s.copy(aiEnvironment = s.aiEnvironment.copy(category = fallback.id, maskDataBase64 = null))
-                                                    }
+                                val categoryDisplayLabel =
+                                    when {
+                                        detected == null -> "Select"
+                                        isDetectingAiEnvironmentCategories -> "Select"
+                                        detected.isEmpty() -> "No categories detected"
+                                        else -> selectedCategory.label
+                                    }
+
+                                ExposedDropdownMenuBox(
+                                    expanded = showCategoryMenu,
+                                    onExpandedChange = { showCategoryMenu = !showCategoryMenu },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    OutlinedTextField(
+                                        value = categoryDisplayLabel,
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        singleLine = true,
+                                        label = { Text("Category") },
+                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showCategoryMenu) },
+                                        colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                                        modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable).fillMaxWidth()
+                                    )
+                                    ExposedDropdownMenu(
+                                        expanded = showCategoryMenu,
+                                        onDismissRequest = { showCategoryMenu = false }
+                                    ) {
+                                        val detectedOrEmpty = detectedAiEnvironmentCategories.orEmpty()
+
+                                        if (detectedAiEnvironmentCategories == null || isDetectingAiEnvironmentCategories) {
+                                            DropdownMenuItem(text = { Text("Detecting…") }, onClick = {}, enabled = false)
+                                        }
+
+                                        if (detectedAiEnvironmentCategories != null && !isDetectingAiEnvironmentCategories && detectedOrEmpty.isEmpty()) {
+                                            DropdownMenuItem(text = { Text("No categories detected") }, onClick = {}, enabled = false)
+                                        }
+
+                                        detectedOrEmpty.forEach { cat ->
+                                            DropdownMenuItem(
+                                                text = { Text(cat.label) },
+                                                onClick = {
+                                                    showCategoryMenu = false
+                                                    val updated =
+                                                        masks.map { m ->
+                                                            if (m.id != selectedMask.id) m
+                                                            else m.copy(
+                                                                subMasks =
+                                                                    m.subMasks.map { s ->
+                                                                        if (s.id != selectedSubMask.id) s
+                                                                        else s.copy(aiEnvironment = s.aiEnvironment.copy(category = cat.id, maskDataBase64 = null))
+                                                                    }
+                                                            )
+                                                        }
+                                                    onMasksChange(updated)
+                                                    onShowMaskOverlayChange(true)
+                                                    envGenerateRequestKey = System.nanoTime()
+                                                }
                                             )
                                         }
-                                    onMasksChange(updated)
-                                    onShowMaskOverlayChange(true)
-                                    envGenerateRequestKey = System.nanoTime()
+                                    }
                                 }
-                            }
 
-                            ExposedDropdownMenuBox(
-                                expanded = showCategoryMenu,
-                                onExpandedChange = { showCategoryMenu = !showCategoryMenu },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                OutlinedTextField(
-                                    value = selectedCategory.label,
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    singleLine = true,
-                                    label = { Text("Category") },
-                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showCategoryMenu) },
-                                    colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
-                                    modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable).fillMaxWidth()
-                                )
-                                ExposedDropdownMenu(
-                                    expanded = showCategoryMenu,
-                                    onDismissRequest = { showCategoryMenu = false }
-                                ) {
-                                    val detected = detectedAiEnvironmentCategories.orEmpty()
-
-                                    if (isDetectingAiEnvironmentCategories) {
-                                        DropdownMenuItem(text = { Text("Detecting…") }, onClick = {}, enabled = false)
-                                    }
-
-                                    if (!isDetectingAiEnvironmentCategories && detected.isEmpty()) {
-                                        DropdownMenuItem(text = { Text("No categories detected") }, onClick = {}, enabled = false)
-                                    }
-
-                                    detected.forEach { cat ->
-                                        DropdownMenuItem(
-                                            text = { Text(cat.label) },
-                                            onClick = {
-                                                showCategoryMenu = false
+                                Text("Softness: ${(selectedSubMask.aiEnvironment.softness.coerceIn(0f, 1f) * 100f).roundToInt()}%")
+                                Slider(
+                                    modifier =
+                                        Modifier.doubleTapSliderThumbToReset(
+                                            value = selectedSubMask.aiEnvironment.softness,
+                                            valueRange = 0f..1f,
+                                            onReset = {
+                                                onBeginEditInteraction()
                                                 val updated =
                                                     masks.map { m ->
                                                         if (m.id != selectedMask.id) m
@@ -811,84 +885,57 @@ internal fun EditorControlsContent(
                                                             subMasks =
                                                                 m.subMasks.map { s ->
                                                                     if (s.id != selectedSubMask.id) s
-                                                                    else s.copy(aiEnvironment = s.aiEnvironment.copy(category = cat.id, maskDataBase64 = null))
+                                                                    else s.copy(aiEnvironment = s.aiEnvironment.copy(softness = 0.25f))
                                                                 }
                                                         )
                                                     }
                                                 onMasksChange(updated)
-                                                onShowMaskOverlayChange(true)
-                                                envGenerateRequestKey = System.nanoTime()
+                                                onEndEditInteraction()
                                             }
-                                        )
-                                    }
+                                        ),
+                                    value = selectedSubMask.aiEnvironment.softness.coerceIn(0f, 1f),
+                                    onValueChange = { newValue ->
+                                        onBeginEditInteraction()
+                                        val updated =
+                                            masks.map { m ->
+                                                if (m.id != selectedMask.id) m
+                                                else m.copy(
+                                                    subMasks =
+                                                        m.subMasks.map { s ->
+                                                            if (s.id != selectedSubMask.id) s
+                                                            else s.copy(aiEnvironment = s.aiEnvironment.copy(softness = newValue.coerceIn(0f, 1f)))
+                                                        }
+                                                )
+                                            }
+                                        onMasksChange(updated)
+                                        onShowMaskOverlayChange(true)
+                                    },
+                                    onValueChangeFinished = onEndEditInteraction,
+                                    valueRange = 0f..1f
+                                )
+
+                                val hasMask = selectedSubMask.aiEnvironment.maskDataBase64 != null
+                                FilledTonalButton(
+                                    enabled = hasMask,
+                                    onClick = {
+                                        val updated =
+                                            masks.map { m ->
+                                                if (m.id != selectedMask.id) m
+                                                else m.copy(
+                                                    subMasks =
+                                                        m.subMasks.map { s ->
+                                                            if (s.id != selectedSubMask.id) s
+                                                            else s.copy(aiEnvironment = s.aiEnvironment.copy(maskDataBase64 = null))
+                                                        }
+                                                )
+                                            }
+                                        onMasksChange(updated)
+                                        onShowMaskOverlayChange(true)
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Clear AI Mask")
                                 }
-                            }
-
-                            Text("Softness: ${(selectedSubMask.aiEnvironment.softness.coerceIn(0f, 1f) * 100f).roundToInt()}%")
-                            Slider(
-                                modifier =
-                                    Modifier.doubleTapSliderThumbToReset(
-                                        value = selectedSubMask.aiEnvironment.softness,
-                                        valueRange = 0f..1f,
-                                        onReset = {
-                                            onBeginEditInteraction()
-                                            val updated =
-                                                masks.map { m ->
-                                                    if (m.id != selectedMask.id) m
-                                                    else m.copy(
-                                                        subMasks =
-                                                            m.subMasks.map { s ->
-                                                                if (s.id != selectedSubMask.id) s
-                                                                else s.copy(aiEnvironment = s.aiEnvironment.copy(softness = 0.25f))
-                                                            }
-                                                    )
-                                                }
-                                            onMasksChange(updated)
-                                            onEndEditInteraction()
-                                        }
-                                    ),
-                                value = selectedSubMask.aiEnvironment.softness.coerceIn(0f, 1f),
-                                onValueChange = { newValue ->
-                                    onBeginEditInteraction()
-                                    val updated =
-                                        masks.map { m ->
-                                            if (m.id != selectedMask.id) m
-                                            else m.copy(
-                                                subMasks =
-                                                    m.subMasks.map { s ->
-                                                        if (s.id != selectedSubMask.id) s
-                                                        else s.copy(aiEnvironment = s.aiEnvironment.copy(softness = newValue.coerceIn(0f, 1f)))
-                                                    }
-                                            )
-                                        }
-                                    onMasksChange(updated)
-                                    onShowMaskOverlayChange(true)
-                                },
-                                onValueChangeFinished = onEndEditInteraction,
-                                valueRange = 0f..1f
-                            )
-
-                            val hasMask = selectedSubMask.aiEnvironment.maskDataBase64 != null
-                            FilledTonalButton(
-                                enabled = hasMask,
-                                onClick = {
-                                    val updated =
-                                        masks.map { m ->
-                                            if (m.id != selectedMask.id) m
-                                            else m.copy(
-                                                subMasks =
-                                                    m.subMasks.map { s ->
-                                                        if (s.id != selectedSubMask.id) s
-                                                        else s.copy(aiEnvironment = s.aiEnvironment.copy(maskDataBase64 = null))
-                                                    }
-                                            )
-                                        }
-                                    onMasksChange(updated)
-                                    onShowMaskOverlayChange(true)
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Clear AI Mask")
                             }
                         }
 

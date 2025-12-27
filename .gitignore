@@ -92,6 +92,9 @@ rust/Cargo.lock
 **/*.rs.bk
 *.pdb
 
+# Generated JNI libs (built from Rust during Gradle builds)
+app/src/main/jniLibs/**/libkawaiiraweditor.so
+
 # OS
 .DS_Store
 .DS_Store?

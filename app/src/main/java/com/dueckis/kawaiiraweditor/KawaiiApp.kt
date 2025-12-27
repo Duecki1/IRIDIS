@@ -81,6 +81,7 @@ fun KawaiiApp() {
     val editorDismissProgress = remember { Animatable(0f) }
     var lowQualityPreviewEnabled by remember { mutableStateOf(appPreferences.isLowQualityPreviewEnabled()) }
     var automaticTaggingEnabled by remember { mutableStateOf(appPreferences.isAutomaticTaggingEnabled()) }
+    var environmentMaskingEnabled by remember { mutableStateOf(appPreferences.isEnvironmentMaskingEnabled()) }
 
     BackHandler(enabled = currentScreen == Screen.Settings) {
         currentScreen = Screen.Gallery
@@ -370,6 +371,7 @@ fun KawaiiApp() {
                         EditorScreen(
                             galleryItem = selectedItem,
                             lowQualityPreviewEnabled = lowQualityPreviewEnabled,
+                            environmentMaskingEnabled = environmentMaskingEnabled,
                             onBackClick = { requestExitEditor(animated = true) },
                             onPredictiveBackProgress = { progress ->
                                 editorDismissProgressTarget = progress.coerceIn(0f, 1f)
@@ -395,6 +397,7 @@ fun KawaiiApp() {
                     SettingsScreen(
                         lowQualityPreviewEnabled = lowQualityPreviewEnabled,
                         automaticTaggingEnabled = automaticTaggingEnabled,
+                        environmentMaskingEnabled = environmentMaskingEnabled,
                         onLowQualityPreviewEnabledChange = { enabled ->
                             lowQualityPreviewEnabled = enabled
                             appPreferences.setLowQualityPreviewEnabled(enabled)
@@ -402,6 +405,10 @@ fun KawaiiApp() {
                         onAutomaticTaggingEnabledChange = { enabled ->
                             automaticTaggingEnabled = enabled
                             appPreferences.setAutomaticTaggingEnabled(enabled)
+                        },
+                        onEnvironmentMaskingEnabledChange = { enabled ->
+                            environmentMaskingEnabled = enabled
+                            appPreferences.setEnvironmentMaskingEnabled(enabled)
                         },
                         onBackClick = { currentScreen = Screen.Gallery }
                     )
