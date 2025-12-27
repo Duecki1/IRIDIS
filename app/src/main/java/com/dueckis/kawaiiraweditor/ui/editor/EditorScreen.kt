@@ -880,6 +880,7 @@ internal fun EditorScreen(
                         orientationSteps = json.optInt("orientationSteps", 0),
                         aspectRatio = parsedAspectRatio,
                         crop = parsedCrop,
+                        exposure = json.optDouble("exposure", 0.0).toFloat(),
                         brightness = json.optDouble("brightness", 0.0).toFloat(),
                         contrast = json.optDouble("contrast", 0.0).toFloat(),
                         highlights = json.optDouble("highlights", 0.0).toFloat(),

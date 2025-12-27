@@ -22,6 +22,7 @@ import kotlin.math.roundToInt
 import kotlin.ranges.ClosedFloatingPointRange
 
 internal enum class AdjustmentField {
+    Exposure,
     Brightness,
     Contrast,
     Highlights,
@@ -208,6 +209,7 @@ internal data class AdjustmentState(
     val orientationSteps: Int = 0,
     val aspectRatio: Float? = null,
     val crop: CropState? = null,
+    val exposure: Float = 0f,
     val brightness: Float = 0f,
     val contrast: Float = 0f,
     val highlights: Float = 0f,
@@ -246,6 +248,7 @@ internal data class AdjustmentState(
                 put("aspectRatio", aspectRatio ?: JSONObject.NULL)
                 put("crop", crop?.toJsonObject() ?: JSONObject.NULL)
             }
+            put("exposure", exposure)
             put("brightness", brightness)
             put("contrast", contrast)
             put("highlights", highlights)
@@ -280,6 +283,7 @@ internal data class AdjustmentState(
 
     fun valueFor(field: AdjustmentField): Float {
         return when (field) {
+            AdjustmentField.Exposure -> exposure
             AdjustmentField.Brightness -> brightness
             AdjustmentField.Contrast -> contrast
             AdjustmentField.Highlights -> highlights
@@ -309,6 +313,7 @@ internal data class AdjustmentState(
 
     fun withValue(field: AdjustmentField, value: Float): AdjustmentState {
         return when (field) {
+            AdjustmentField.Exposure -> copy(exposure = value)
             AdjustmentField.Brightness -> copy(brightness = value)
             AdjustmentField.Contrast -> copy(contrast = value)
             AdjustmentField.Highlights -> copy(highlights = value)
@@ -482,6 +487,7 @@ internal fun AdjustmentState.isNeutralForMask(): Boolean {
         orientationSteps == 0 &&
         aspectRatio == null &&
         crop == null &&
+        nearZero(exposure) &&
         nearZero(brightness) &&
         nearZero(contrast) &&
         nearZero(highlights) &&

@@ -1879,6 +1879,14 @@ fn apply_highlights_adjustment(mut colors: [f32; 3], highlights: f32) -> [f32; 3
 }
 
 fn apply_color_adjustments(mut colors: [f32; 3], settings: &AdjustmentValues) -> [f32; 3] {
+    // Exposure (linear, RapidRAW-like): color *= 2^exposure
+    if settings.exposure != 0.0 {
+        let factor = 2f32.powf(settings.exposure);
+        colors[0] *= factor;
+        colors[1] *= factor;
+        colors[2] *= factor;
+    }
+
     // Temperature and Tint adjustment (applied early like RapidRAW)
     // RapidRAW: temp_kelvin_mult = vec3(1.0 + temp * 0.2, 1.0 + temp * 0.05, 1.0 - temp * 0.2)
     // RapidRAW: tint_mult = vec3(1.0 + tnt * 0.25, 1.0 - tnt * 0.25, 1.0 + tnt * 0.25)

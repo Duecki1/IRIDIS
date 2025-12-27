@@ -34,7 +34,11 @@ import kotlin.ranges.ClosedFloatingPointRange
 @Composable
 internal fun ToneMapperSection(
     toneMapper: String,
-    onToneMapperChange: (String) -> Unit
+    exposure: Float,
+    onToneMapperChange: (String) -> Unit,
+    onExposureChange: (Float) -> Unit,
+    onInteractionStart: (() -> Unit)? = null,
+    onInteractionEnd: (() -> Unit)? = null
 ) {
     Column(
         modifier = Modifier
@@ -90,6 +94,18 @@ internal fun ToneMapperSection(
                 }
             }
         }
+
+        AdjustmentSlider(
+            label = "Exposure",
+            value = exposure,
+            range = -5f..5f,
+            step = 0.01f,
+            defaultValue = 0f,
+            formatter = { value -> String.format(java.util.Locale.US, "%.2f", value) },
+            onValueChange = onExposureChange,
+            onInteractionStart = onInteractionStart,
+            onInteractionEnd = onInteractionEnd
+        )
     }
 }
 
