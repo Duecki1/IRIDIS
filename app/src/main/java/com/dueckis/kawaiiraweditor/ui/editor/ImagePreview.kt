@@ -460,26 +460,27 @@ internal fun ImagePreview(
                                         val b = crop.y + crop.height
                                         val width = (r - l).coerceAtLeast(minSize)
                                         val height = (b - t).coerceAtLeast(minSize)
+                                        val normalizedRatio = ratio * (displayH / displayW).coerceAtLeast(0.0001f)
 
                                         return when (handle) {
                                             CropHandle.TopLeft -> {
-                                                if (width / height > ratio) clampCrop(r - height * ratio, t, r, b)
-                                                else clampCrop(l, b - width / ratio, r, b)
+                                                if (width / height > normalizedRatio) clampCrop(r - height * normalizedRatio, t, r, b)
+                                                else clampCrop(l, b - width / normalizedRatio, r, b)
                                             }
 
                                             CropHandle.TopRight -> {
-                                                if (width / height > ratio) clampCrop(l, t, l + height * ratio, b)
-                                                else clampCrop(l, b - width / ratio, r, b)
+                                                if (width / height > normalizedRatio) clampCrop(l, t, l + height * normalizedRatio, b)
+                                                else clampCrop(l, b - width / normalizedRatio, r, b)
                                             }
 
                                             CropHandle.BottomLeft -> {
-                                                if (width / height > ratio) clampCrop(r - height * ratio, t, r, b)
-                                                else clampCrop(l, t, r, t + width / ratio)
+                                                if (width / height > normalizedRatio) clampCrop(r - height * normalizedRatio, t, r, b)
+                                                else clampCrop(l, t, r, t + width / normalizedRatio)
                                             }
 
                                             CropHandle.BottomRight -> {
-                                                if (width / height > ratio) clampCrop(l, t, l + height * ratio, b)
-                                                else clampCrop(l, t, r, t + width / ratio)
+                                                if (width / height > normalizedRatio) clampCrop(l, t, l + height * normalizedRatio, b)
+                                                else clampCrop(l, t, r, t + width / normalizedRatio)
                                             }
 
                                             CropHandle.Move -> crop
@@ -848,11 +849,6 @@ internal fun ImagePreview(
                                 .fillMaxSize()
                                 .graphicsLayer(scaleX = scale, scaleY = scale, translationX = offsetX, translationY = offsetY)
                     ) {
-                        val strokeWidth =
-                            when (activeSubMask?.type) {
-                                SubMaskType.AiSubject.id -> 2.dp.toPx()
-                                else -> (brushSize * baseScale).coerceAtLeast(1f)
-                            }
                         val maxX = (bmpW - 1f).coerceAtLeast(1f)
                         val maxY = (bmpH - 1f).coerceAtLeast(1f)
                         fun toDisplayOffset(p: MaskPoint): Offset {
@@ -860,20 +856,55 @@ internal fun ImagePreview(
                             val py = if (p.y <= 1.5f) p.y * maxY else p.y
                             return Offset(left + px * baseScale, top + py * baseScale)
                         }
-                        val path =
-                            Path().apply {
-                                val first = currentStroke.firstOrNull()?.let(::toDisplayOffset) ?: return@Canvas
-                                moveTo(first.x, first.y)
-                                currentStroke.drop(1).forEach { p ->
+
+                        fun pressureScale(pressure: Float): Float {
+                            val p = pressure.coerceIn(0f, 1f)
+                            return 0.2f + (0.8f * p)
+                        }
+
+                        when (activeSubMask?.type) {
+                            SubMaskType.AiSubject.id -> {
+                                val path =
+                                    Path().apply {
+                                        val first = currentStroke.firstOrNull()?.let(::toDisplayOffset) ?: return@Canvas
+                                        moveTo(first.x, first.y)
+                                        currentStroke.drop(1).forEach { p ->
+                                            val o = toDisplayOffset(p)
+                                            lineTo(o.x, o.y)
+                                        }
+                                    }
+                                drawPath(
+                                    path = path,
+                                    color = Color(0x88FFFFFF),
+                                    style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                                )
+                            }
+
+                            else -> {
+                                val baseStrokeWidth = (brushSize * baseScale).coerceAtLeast(1f)
+                                val pts = currentStroke.toList()
+                                if (pts.size == 1) {
+                                    val p = pts[0]
                                     val o = toDisplayOffset(p)
-                                    lineTo(o.x, o.y)
+                                    val w = baseStrokeWidth * pressureScale(p.pressure)
+                                    drawCircle(color = Color(0x88FFFFFF), radius = w / 2f, center = o)
+                                } else {
+                                    pts.windowed(2, 1, false).forEach { (p0, p1) ->
+                                        val o0 = toDisplayOffset(p0)
+                                        val o1 = toDisplayOffset(p1)
+                                        val w0 = baseStrokeWidth * pressureScale(p0.pressure)
+                                        val w1 = baseStrokeWidth * pressureScale(p1.pressure)
+                                        drawLine(
+                                            color = Color(0x88FFFFFF),
+                                            start = o0,
+                                            end = o1,
+                                            strokeWidth = ((w0 + w1) / 2f).coerceAtLeast(1f),
+                                            cap = StrokeCap.Round
+                                        )
+                                    }
                                 }
                             }
-                        drawPath(
-                            path = path,
-                            color = Color(0x88FFFFFF),
-                            style = Stroke(width = strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                        )
+                        }
                     }
                 }
             }
@@ -889,14 +920,25 @@ internal fun ImagePreview(
                                     .pointerInput(isPainting, brushSize, bitmap) {
                                         awaitEachGesture {
                                             val down = awaitFirstDown(requireUnconsumed = false)
-                                            if (down.type != PointerType.Touch && down.type != PointerType.Stylus) return@awaitEachGesture
+                                            if (down.type != PointerType.Touch && down.type != PointerType.Stylus && down.type != PointerType.Eraser) return@awaitEachGesture
 
                                             val cancelOnMultiTouch = down.type == PointerType.Touch
                                             val brushSizeNorm = (brushSize / baseDim).coerceAtLeast(0.0001f)
-                                            val minStep = (brushSizeNorm / 6f).coerceAtLeast(0.003f)
+
+                                            fun normalizedPressure(change: androidx.compose.ui.input.pointer.PointerInputChange): Float {
+                                                if (change.type != PointerType.Stylus && change.type != PointerType.Eraser) return 1f
+                                                return change.pressure.coerceIn(0f, 1f)
+                                            }
+
+                                            fun pressureScale(pressure: Float): Float {
+                                                val p = pressure.coerceIn(0f, 1f)
+                                                return 0.2f + (0.8f * p)
+                                            }
+
+                                            val baseMinStep = (brushSizeNorm / 6f).coerceAtLeast(0.003f)
 
                                             currentStroke.clear()
-                                            currentStroke.add(toImagePoint(down.position))
+                                            currentStroke.add(toImagePoint(down.position).copy(pressure = normalizedPressure(down)))
                                             var last = currentStroke.lastOrNull() ?: return@awaitEachGesture
                                             var canceled = false
 
@@ -917,9 +959,11 @@ internal fun ImagePreview(
                                                 if (change.position == change.previousPosition) continue
 
                                                 change.consume()
-                                                val newPoint = toImagePoint(change.position)
+                                                val pressure = normalizedPressure(change)
+                                                val newPoint = toImagePoint(change.position).copy(pressure = pressure)
                                                 val dx = newPoint.x - last.x
                                                 val dy = newPoint.y - last.y
+                                                val minStep = (baseMinStep * pressureScale(pressure)).coerceAtLeast(0.0015f)
                                                 if (dx * dx + dy * dy >= minStep * minStep) {
                                                     currentStroke.add(newPoint)
                                                     last = newPoint

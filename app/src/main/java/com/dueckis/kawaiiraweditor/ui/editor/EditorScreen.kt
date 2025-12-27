@@ -272,6 +272,7 @@ internal fun EditorScreen(
     var cropDraft by remember(galleryItem.projectId) { mutableStateOf<CropState?>(null) }
     var rotationDraft by remember(galleryItem.projectId) { mutableStateOf<Float?>(null) }
     var isStraightenActive by remember(galleryItem.projectId) { mutableStateOf(false) }
+    var isCropGestureActive by remember(galleryItem.projectId) { mutableStateOf(false) }
 
     val cropBaseBitmap = if (isCropMode) (uncroppedBitmap ?: editedBitmap) else null
     val cropBaseWidthPx = cropBaseBitmap?.width
@@ -292,6 +293,21 @@ internal fun EditorScreen(
         return c
     }
 
+    fun applyOrientationSteps(point: MaskPoint, steps: Int): MaskPoint {
+        return when (((steps % 4) + 4) % 4) {
+            1 -> MaskPoint(x = 1f - point.y, y = point.x, pressure = point.pressure)
+            2 -> MaskPoint(x = 1f - point.x, y = 1f - point.y, pressure = point.pressure)
+            3 -> MaskPoint(x = point.y, y = 1f - point.x, pressure = point.pressure)
+            else -> point
+        }
+    }
+
+    fun applyFlips(point: MaskPoint, flipH: Boolean, flipV: Boolean): MaskPoint {
+        val x = if (flipH) 1f - point.x else point.x
+        val y = if (flipV) 1f - point.y else point.y
+        return MaskPoint(x = x, y = y, pressure = point.pressure)
+    }
+
     fun rotatePointNormalized(point: MaskPoint, angleDegrees: Float, widthPx: Float, heightPx: Float): MaskPoint {
         val w = widthPx.coerceAtLeast(1f)
         val h = heightPx.coerceAtLeast(1f)
@@ -302,28 +318,49 @@ internal fun EditorScreen(
         val uy = (point.y - 0.5f) * h
         val rx = ux * cosA - uy * sinA
         val ry = ux * sinA + uy * cosA
-        return MaskPoint(x = (rx / w) + 0.5f, y = (ry / h) + 0.5f)
+        return MaskPoint(x = (rx / w) + 0.5f, y = (ry / h) + 0.5f, pressure = point.pressure)
     }
 
     fun remapPointForTransform(
         point: MaskPoint,
         oldCrop: CropState,
         oldRotation: Float,
+        oldOrientationSteps: Int,
+        oldFlipH: Boolean,
+        oldFlipV: Boolean,
         newCrop: CropState,
         newRotation: Float,
+        newOrientationSteps: Int,
+        newFlipH: Boolean,
+        newFlipV: Boolean,
         baseWidthPx: Float,
         baseHeightPx: Float
     ): MaskPoint {
+        val baseW = baseWidthPx.coerceAtLeast(1f)
+        val baseH = baseHeightPx.coerceAtLeast(1f)
+        val oldSteps = ((oldOrientationSteps % 4) + 4) % 4
+        val newSteps = ((newOrientationSteps % 4) + 4) % 4
+        val oldW = if (oldSteps % 2 == 1) baseH else baseW
+        val oldH = if (oldSteps % 2 == 1) baseW else baseH
+        val newW = if (newSteps % 2 == 1) baseH else baseW
+        val newH = if (newSteps % 2 == 1) baseW else baseH
+
         val preCrop =
             MaskPoint(
                 x = oldCrop.x + point.x * oldCrop.width,
-                y = oldCrop.y + point.y * oldCrop.height
+                y = oldCrop.y + point.y * oldCrop.height,
+                pressure = point.pressure
             )
-        val unrotated = rotatePointNormalized(preCrop, -oldRotation, baseWidthPx, baseHeightPx)
-        val rotatedNew = rotatePointNormalized(unrotated, newRotation, baseWidthPx, baseHeightPx)
+        val unrotated = rotatePointNormalized(preCrop, -oldRotation, oldW, oldH)
+        val unflipped = applyFlips(unrotated, flipH = oldFlipH, flipV = oldFlipV)
+        val canonical = applyOrientationSteps(unflipped, steps = -oldSteps)
+
+        val oriented = applyOrientationSteps(canonical, steps = newSteps)
+        val flipped = applyFlips(oriented, flipH = newFlipH, flipV = newFlipV)
+        val rotatedNew = rotatePointNormalized(flipped, newRotation, newW, newH)
         val outX = if (newCrop.width <= 0.0001f) rotatedNew.x else (rotatedNew.x - newCrop.x) / newCrop.width
         val outY = if (newCrop.height <= 0.0001f) rotatedNew.y else (rotatedNew.y - newCrop.y) / newCrop.height
-        return MaskPoint(x = outX, y = outY)
+        return MaskPoint(x = outX, y = outY, pressure = point.pressure)
     }
 
     fun decodeDataUrlBitmap(dataUrl: String): Bitmap? {
@@ -355,42 +392,95 @@ internal fun EditorScreen(
         return out
     }
 
-    fun remapAiMaskDataUrl(
+    fun rotateBitmapSteps(src: Bitmap, steps: Int): Bitmap {
+        val s = ((steps % 4) + 4) % 4
+        if (s == 0) return src.copy(src.config ?: Bitmap.Config.ARGB_8888, true)
+
+        val matrix = Matrix().apply { postRotate((s * 90).toFloat()) }
+        val out = Bitmap.createBitmap(src, 0, 0, src.width, src.height, matrix, true)
+        if (out.config != Bitmap.Config.ARGB_8888) {
+            val converted = out.copy(Bitmap.Config.ARGB_8888, true)
+            out.recycle()
+            return converted
+        }
+        return out
+    }
+
+    fun flipBitmap(src: Bitmap, horizontal: Boolean, vertical: Boolean): Bitmap {
+        if (!horizontal && !vertical) return src.copy(src.config ?: Bitmap.Config.ARGB_8888, true)
+        val sx = if (horizontal) -1f else 1f
+        val sy = if (vertical) -1f else 1f
+        val matrix = Matrix().apply { postScale(sx, sy, src.width / 2f, src.height / 2f) }
+        val out = Bitmap.createBitmap(src, 0, 0, src.width, src.height, matrix, true)
+        if (out.config != Bitmap.Config.ARGB_8888) {
+            val converted = out.copy(Bitmap.Config.ARGB_8888, true)
+            out.recycle()
+            return converted
+        }
+        return out
+    }
+
+    fun remapMaskDataUrlForTransform(
         dataUrl: String,
         baseWidthPx: Int,
         baseHeightPx: Int,
-        oldCrop: CropState,
-        deltaRotation: Float,
-        newCrop: CropState
+        oldAdjustments: AdjustmentState,
+        newAdjustments: AdjustmentState
     ): String? {
         val decoded = decodeDataUrlBitmap(dataUrl) ?: return null
         val baseW = baseWidthPx.coerceAtLeast(1)
         val baseH = baseHeightPx.coerceAtLeast(1)
-        val preCrop = Bitmap.createBitmap(baseW, baseH, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(preCrop)
+
+        val oldCrop = normalizedCropOrFull(oldAdjustments.crop)
+        val newCrop = normalizedCropOrFull(newAdjustments.crop)
+
+        val oldSteps = ((oldAdjustments.orientationSteps % 4) + 4) % 4
+        val newSteps = ((newAdjustments.orientationSteps % 4) + 4) % 4
+        val oldW = if (oldSteps % 2 == 1) baseH else baseW
+        val oldH = if (oldSteps % 2 == 1) baseW else baseH
+        val newW = if (newSteps % 2 == 1) baseH else baseW
+        val newH = if (newSteps % 2 == 1) baseW else baseH
+
+        val oldFull = Bitmap.createBitmap(oldW, oldH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(oldFull)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
 
-        val left = (oldCrop.x * baseW).coerceIn(0f, baseW.toFloat())
-        val top = (oldCrop.y * baseH).coerceIn(0f, baseH.toFloat())
-        val right = ((oldCrop.x + oldCrop.width) * baseW).coerceIn(0f, baseW.toFloat())
-        val bottom = ((oldCrop.y + oldCrop.height) * baseH).coerceIn(0f, baseH.toFloat())
+        val left = (oldCrop.x * oldW).coerceIn(0f, oldW.toFloat())
+        val top = (oldCrop.y * oldH).coerceIn(0f, oldH.toFloat())
+        val right = ((oldCrop.x + oldCrop.width) * oldW).coerceIn(0f, oldW.toFloat())
+        val bottom = ((oldCrop.y + oldCrop.height) * oldH).coerceIn(0f, oldH.toFloat())
         if (right - left < 1f || bottom - top < 1f) {
             decoded.recycle()
-            preCrop.recycle()
+            oldFull.recycle()
             return null
         }
-        val destRect = android.graphics.RectF(left, top, right, bottom)
-        canvas.drawBitmap(decoded, null, destRect, paint)
-
-        val rotated =
-            if (deltaRotation == 0f) preCrop
-            else rotateBitmapInPlaceSameSize(preCrop, deltaRotation).also { preCrop.recycle() }
+        canvas.drawBitmap(decoded, null, android.graphics.RectF(left, top, right, bottom), paint)
         decoded.recycle()
 
-        val cropLeft = (newCrop.x * baseW).roundToInt().coerceIn(0, baseW - 1)
-        val cropTop = (newCrop.y * baseH).roundToInt().coerceIn(0, baseH - 1)
-        val cropW = (newCrop.width * baseW).roundToInt().coerceAtLeast(1).coerceAtMost(baseW - cropLeft)
-        val cropH = (newCrop.height * baseH).roundToInt().coerceAtLeast(1).coerceAtMost(baseH - cropTop)
+        val unrotated =
+            if (oldAdjustments.rotation == 0f) oldFull
+            else rotateBitmapInPlaceSameSize(oldFull, -oldAdjustments.rotation).also { oldFull.recycle() }
+        val unflipped =
+            if (!oldAdjustments.flipHorizontal && !oldAdjustments.flipVertical) unrotated
+            else flipBitmap(unrotated, oldAdjustments.flipHorizontal, oldAdjustments.flipVertical).also { unrotated.recycle() }
+        val canonical =
+            if (oldSteps == 0) unflipped
+            else rotateBitmapSteps(unflipped, steps = -oldSteps).also { unflipped.recycle() }
+
+        val oriented =
+            if (newSteps == 0) canonical
+            else rotateBitmapSteps(canonical, steps = newSteps).also { canonical.recycle() }
+        val flipped =
+            if (!newAdjustments.flipHorizontal && !newAdjustments.flipVertical) oriented
+            else flipBitmap(oriented, newAdjustments.flipHorizontal, newAdjustments.flipVertical).also { oriented.recycle() }
+        val rotated =
+            if (newAdjustments.rotation == 0f) flipped
+            else rotateBitmapInPlaceSameSize(flipped, newAdjustments.rotation).also { flipped.recycle() }
+
+        val cropLeft = (newCrop.x * newW).roundToInt().coerceIn(0, newW - 1)
+        val cropTop = (newCrop.y * newH).roundToInt().coerceIn(0, newH - 1)
+        val cropW = (newCrop.width * newW).roundToInt().coerceAtLeast(1).coerceAtMost(newW - cropLeft)
+        val cropH = (newCrop.height * newH).roundToInt().coerceAtLeast(1).coerceAtMost(newH - cropTop)
         val cropped = Bitmap.createBitmap(rotated, cropLeft, cropTop, cropW, cropH)
         if (rotated != cropped) rotated.recycle()
 
@@ -405,14 +495,24 @@ internal fun EditorScreen(
         val newCrop = normalizedCropOrFull(next.crop)
         val oldRotation = old.rotation
         val newRotation = next.rotation
-        if (oldCrop == newCrop && oldRotation == newRotation) return currentMasks
+        val oldSteps = old.orientationSteps
+        val newSteps = next.orientationSteps
+        val oldFlipH = old.flipHorizontal
+        val newFlipH = next.flipHorizontal
+        val oldFlipV = old.flipVertical
+        val newFlipV = next.flipVertical
+        if (oldCrop == newCrop && oldRotation == newRotation && oldSteps == newSteps && oldFlipH == newFlipH && oldFlipV == newFlipV) {
+            return currentMasks
+        }
 
-        val baseBitmap = (uncroppedBitmap ?: editedBitmap) ?: return currentMasks
-        val baseW = baseBitmap.width.coerceAtLeast(1)
-        val baseH = baseBitmap.height.coerceAtLeast(1)
+        val orientedBitmap = (uncroppedBitmap ?: editedBitmap) ?: return currentMasks
+        val orientedW = orientedBitmap.width.coerceAtLeast(1)
+        val orientedH = orientedBitmap.height.coerceAtLeast(1)
+        val oldStepsMod = ((oldSteps % 4) + 4) % 4
+        val baseW = if (oldStepsMod % 2 == 1) orientedH else orientedW
+        val baseH = if (oldStepsMod % 2 == 1) orientedW else orientedH
         val baseWf = baseW.toFloat()
         val baseHf = baseH.toFloat()
-        val deltaRotation = newRotation - oldRotation
 
         fun remapPoint(p: MaskPoint): MaskPoint {
             val mapped =
@@ -420,12 +520,18 @@ internal fun EditorScreen(
                     point = p,
                     oldCrop = oldCrop,
                     oldRotation = oldRotation,
+                    oldOrientationSteps = oldSteps,
+                    oldFlipH = oldFlipH,
+                    oldFlipV = oldFlipV,
                     newCrop = newCrop,
                     newRotation = newRotation,
+                    newOrientationSteps = newSteps,
+                    newFlipH = newFlipH,
+                    newFlipV = newFlipV,
                     baseWidthPx = baseWf,
                     baseHeightPx = baseHf
                 )
-            return MaskPoint(x = mapped.x.coerceIn(-1f, 2f), y = mapped.y.coerceIn(-1f, 2f))
+            return MaskPoint(x = mapped.x.coerceIn(-1f, 2f), y = mapped.y.coerceIn(-1f, 2f), pressure = p.pressure)
         }
 
         return currentMasks.map { mask ->
@@ -465,15 +571,30 @@ internal fun EditorScreen(
                                 if (dataUrl.isNullOrBlank()) sub
                                 else {
                                     val remapped =
-                                        remapAiMaskDataUrl(
+                                        remapMaskDataUrlForTransform(
                                             dataUrl = dataUrl,
                                             baseWidthPx = baseW,
                                             baseHeightPx = baseH,
-                                            oldCrop = oldCrop,
-                                            deltaRotation = deltaRotation,
-                                            newCrop = newCrop
+                                            oldAdjustments = old,
+                                            newAdjustments = next
                                         )
                                     if (remapped == null) sub else sub.copy(aiSubject = sub.aiSubject.copy(maskDataBase64 = remapped))
+                                }
+                            }
+
+                            SubMaskType.AiEnvironment.id -> {
+                                val dataUrl = sub.aiEnvironment.maskDataBase64
+                                if (dataUrl.isNullOrBlank()) sub
+                                else {
+                                    val remapped =
+                                        remapMaskDataUrlForTransform(
+                                            dataUrl = dataUrl,
+                                            baseWidthPx = baseW,
+                                            baseHeightPx = baseH,
+                                            oldAdjustments = old,
+                                            newAdjustments = next
+                                        )
+                                    if (remapped == null) sub else sub.copy(aiEnvironment = sub.aiEnvironment.copy(maskDataBase64 = remapped))
                                 }
                             }
 
@@ -497,6 +618,11 @@ internal fun EditorScreen(
             cropDraft = null
             rotationDraft = null
             isStraightenActive = false
+            isCropGestureActive = false
+        } else {
+            if (cropDraft == null && adjustments.crop == null) {
+                cropDraft = CropState(0f, 0f, 1f, 1f)
+            }
         }
     }
 
@@ -522,6 +648,15 @@ internal fun EditorScreen(
                 applyAdjustmentsPreservingMasks(adjustments.copy(crop = auto))
             }
         } else if (cropDraft == null) {
+            cropDraft = adjustments.crop
+        }
+    }
+
+    LaunchedEffect(isCropMode, adjustments.crop, isCropGestureActive, isHistoryInteractionActive) {
+        if (!isCropMode) return@LaunchedEffect
+        if (isHistoryInteractionActive) return@LaunchedEffect
+        if (isCropGestureActive) return@LaunchedEffect
+        if (cropDraft != adjustments.crop) {
             cropDraft = adjustments.crop
         }
     }
@@ -895,7 +1030,11 @@ internal fun EditorScreen(
                                                 val points =
                                                     (0 until pointsArr.length()).mapNotNull { pIdx ->
                                                         val pObj = pointsArr.optJSONObject(pIdx) ?: return@mapNotNull null
-                                                        MaskPoint(x = pObj.optDouble("x", 0.0).toFloat(), y = pObj.optDouble("y", 0.0).toFloat())
+                                                        MaskPoint(
+                                                            x = pObj.optDouble("x", 0.0).toFloat(),
+                                                            y = pObj.optDouble("y", 0.0).toFloat(),
+                                                            pressure = pObj.optDouble("pressure", 1.0).toFloat().coerceIn(0f, 1f)
+                                                        )
                                                     }
                                                 BrushLineState(
                                                     tool = lineObj.optString("tool", "brush"),
@@ -1281,6 +1420,24 @@ internal fun EditorScreen(
 
     val aiSubjectMaskGenerator = remember { AiSubjectMaskGenerator(context) }
     val aiEnvironmentMaskGenerator = remember(environmentMaskingEnabled) { if (environmentMaskingEnabled) AiEnvironmentMaskGenerator(context) else null }
+
+    var aiEnvironmentSourceBitmap by remember(galleryItem.projectId) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(sessionHandle) {
+        aiEnvironmentSourceBitmap?.recycle()
+        aiEnvironmentSourceBitmap = null
+    }
+
+    suspend fun getAiEnvironmentSourceBitmap(handle: Long): Bitmap? {
+        aiEnvironmentSourceBitmap?.let { return it }
+        val baseJson = AdjustmentState().toJson(emptyList())
+        val bytes =
+            withContext(renderDispatcher) {
+                runCatching { LibRawDecoder.decodeFromSession(handle, baseJson) }.getOrNull()
+            } ?: return null
+        val decoded = bytes.decodeToBitmap() ?: return null
+        aiEnvironmentSourceBitmap = decoded
+        return decoded
+    }
     val onLassoFinished: (List<MaskPoint>) -> Unit = onLasso@{ points ->
         val maskId = selectedMaskId ?: return@onLasso
         val subId = selectedSubMaskId ?: return@onLasso
@@ -1323,7 +1480,8 @@ internal fun EditorScreen(
     val onGenerateAiEnvironmentMask: (() -> Unit)? = if (!environmentMaskingEnabled) null else fun() {
         val maskId = selectedMaskId ?: return
         val subId = selectedSubMaskId ?: return
-        val bmp = editedBitmap ?: return
+        val handle = sessionHandle
+        if (handle == 0L) return
         val sub =
             masks.firstOrNull { it.id == maskId }?.subMasks?.firstOrNull { it.id == subId }
                 ?: return
@@ -1336,8 +1494,9 @@ internal fun EditorScreen(
             val result =
                 runCatching {
                     val generator = aiEnvironmentMaskGenerator ?: error("Environment masking disabled.")
+                    val srcBmp = getAiEnvironmentSourceBitmap(handle) ?: error("Failed to render environment mask source.")
                     generator.generateEnvironmentMaskDataUrl(
-                        previewBitmap = bmp,
+                        previewBitmap = srcBmp,
                         category = category
                     )
                 }
@@ -1348,13 +1507,25 @@ internal fun EditorScreen(
                 val detail = err?.message?.takeIf { it.isNotBlank() } ?: err?.javaClass?.simpleName
                 statusMessage = if (detail.isNullOrBlank()) "Failed to generate environment mask." else "Failed to generate environment mask: $detail"
             } else {
+                val srcBmp = aiEnvironmentSourceBitmap
+                val remapped =
+                    if (srcBmp == null) dataUrl
+                    else {
+                        remapMaskDataUrlForTransform(
+                            dataUrl = dataUrl,
+                            baseWidthPx = srcBmp.width,
+                            baseHeightPx = srcBmp.height,
+                            oldAdjustments = AdjustmentState(),
+                            newAdjustments = adjustments
+                        ) ?: dataUrl
+                    }
                 masks =
                     masks.map { mask ->
                         if (mask.id != maskId) return@map mask
                         mask.copy(
                             subMasks =
                                 mask.subMasks.map { s ->
-                                    if (s.id != subId) s else s.copy(aiEnvironment = s.aiEnvironment.copy(maskDataBase64 = dataUrl))
+                                    if (s.id != subId) s else s.copy(aiEnvironment = s.aiEnvironment.copy(maskDataBase64 = remapped))
                                 }
                         )
                     }
@@ -1370,14 +1541,16 @@ internal fun EditorScreen(
     val onDetectAiEnvironmentCategories: (() -> Unit)? = if (!environmentMaskingEnabled) null else fun() {
         if (isDetectingAiEnvironmentCategories) return
         if (detectedAiEnvironmentCategories != null) return
-        val bmp = editedBitmap ?: return
+        val handle = sessionHandle
+        if (handle == 0L) return
 
         coroutineScope.launch {
             isDetectingAiEnvironmentCategories = true
             val detected =
                 runCatching {
                     val generator = aiEnvironmentMaskGenerator ?: error("Environment masking disabled.")
-                    generator.detectAvailableCategories(bmp)
+                    val srcBmp = getAiEnvironmentSourceBitmap(handle) ?: error("Failed to render environment mask source.")
+                    generator.detectAvailableCategories(srcBmp)
                 }.getOrNull()
             if (detected != null) detectedAiEnvironmentCategories = detected
             isDetectingAiEnvironmentCategories = false
@@ -1530,8 +1703,12 @@ internal fun EditorScreen(
                                     endEditInteraction()
                                 },
                                 onCropDraftChange = { cropDraft = it },
-                                onCropInteractionStart = { beginEditInteraction() },
+                                onCropInteractionStart = {
+                                    isCropGestureActive = true
+                                    beginEditInteraction()
+                                },
                                 onCropInteractionEnd = { crop ->
+                                    isCropGestureActive = false
                                     cropDraft = crop
                                     applyAdjustmentsPreservingMasks(adjustments.copy(crop = crop))
                                     endEditInteraction()
@@ -1810,8 +1987,12 @@ internal fun EditorScreen(
                                     endEditInteraction()
                                 },
                                 onCropDraftChange = { cropDraft = it },
-                                onCropInteractionStart = { beginEditInteraction() },
+                                onCropInteractionStart = {
+                                    isCropGestureActive = true
+                                    beginEditInteraction()
+                                },
                                 onCropInteractionEnd = { crop ->
+                                    isCropGestureActive = false
                                     cropDraft = crop
                                     applyAdjustmentsPreservingMasks(adjustments.copy(crop = crop))
                                     endEditInteraction()
