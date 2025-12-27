@@ -15,24 +15,28 @@ import java.io.FileOutputStream
 import java.net.URL
 import java.nio.FloatBuffer
 import java.security.MessageDigest
+import kotlin.math.roundToInt
 
 internal class AiEnvironmentMaskGenerator(appContext: Context) {
     private val context = appContext.applicationContext
 
+    private data class CategoryScore(val category: AiEnvironmentCategory, val fraction: Float)
+    private data class LabelSource(val segmenter: SegFormerOnnxSegmenter, val labelIds: Set<Int>)
+
     private val cityscapes = SegFormerOnnxSegmenter(
         context = context,
-        modelUrl = "https://huggingface.co/Xenova/segformer-b0-finetuned-cityscapes-768-768/resolve/main/onnx/model_quantized.onnx?download=true",
-        modelSha256 = "e90dc4112c066066110c5aac955990427095a27a88c7dbfd4fcc7d1bbf147147",
-        modelFilename = "segformer_cityscapes_quant.onnx",
+        modelUrl = "https://huggingface.co/Xenova/segformer-b2-finetuned-cityscapes-1024-1024/resolve/main/onnx/model_fp16.onnx?download=true",
+        modelSha256 = "323d74b5e4150b93d2682059c40ce227a6effeabc9a7926776b6e8499c2b2761",
+        modelFilename = "segformer_cityscapes_b2_fp16.onnx",
         inputSize = 512
     )
 
     private val ade20k = SegFormerOnnxSegmenter(
         context = context,
-        modelUrl = "https://huggingface.co/Xenova/segformer-b0-finetuned-ade-512-512/resolve/main/onnx/model_quantized.onnx?download=true",
-        modelSha256 = "9a98d6daf3d926869ab8cc4c2ed7374a2bc23b889bb7ca3b0915d15e3c4756bb",
-        modelFilename = "segformer_ade20k_quant.onnx",
-        inputSize = 512
+        modelUrl = "https://huggingface.co/Xenova/segformer-b2-finetuned-ade-512-512/resolve/main/onnx/model_fp16.onnx?download=true",
+        modelSha256 = "79209c2663c66b35af907b9bfeab79570d396ab7c4d0c22a54814288538a8d1b",
+        modelFilename = "segformer_ade20k_b2_fp16.onnx",
+        inputSize = 256
     )
 
     suspend fun generateEnvironmentMaskDataUrl(
@@ -41,8 +45,24 @@ internal class AiEnvironmentMaskGenerator(appContext: Context) {
     ): String = withContext(Dispatchers.Default) {
         val safe = if (previewBitmap.config != Bitmap.Config.ARGB_8888) previewBitmap.copy(Bitmap.Config.ARGB_8888, false) else previewBitmap
 
-        val (segmenter, labelIds) = modelAndLabelsFor(category)
-        val maskBytes = segmenter.segmentBinaryMask(safe, labelIds)
+        val sources = labelSourcesFor(category)
+        require(sources.isNotEmpty()) { "No label mapping for ${category.id}" }
+        val maskBytes = ByteArray(safe.width * safe.height)
+        var anySucceeded = false
+        var lastError: Throwable? = null
+        for ((segmenter, labelIds) in sources) {
+            val m =
+                runCatching { segmenter.segmentSoftMask(safe, labelIds) }
+                    .onFailure { lastError = it }
+                    .getOrNull()
+                    ?: continue
+            anySucceeded = true
+            for (i in maskBytes.indices) {
+                val v = m[i].toInt() and 0xFF
+                if (v > (maskBytes[i].toInt() and 0xFF)) maskBytes[i] = v.toByte()
+            }
+        }
+        if (!anySucceeded) throw (lastError ?: IllegalStateException("Segmentation failed"))
 
         val maskBitmap = grayscaleMaskToBitmap(maskBytes, safe.width, safe.height)
         val pngBytes = ByteArrayOutputStream().use { out ->
@@ -53,29 +73,71 @@ internal class AiEnvironmentMaskGenerator(appContext: Context) {
         "data:image/png;base64,$b64"
     }
 
-    private fun modelAndLabelsFor(category: AiEnvironmentCategory): Pair<SegFormerOnnxSegmenter, Set<Int>> {
+    suspend fun detectAvailableCategories(previewBitmap: Bitmap): List<AiEnvironmentCategory> = withContext(Dispatchers.Default) {
+        val safe = if (previewBitmap.config != Bitmap.Config.ARGB_8888) previewBitmap.copy(Bitmap.Config.ARGB_8888, false) else previewBitmap
+        val city = cityscapes.segmentLabelMap(safe)
+        val ade = ade20k.segmentLabelMap(safe)
+
+        fun fraction(labels: IntArray, labelIds: Set<Int>): Float {
+            if (labels.isEmpty()) return 0f
+            var hit = 0
+            for (v in labels) if (v in labelIds) hit++
+            return hit.toFloat() / labels.size.toFloat()
+        }
+
+        fun thresholdFor(category: AiEnvironmentCategory): Float {
+            return when (category) {
+                AiEnvironmentCategory.Floor -> 0.005f
+                AiEnvironmentCategory.Sky -> 0.02f
+                AiEnvironmentCategory.Water -> 0.004f
+                AiEnvironmentCategory.People -> 0.002f
+                AiEnvironmentCategory.Animals,
+                AiEnvironmentCategory.Dogs,
+                AiEnvironmentCategory.Cats -> 0.001f
+                AiEnvironmentCategory.Plants -> 0.01f
+                AiEnvironmentCategory.Food -> 0.001f
+                AiEnvironmentCategory.Vehicles,
+                AiEnvironmentCategory.Cars,
+                AiEnvironmentCategory.Trains,
+                AiEnvironmentCategory.Planes -> 0.001f
+            }
+        }
+
+        val scores = mutableListOf<CategoryScore>()
+        for (cat in AiEnvironmentCategory.entries) {
+            val sources = labelSourcesFor(cat)
+            if (sources.isEmpty()) continue
+            var f = 0f
+            for ((segmenter, labelIds) in sources) {
+                val src = if (segmenter === cityscapes) city.labels else ade.labels
+                f = maxOf(f, fraction(src, labelIds))
+            }
+            if (f >= thresholdFor(cat)) scores += CategoryScore(cat, f)
+        }
+
+        scores.sortedByDescending { it.fraction }.map { it.category }
+    }
+
+    private fun labelSourcesFor(category: AiEnvironmentCategory): List<LabelSource> {
+        fun city(vararg ids: Int) = LabelSource(cityscapes, ids.toSet())
+        fun ade(vararg ids: Int) = LabelSource(ade20k, ids.toSet())
+
         return when (category) {
-            AiEnvironmentCategory.Planes ->
-                ade20k to setOf(90) // airplane
+            AiEnvironmentCategory.Sky -> listOf(city(10))
+            AiEnvironmentCategory.Water -> listOf(ade(21, 26, 60, 128, 113)) // water/sea/river/lake/waterfall
+            AiEnvironmentCategory.Floor -> listOf(ade(3)) // floor
 
-            AiEnvironmentCategory.OldBuildings ->
-                ade20k to setOf(
-                    0, // wall
-                    1, // building
-                    25, // house
-                    48, // skyscraper
-                    61, // bridge
-                    79, // hovel
-                    84 // tower
-                )
+            AiEnvironmentCategory.People -> listOf(city(11, 12), ade(12)) // person/rider + person
+            AiEnvironmentCategory.Animals -> listOf(ade(126)) // animal
+            AiEnvironmentCategory.Dogs -> listOf(ade(126)) // dog/cat not in ADE150; fallback to animal
+            AiEnvironmentCategory.Cats -> listOf(ade(126)) // dog/cat not in ADE150; fallback to animal
+            AiEnvironmentCategory.Plants -> listOf(city(8), ade(4, 9, 17, 66, 72)) // vegetation + tree/grass/plant/flower/palm
+            AiEnvironmentCategory.Food -> listOf(ade(120)) // food
 
-            AiEnvironmentCategory.Sky -> cityscapes to setOf(10)
-            AiEnvironmentCategory.Ground -> cityscapes to setOf(0, 1, 8, 9) // road, sidewalk, vegetation, terrain
-            AiEnvironmentCategory.Architecture -> cityscapes to setOf(2, 3, 4, 5, 6, 7) // building, wall, fence, pole, traffic light/sign
-            AiEnvironmentCategory.Humans -> cityscapes to setOf(11, 12) // person, rider
-            AiEnvironmentCategory.Cars -> cityscapes to setOf(13)
-            AiEnvironmentCategory.Trains -> cityscapes to setOf(16)
-            AiEnvironmentCategory.Vehicles -> cityscapes to setOf(13, 14, 15, 16, 17, 18) // car, truck, bus, train, motorcycle, bicycle
+            AiEnvironmentCategory.Vehicles -> listOf(city(13, 14, 15, 16, 17, 18), ade(20, 80, 83, 90, 76, 103, 102))
+            AiEnvironmentCategory.Cars -> listOf(city(13), ade(20))
+            AiEnvironmentCategory.Trains -> listOf(city(16))
+            AiEnvironmentCategory.Planes -> listOf(ade(90))
         }
     }
 
@@ -100,28 +162,19 @@ private class SegFormerOnnxSegmenter(
     @Volatile private var env: OrtEnvironment? = null
     @Volatile private var session: OrtSession? = null
 
+    suspend fun segmentLabelMap(bitmap: Bitmap): SegFormerOutput {
+        val safe = if (bitmap.config != Bitmap.Config.ARGB_8888) bitmap.copy(Bitmap.Config.ARGB_8888, false) else bitmap
+        val logitsOut = segmentLogits(safe)
+        return SegFormerOutput(
+            labels = argmaxLabels(logitsOut.logits, logitsOut.numClasses, logitsOut.height, logitsOut.width, logitsOut.layout),
+            width = logitsOut.width,
+            height = logitsOut.height
+        )
+    }
+
     suspend fun segmentBinaryMask(bitmap: Bitmap, labelIds: Set<Int>): ByteArray {
         val safe = if (bitmap.config != Bitmap.Config.ARGB_8888) bitmap.copy(Bitmap.Config.ARGB_8888, false) else bitmap
-        val ortSession = ensureSession()
-
-        val resized = Bitmap.createScaledBitmap(safe, inputSize, inputSize, true)
-        val inputTensor = createInputTensor(resized)
-
-        val inputName = ortSession.inputNames.first()
-        val segOut: SegFormerOutput = inputTensor.use { tensor ->
-            ortSession.run(mapOf(inputName to tensor)).use { results ->
-                val outTensor = results[0] as OnnxTensor
-                val shape = outTensor.info.shape
-                require(shape.size >= 4) { "Unexpected SegFormer output shape: ${shape.contentToString()}" }
-                val numClasses = shape[1].toInt()
-                val outH = shape[2].toInt()
-                val outW = shape[3].toInt()
-
-                val fb = outTensor.floatBuffer
-                val logits = FloatArray(fb.remaining()).also { fb.get(it) }
-                SegFormerOutput(labels = argmaxLabels(logits, numClasses, outH, outW), width = outW, height = outH)
-            }
-        }
+        val segOut = segmentLabelMap(safe)
 
         val maskSmall = ByteArray(segOut.labels.size)
         for (i in segOut.labels.indices) {
@@ -144,29 +197,193 @@ private class SegFormerOnnxSegmenter(
         return out
     }
 
-    private data class SegFormerOutput(
+    suspend fun segmentSoftMask(bitmap: Bitmap, labelIds: Set<Int>): ByteArray {
+        val safe = if (bitmap.config != Bitmap.Config.ARGB_8888) bitmap.copy(Bitmap.Config.ARGB_8888, false) else bitmap
+        val logitsOut = segmentLogits(safe)
+        val maskSmall = softmaxMaskU8(logitsOut.logits, logitsOut.numClasses, logitsOut.height, logitsOut.width, logitsOut.layout, labelIds)
+
+        val maskPixels = IntArray(logitsOut.width * logitsOut.height) { i ->
+            val v = maskSmall[i].toInt() and 0xFF
+            (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+        }
+        val maskBitmap = Bitmap.createBitmap(maskPixels, logitsOut.width, logitsOut.height, Bitmap.Config.ARGB_8888)
+        val scaled = if (safe.width == logitsOut.width && safe.height == logitsOut.height) maskBitmap else Bitmap.createScaledBitmap(maskBitmap, safe.width, safe.height, true)
+
+        val scaledPixels = IntArray(safe.width * safe.height)
+        scaled.getPixels(scaledPixels, 0, safe.width, 0, 0, safe.width, safe.height)
+        val out = ByteArray(safe.width * safe.height)
+        for (i in out.indices) {
+            out[i] = ((scaledPixels[i] shr 16) and 0xFF).toByte()
+        }
+        return out
+    }
+
+    internal data class SegFormerOutput(
         val labels: IntArray,
         val width: Int,
         val height: Int
     )
 
-    private fun argmaxLabels(logits: FloatArray, numClasses: Int, height: Int, width: Int): IntArray {
+    private enum class SegFormerLayout { NCHW, NHWC }
+
+    private data class SegFormerLogits(
+        val logits: FloatArray,
+        val numClasses: Int,
+        val width: Int,
+        val height: Int,
+        val layout: SegFormerLayout
+    )
+
+    private suspend fun segmentLogits(bitmap: Bitmap): SegFormerLogits {
+        val safe = if (bitmap.config != Bitmap.Config.ARGB_8888) bitmap.copy(Bitmap.Config.ARGB_8888, false) else bitmap
+        val ortSession = ensureSession()
+
+        val resized = Bitmap.createScaledBitmap(safe, inputSize, inputSize, true)
+        val inputTensor = createInputTensor(resized)
+
+        val inputName = ortSession.inputNames.first()
+        return inputTensor.use { tensor ->
+            ortSession.run(mapOf(inputName to tensor)).use { results ->
+                val outTensor = results[0] as OnnxTensor
+                val shape = outTensor.info.shape
+                require(shape.size >= 4) { "Unexpected SegFormer output shape: ${shape.contentToString()}" }
+
+                val fb = outTensor.floatBuffer
+                val logits = FloatArray(fb.remaining()).also { fb.get(it) }
+
+                val axis1 = shape[1].toInt()
+                val axis2 = shape[2].toInt()
+                val axis3 = shape[3].toInt()
+
+                val knownClassCounts = setOf(19, 150)
+                val layout: SegFormerLayout
+                val numClasses: Int
+                val outH: Int
+                val outW: Int
+                when {
+                    axis1 in knownClassCounts -> {
+                        layout = SegFormerLayout.NCHW
+                        numClasses = axis1
+                        outH = axis2
+                        outW = axis3
+                    }
+                    axis3 in knownClassCounts -> {
+                        layout = SegFormerLayout.NHWC
+                        numClasses = axis3
+                        outH = axis1
+                        outW = axis2
+                    }
+                    axis3 in 2..256 && axis1 > axis3 && axis2 > axis3 -> {
+                        layout = SegFormerLayout.NHWC
+                        numClasses = axis3
+                        outH = axis1
+                        outW = axis2
+                    }
+                    else -> {
+                        layout = SegFormerLayout.NCHW
+                        numClasses = axis1
+                        outH = axis2
+                        outW = axis3
+                    }
+                }
+
+                SegFormerLogits(logits = logits, numClasses = numClasses, width = outW, height = outH, layout = layout)
+            }
+        }
+    }
+
+    private fun softmaxMaskU8(
+        logits: FloatArray,
+        numClasses: Int,
+        height: Int,
+        width: Int,
+        layout: SegFormerLayout,
+        labelIds: Set<Int>
+    ): ByteArray {
+        val hw = height * width
+        val out = ByteArray(hw)
+        if (hw == 0 || numClasses <= 0 || labelIds.isEmpty()) return out
+
+        when (layout) {
+            SegFormerLayout.NCHW -> {
+                for (i in 0 until hw) {
+                    var max = Float.NEGATIVE_INFINITY
+                    for (c in 0 until numClasses) {
+                        val v = logits[c * hw + i]
+                        if (v > max) max = v
+                    }
+                    var denom = 0.0
+                    var num = 0.0
+                    for (c in 0 until numClasses) {
+                        val e = kotlin.math.exp((logits[c * hw + i] - max).toDouble())
+                        denom += e
+                        if (c in labelIds) num += e
+                    }
+                    val p = if (denom <= 0.0) 0.0 else (num / denom).coerceIn(0.0, 1.0)
+                    out[i] = (p * 255.0).roundToInt().coerceIn(0, 255).toByte()
+                }
+            }
+            SegFormerLayout.NHWC -> {
+                for (i in 0 until hw) {
+                    val base = i * numClasses
+                    var max = Float.NEGATIVE_INFINITY
+                    for (c in 0 until numClasses) {
+                        val v = logits[base + c]
+                        if (v > max) max = v
+                    }
+                    var denom = 0.0
+                    var num = 0.0
+                    for (c in 0 until numClasses) {
+                        val e = kotlin.math.exp((logits[base + c] - max).toDouble())
+                        denom += e
+                        if (c in labelIds) num += e
+                    }
+                    val p = if (denom <= 0.0) 0.0 else (num / denom).coerceIn(0.0, 1.0)
+                    out[i] = (p * 255.0).roundToInt().coerceIn(0, 255).toByte()
+                }
+            }
+        }
+        return out
+    }
+
+    private fun argmaxLabels(logits: FloatArray, numClasses: Int, height: Int, width: Int, layout: SegFormerLayout): IntArray {
         val hw = height * width
         require(logits.size >= numClasses * hw) { "Unexpected SegFormer output size: ${logits.size}" }
         val labels = IntArray(hw)
-        for (i in 0 until hw) {
-            var bestClass = 0
-            var bestVal = logits[i]
-            var c = 1
-            while (c < numClasses) {
-                val v = logits[c * hw + i]
-                if (v > bestVal) {
-                    bestVal = v
-                    bestClass = c
+        when (layout) {
+            SegFormerLayout.NCHW -> {
+                for (i in 0 until hw) {
+                    var bestClass = 0
+                    var bestVal = logits[i]
+                    var c = 1
+                    while (c < numClasses) {
+                        val v = logits[c * hw + i]
+                        if (v > bestVal) {
+                            bestVal = v
+                            bestClass = c
+                        }
+                        c++
+                    }
+                    labels[i] = bestClass
                 }
-                c++
             }
-            labels[i] = bestClass
+            SegFormerLayout.NHWC -> {
+                for (i in 0 until hw) {
+                    val base = i * numClasses
+                    var bestClass = 0
+                    var bestVal = logits[base]
+                    var c = 1
+                    while (c < numClasses) {
+                        val v = logits[base + c]
+                        if (v > bestVal) {
+                            bestVal = v
+                            bestClass = c
+                        }
+                        c++
+                    }
+                    labels[i] = bestClass
+                }
+            }
         }
         return labels
     }
@@ -177,8 +394,24 @@ private class SegFormerOnnxSegmenter(
 
         val modelFile = ensureModelOnDisk()
         val newEnv = env ?: OrtEnvironment.getEnvironment().also { env = it }
-        val opts = OrtSession.SessionOptions()
-        val created = newEnv.createSession(modelFile.absolutePath, opts)
+        fun createWith(level: OrtSession.SessionOptions.OptLevel): OrtSession {
+            val opts = OrtSession.SessionOptions()
+            try {
+                // These FP16 SegFormer exports can trip ORT graph fusions on some devices.
+                // Prefer a safe optimization level and thread settings.
+                opts.setOptimizationLevel(level)
+                opts.setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
+                opts.setIntraOpNumThreads(1)
+                opts.setInterOpNumThreads(1)
+                return newEnv.createSession(modelFile.absolutePath, opts)
+            } finally {
+                opts.close()
+            }
+        }
+
+        val created =
+            runCatching { createWith(OrtSession.SessionOptions.OptLevel.BASIC_OPT) }
+                .getOrElse { createWith(OrtSession.SessionOptions.OptLevel.NO_OPT) }
 
         synchronized(lock) {
             val race = session

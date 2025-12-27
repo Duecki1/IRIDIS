@@ -74,6 +74,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
+import com.dueckis.kawaiiraweditor.data.model.AiEnvironmentCategory
 import com.dueckis.kawaiiraweditor.data.model.BrushLineState
 import com.dueckis.kawaiiraweditor.data.model.BrushTool
 import com.dueckis.kawaiiraweditor.data.model.CropState
@@ -149,6 +150,13 @@ internal fun EditorScreen(
 
     val context = LocalContext.current
     val storage = remember { ProjectStorage(context) }
+
+    var detectedAiEnvironmentCategories by remember { mutableStateOf<List<AiEnvironmentCategory>?>(null) }
+    var isDetectingAiEnvironmentCategories by remember { mutableStateOf(false) }
+    LaunchedEffect(galleryItem?.projectId) {
+        detectedAiEnvironmentCategories = null
+        isDetectingAiEnvironmentCategories = false
+    }
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
     val configuration = LocalConfiguration.current
@@ -634,6 +642,16 @@ internal fun EditorScreen(
             try {
                 val json = JSONObject(savedAdjustmentsJson)
 
+                val savedDetected = json.optJSONArray("aiEnvironmentDetectedCategories")
+                if (savedDetected != null) {
+                    val parsed =
+                        (0 until savedDetected.length()).mapNotNull { i ->
+                            val rawId = savedDetected.optString(i).orEmpty().trim()
+                            if (rawId.isBlank()) null else AiEnvironmentCategory.fromId(rawId)
+                        }.distinct()
+                    detectedAiEnvironmentCategories = parsed.takeIf { it.isNotEmpty() }
+                }
+
                 fun parseCurvePoints(curvesObj: JSONObject?, key: String): List<CurvePointState> {
                     val arr = curvesObj?.optJSONArray(key) ?: return com.dueckis.kawaiiraweditor.data.model.defaultCurvePoints()
                     val points =
@@ -1010,10 +1028,23 @@ internal fun EditorScreen(
         )
     }
 
-    LaunchedEffect(adjustments, masks, isDraggingMaskHandle) {
+    LaunchedEffect(adjustments, masks, isDraggingMaskHandle, detectedAiEnvironmentCategories) {
         if (isDraggingMaskHandle) return@LaunchedEffect
         if (isRestoringEditHistory || editHistoryIndex < 0) return@LaunchedEffect
-        val json = withContext(Dispatchers.Default) { adjustments.toJson(masks) }
+        val json =
+            withContext(Dispatchers.Default) {
+                val base = adjustments.toJson(masks)
+                val obj = JSONObject(base)
+                val detected = detectedAiEnvironmentCategories.orEmpty()
+                if (detected.isEmpty()) {
+                    obj.remove("aiEnvironmentDetectedCategories")
+                } else {
+                    val arr = JSONArray()
+                    detected.forEach { arr.put(it.id) }
+                    obj.put("aiEnvironmentDetectedCategories", arr)
+                }
+                obj.toString()
+            }
         delay(350)
         withContext(Dispatchers.IO) { storage.saveAdjustments(galleryItem.projectId, json) }
     }
@@ -1289,20 +1320,23 @@ internal fun EditorScreen(
                 ?: return@onEnv
         if (sub.type != SubMaskType.AiEnvironment.id) return@onEnv
 
-        val category = com.dueckis.kawaiiraweditor.data.model.AiEnvironmentCategory.fromId(sub.aiEnvironment.category)
+        val category = AiEnvironmentCategory.fromId(sub.aiEnvironment.category)
         coroutineScope.launch {
             isGeneratingAiMask = true
             statusMessage = "Generating ${category.label.lowercase()} mask…"
-            val dataUrl =
+            val result =
                 runCatching {
                     aiEnvironmentMaskGenerator.generateEnvironmentMaskDataUrl(
                         previewBitmap = bmp,
                         category = category
                     )
-                }.getOrNull()
+                }
 
+            val dataUrl = result.getOrNull()
             if (dataUrl == null) {
-                statusMessage = "Failed to generate environment mask."
+                val err = result.exceptionOrNull()
+                val detail = err?.message?.takeIf { it.isNotBlank() } ?: err?.javaClass?.simpleName
+                statusMessage = if (detail.isNullOrBlank()) "Failed to generate environment mask." else "Failed to generate environment mask: $detail"
             } else {
                 masks =
                     masks.map { mask ->
@@ -1320,6 +1354,22 @@ internal fun EditorScreen(
             isGeneratingAiMask = false
             delay(1500)
             if (statusMessage == "${category.label} mask added.") statusMessage = null
+        }
+    }
+
+    val onDetectAiEnvironmentCategories: () -> Unit = onDetect@{
+        if (isDetectingAiEnvironmentCategories) return@onDetect
+        if (detectedAiEnvironmentCategories != null) return@onDetect
+        val bmp = editedBitmap ?: return@onDetect
+
+        coroutineScope.launch {
+            isDetectingAiEnvironmentCategories = true
+            val detected =
+                runCatching {
+                    aiEnvironmentMaskGenerator.detectAvailableCategories(bmp)
+                }.getOrNull()
+            if (detected != null) detectedAiEnvironmentCategories = detected
+            isDetectingAiEnvironmentCategories = false
         }
     }
 
@@ -1525,7 +1575,10 @@ internal fun EditorScreen(
                                     isStraightenActive = isStraightenActive,
                                     onStraightenActiveChange = { isStraightenActive = it },
                                     isGeneratingAiMask = isGeneratingAiMask,
-                                    onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask
+                                    onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask,
+                                    detectedAiEnvironmentCategories = detectedAiEnvironmentCategories,
+                                    isDetectingAiEnvironmentCategories = isDetectingAiEnvironmentCategories,
+                                    onDetectAiEnvironmentCategories = onDetectAiEnvironmentCategories
                                 )
 
                                 errorMessage?.let { Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
@@ -1807,7 +1860,10 @@ internal fun EditorScreen(
                                         isStraightenActive = isStraightenActive,
                                         onStraightenActiveChange = { isStraightenActive = it },
                                         isGeneratingAiMask = isGeneratingAiMask,
-                                        onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask
+                                        onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask,
+                                        detectedAiEnvironmentCategories = detectedAiEnvironmentCategories,
+                                        isDetectingAiEnvironmentCategories = isDetectingAiEnvironmentCategories,
+                                        onDetectAiEnvironmentCategories = onDetectAiEnvironmentCategories
                                     )
                                 }
                             }

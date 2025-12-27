@@ -414,20 +414,43 @@ internal data class AiSubjectMaskParametersState(
 )
 
 internal enum class AiEnvironmentCategory(val id: String, val label: String) {
-    Sky("sky", "Sky"),
-    Ground("ground", "Ground"),
-    Architecture("architecture", "Architecture"),
-    OldBuildings("old-buildings", "Old Buildings"),
+    People("people", "People"),
+    Animals("animals", "Animals"),
+    Plants("plants", "Plants"),
+    Food("food", "Food"),
     Vehicles("vehicles", "Vehicles"),
     Trains("trains", "Trains"),
     Cars("cars", "Cars"),
     Planes("planes", "Planes"),
-    Humans("humans", "Humans");
+    Sky("sky", "Sky"),
+    Water("water", "Water"),
+    Floor("floor", "Floor"),
+    Dogs("dogs", "Dogs"),
+    Cats("cats", "Cats");
 
     companion object {
         fun fromId(id: String?): AiEnvironmentCategory {
             if (id.isNullOrBlank()) return Sky
-            return entries.firstOrNull { it.id == id } ?: Sky
+            val normalized = id.lowercase(Locale.US)
+
+            // Legacy ids from earlier builds.
+            val legacyMapped =
+                when (normalized) {
+                    "architecture" -> Floor.id
+                    "old-buildings" -> Floor.id
+                    "humans" -> People.id
+                    "kids" -> People.id
+                    "buildings" -> Floor.id
+                    "floor" -> Floor.id
+                    "ground" -> Floor.id
+                    "roads" -> Floor.id
+                    "sidewalks" -> Floor.id
+                    "dogs" -> Dogs.id
+                    "cats" -> Cats.id
+                    else -> normalized
+                }
+
+            return entries.firstOrNull { it.id == legacyMapped } ?: Sky
         }
     }
 }
