@@ -36,7 +36,7 @@ Download the newest pre-release here: [Releases](https://github.com/Duecki1/IRID
 
 ## Status
 
-Inspired by/using backend processing maths from RapidRAW: https://github.com/CyberTimon/RapidRAW
+Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 
 ## Features (current)
 
