@@ -457,6 +457,14 @@ struct AiSubjectMaskParameters {
 
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+struct AiEnvironmentMaskParameters {
+    category: Option<String>,
+    mask_data_base64: Option<String>,
+    softness: f32,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 struct MaskDefinitionPayload {
     id: String,
     name: String,
@@ -1354,9 +1362,8 @@ fn decode_data_url_base64(data_url: &str) -> Option<Vec<u8>> {
     base64::engine::general_purpose::STANDARD.decode(b64).ok()
 }
 
-fn generate_ai_subject_mask(params_value: &Value, width: u32, height: u32) -> Option<Vec<u8>> {
-    let params: AiSubjectMaskParameters = serde_json::from_value(params_value.clone()).ok()?;
-    let data_url = params.mask_data_base64?;
+fn generate_ai_png_mask(mask_data_base64: Option<String>, softness: f32, width: u32, height: u32) -> Option<Vec<u8>> {
+    let data_url = mask_data_base64?;
     let bytes = decode_data_url_base64(&data_url)?;
 
     let decoded = image::load_from_memory(&bytes).ok()?;
@@ -1369,13 +1376,23 @@ fn generate_ai_subject_mask(params_value: &Value, width: u32, height: u32) -> Op
 
     let mut raw = resized.into_raw();
 
-    let softness = params.softness.clamp(0.0, 1.0);
+    let softness = softness.clamp(0.0, 1.0);
     let radius = (softness * 10.0).round() as i32;
     if radius >= 1 {
         raw = box_blur_u8(&raw, width as usize, height as usize, radius as usize);
     }
 
     Some(raw)
+}
+
+fn generate_ai_subject_mask(params_value: &Value, width: u32, height: u32) -> Option<Vec<u8>> {
+    let params: AiSubjectMaskParameters = serde_json::from_value(params_value.clone()).ok()?;
+    generate_ai_png_mask(params.mask_data_base64, params.softness, width, height)
+}
+
+fn generate_ai_environment_mask(params_value: &Value, width: u32, height: u32) -> Option<Vec<u8>> {
+    let params: AiEnvironmentMaskParameters = serde_json::from_value(params_value.clone()).ok()?;
+    generate_ai_png_mask(params.mask_data_base64, params.softness, width, height)
 }
 
 fn box_blur_u8(src: &[u8], width: usize, height: usize, radius: usize) -> Vec<u8> {
@@ -1462,6 +1479,11 @@ fn generate_mask_bitmap(sub_masks: &[SubMaskPayload], width: u32, height: u32) -
             }
             "ai-subject" => {
                 if let Some(bitmap) = generate_ai_subject_mask(&sub_mask.parameters, width, height) {
+                    apply_submask_bitmap(&mut mask, &bitmap, sub_mask.mode);
+                }
+            }
+            "ai-environment" => {
+                if let Some(bitmap) = generate_ai_environment_mask(&sub_mask.parameters, width, height) {
                     apply_submask_bitmap(&mut mask, &bitmap, sub_mask.mode);
                 }
             }

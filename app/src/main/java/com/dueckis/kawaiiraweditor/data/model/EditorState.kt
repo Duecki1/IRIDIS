@@ -369,6 +369,7 @@ internal enum class SubMaskType(val id: String) {
     Brush("brush"),
     Linear("linear"),
     Radial("radial"),
+    AiEnvironment("ai-environment"),
     AiSubject("ai-subject"),
 }
 
@@ -408,6 +409,31 @@ internal data class RadialMaskParametersState(
 )
 
 internal data class AiSubjectMaskParametersState(
+    val maskDataBase64: String? = null,
+    val softness: Float = 0.25f
+)
+
+internal enum class AiEnvironmentCategory(val id: String, val label: String) {
+    Sky("sky", "Sky"),
+    Ground("ground", "Ground"),
+    Architecture("architecture", "Architecture"),
+    OldBuildings("old-buildings", "Old Buildings"),
+    Vehicles("vehicles", "Vehicles"),
+    Trains("trains", "Trains"),
+    Cars("cars", "Cars"),
+    Planes("planes", "Planes"),
+    Humans("humans", "Humans");
+
+    companion object {
+        fun fromId(id: String?): AiEnvironmentCategory {
+            if (id.isNullOrBlank()) return Sky
+            return entries.firstOrNull { it.id == id } ?: Sky
+        }
+    }
+}
+
+internal data class AiEnvironmentMaskParametersState(
+    val category: String = AiEnvironmentCategory.Sky.id,
     val maskDataBase64: String? = null,
     val softness: Float = 0.25f
 )
@@ -482,6 +508,7 @@ internal data class SubMaskState(
     val lines: List<BrushLineState> = emptyList(),
     val linear: LinearMaskParametersState = LinearMaskParametersState(),
     val radial: RadialMaskParametersState = RadialMaskParametersState(),
+    val aiEnvironment: AiEnvironmentMaskParametersState = AiEnvironmentMaskParametersState(),
     val aiSubject: AiSubjectMaskParametersState = AiSubjectMaskParametersState()
 )
 
@@ -572,6 +599,12 @@ internal fun SubMaskState.toJsonObject(): JSONObject {
                 SubMaskType.AiSubject.id -> JSONObject().apply {
                     aiSubject.maskDataBase64?.let { put("maskDataBase64", it) }
                     put("softness", aiSubject.softness.coerceIn(0f, 1f))
+                }
+
+                SubMaskType.AiEnvironment.id -> JSONObject().apply {
+                    put("category", aiEnvironment.category)
+                    aiEnvironment.maskDataBase64?.let { put("maskDataBase64", it) }
+                    put("softness", aiEnvironment.softness.coerceIn(0f, 1f))
                 }
 
                 else -> JSONObject()
@@ -858,6 +891,26 @@ internal fun buildMaskOverlayBitmap(
                 scaled.getPixels(pixels, 0, width, 0, 0, width, height)
                 val maskU8 = IntArray(width * height) { i -> (pixels[i] shr 16) and 0xFF }
                 val radius = (sub.aiSubject.softness.coerceIn(0f, 1f) * 10f).roundToInt()
+                val softened = if (radius >= 1) boxBlurU8(maskU8, radius) else maskU8
+                for (i in softened.indices) {
+                    val v = softened[i]
+                    if (v == 0) continue
+                    plotAndApply(sub.mode, i, v)
+                }
+            }
+
+            SubMaskType.AiEnvironment.id -> {
+                val dataUrl = sub.aiEnvironment.maskDataBase64 ?: return@forEach
+                val decoded = decodeMaskDataUrlToBitmap(dataUrl) ?: return@forEach
+                val scaled = if (decoded.width != width || decoded.height != height) {
+                    Bitmap.createScaledBitmap(decoded, width, height, true)
+                } else {
+                    decoded
+                }
+                val pixels = IntArray(width * height)
+                scaled.getPixels(pixels, 0, width, 0, 0, width, height)
+                val maskU8 = IntArray(width * height) { i -> (pixels[i] shr 16) and 0xFF }
+                val radius = (sub.aiEnvironment.softness.coerceIn(0f, 1f) * 10f).roundToInt()
                 val softened = if (radius >= 1) boxBlurU8(maskU8, radius) else maskU8
                 for (i in softened.indices) {
                     val v = softened[i]

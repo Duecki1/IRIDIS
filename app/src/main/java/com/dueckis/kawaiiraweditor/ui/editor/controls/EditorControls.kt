@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
+import com.dueckis.kawaiiraweditor.data.model.AiEnvironmentCategory
 import com.dueckis.kawaiiraweditor.data.model.BrushTool
 import com.dueckis.kawaiiraweditor.data.model.EditorPanelTab
 import com.dueckis.kawaiiraweditor.data.model.MaskState
@@ -102,7 +103,9 @@ internal fun EditorControlsContent(
     rotationDraft: Float?,
     onRotationDraftChange: (Float?) -> Unit,
     isStraightenActive: Boolean,
-    onStraightenActiveChange: (Boolean) -> Unit
+    onStraightenActiveChange: (Boolean) -> Unit,
+    isGeneratingAiMask: Boolean,
+    onGenerateAiEnvironmentMask: (() -> Unit)?
 ) {
     val maskTabsByMaskId = remember { mutableStateMapOf<String, Int>() }
 
@@ -214,11 +217,12 @@ internal fun EditorControlsContent(
                     }
 
                     DropdownMenu(expanded = showCreateMenu, onDismissRequest = { showCreateMenu = false }) {
-                        listOf(SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial).forEach { type ->
+                        listOf(SubMaskType.AiEnvironment, SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial).forEach { type ->
                             DropdownMenuItem(
                                 text = {
                                     Text(
                                         when (type) {
+                                            SubMaskType.AiEnvironment -> "Select Environment"
                                             SubMaskType.AiSubject -> "Select Subject"
                                             SubMaskType.Brush -> "Brush"
                                             SubMaskType.Linear -> "Linear Gradient"
@@ -392,12 +396,13 @@ internal fun EditorControlsContent(
                     DropdownMenu(expanded = showAddSubMenu, onDismissRequest = { showAddSubMenu = false }) {
                         listOf("Add" to SubMaskMode.Additive, "Subtract" to SubMaskMode.Subtractive).forEach { (label, mode) ->
                             DropdownMenuItem(text = { Text(label, fontWeight = FontWeight.SemiBold) }, onClick = {}, enabled = false)
-                            listOf(SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial).forEach { type ->
+                            listOf(SubMaskType.AiEnvironment, SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial).forEach { type ->
                                 DropdownMenuItem(
                                     text = {
                                         Text(
                                             "  " +
                                                 when (type) {
+                                                    SubMaskType.AiEnvironment -> "Environment"
                                                     SubMaskType.AiSubject -> "Subject"
                                                     SubMaskType.Brush -> "Brush"
                                                     SubMaskType.Linear -> "Gradient"
@@ -702,6 +707,117 @@ internal fun EditorControlsContent(
                                                     m.subMasks.map { s ->
                                                         if (s.id != selectedSubMask.id) s
                                                         else s.copy(aiSubject = s.aiSubject.copy(maskDataBase64 = null))
+                                                    }
+                                            )
+                                        }
+                                    onMasksChange(updated)
+                                    onShowMaskOverlayChange(true)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Clear AI Mask")
+                            }
+                        }
+
+                        SubMaskType.AiEnvironment.id -> {
+                            Text("Auto-detect a scene element and generate an AI mask.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                            val selectedCategory = AiEnvironmentCategory.fromId(selectedSubMask.aiEnvironment.category)
+                            var showCategoryMenu by remember(selectedSubMask.id) { mutableStateOf(false) }
+                            FilledTonalButton(
+                                onClick = { showCategoryMenu = true },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Category: ${selectedCategory.label}")
+                            }
+                            DropdownMenu(expanded = showCategoryMenu, onDismissRequest = { showCategoryMenu = false }) {
+                                AiEnvironmentCategory.entries.forEach { cat ->
+                                    DropdownMenuItem(
+                                        text = { Text(cat.label) },
+                                        onClick = {
+                                            showCategoryMenu = false
+                                            val updated =
+                                                masks.map { m ->
+                                                    if (m.id != selectedMask.id) m
+                                                    else m.copy(
+                                                        subMasks =
+                                                            m.subMasks.map { s ->
+                                                                if (s.id != selectedSubMask.id) s
+                                                                else s.copy(aiEnvironment = s.aiEnvironment.copy(category = cat.id, maskDataBase64 = null))
+                                                            }
+                                                    )
+                                                }
+                                            onMasksChange(updated)
+                                            onShowMaskOverlayChange(true)
+                                        }
+                                    )
+                                }
+                            }
+
+                            Text("Softness: ${(selectedSubMask.aiEnvironment.softness.coerceIn(0f, 1f) * 100f).roundToInt()}%")
+                            Slider(
+                                modifier =
+                                    Modifier.doubleTapSliderThumbToReset(
+                                        value = selectedSubMask.aiEnvironment.softness,
+                                        valueRange = 0f..1f,
+                                        onReset = {
+                                            onBeginEditInteraction()
+                                            val updated =
+                                                masks.map { m ->
+                                                    if (m.id != selectedMask.id) m
+                                                    else m.copy(
+                                                        subMasks =
+                                                            m.subMasks.map { s ->
+                                                                if (s.id != selectedSubMask.id) s
+                                                                else s.copy(aiEnvironment = s.aiEnvironment.copy(softness = 0.25f))
+                                                            }
+                                                    )
+                                                }
+                                            onMasksChange(updated)
+                                            onEndEditInteraction()
+                                        }
+                                    ),
+                                value = selectedSubMask.aiEnvironment.softness.coerceIn(0f, 1f),
+                                onValueChange = { newValue ->
+                                    onBeginEditInteraction()
+                                    val updated =
+                                        masks.map { m ->
+                                            if (m.id != selectedMask.id) m
+                                            else m.copy(
+                                                subMasks =
+                                                    m.subMasks.map { s ->
+                                                        if (s.id != selectedSubMask.id) s
+                                                        else s.copy(aiEnvironment = s.aiEnvironment.copy(softness = newValue.coerceIn(0f, 1f)))
+                                                    }
+                                            )
+                                        }
+                                    onMasksChange(updated)
+                                    onShowMaskOverlayChange(true)
+                                },
+                                onValueChangeFinished = onEndEditInteraction,
+                                valueRange = 0f..1f
+                            )
+
+                            val hasMask = selectedSubMask.aiEnvironment.maskDataBase64 != null
+                            FilledTonalButton(
+                                enabled = !isGeneratingAiMask && onGenerateAiEnvironmentMask != null,
+                                onClick = { onGenerateAiEnvironmentMask?.invoke() },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(if (hasMask) "Regenerate AI Mask" else "Generate AI Mask")
+                            }
+
+                            FilledTonalButton(
+                                enabled = hasMask,
+                                onClick = {
+                                    val updated =
+                                        masks.map { m ->
+                                            if (m.id != selectedMask.id) m
+                                            else m.copy(
+                                                subMasks =
+                                                    m.subMasks.map { s ->
+                                                        if (s.id != selectedSubMask.id) s
+                                                        else s.copy(aiEnvironment = s.aiEnvironment.copy(maskDataBase64 = null))
                                                     }
                                             )
                                         }

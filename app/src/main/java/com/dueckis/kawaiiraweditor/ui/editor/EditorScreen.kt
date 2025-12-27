@@ -97,6 +97,7 @@ import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
 import com.dueckis.kawaiiraweditor.data.storage.ProjectStorage
 import com.dueckis.kawaiiraweditor.domain.HistogramData
 import com.dueckis.kawaiiraweditor.domain.HistogramUtils
+import com.dueckis.kawaiiraweditor.domain.ai.AiEnvironmentMaskGenerator
 import com.dueckis.kawaiiraweditor.domain.ai.AiSubjectMaskGenerator
 import com.dueckis.kawaiiraweditor.domain.ai.NormalizedPoint
 import com.dueckis.kawaiiraweditor.domain.editor.EditorHistoryEntry
@@ -828,6 +829,20 @@ internal fun EditorScreen(
                                                 )
                                         )
 
+                                    SubMaskType.AiEnvironment.id ->
+                                        SubMaskState(
+                                            id = subId,
+                                            type = SubMaskType.AiEnvironment.id,
+                                            visible = visible,
+                                            mode = mode,
+                                            aiEnvironment =
+                                                com.dueckis.kawaiiraweditor.data.model.AiEnvironmentMaskParametersState(
+                                                    category = paramsObj.optString("category", "sky"),
+                                                    maskDataBase64 = paramsObj.optString("maskDataBase64").takeIf { it.isNotBlank() },
+                                                    softness = paramsObj.optDouble("softness", 0.25).toFloat().coerceIn(0f, 1f)
+                                                )
+                                        )
+
                                     SubMaskType.Linear.id ->
                                         SubMaskState(
                                             id = subId,
@@ -1225,6 +1240,7 @@ internal fun EditorScreen(
     }
 
     val aiSubjectMaskGenerator = remember { AiSubjectMaskGenerator(context) }
+    val aiEnvironmentMaskGenerator = remember { AiEnvironmentMaskGenerator(context) }
     val onLassoFinished: (List<MaskPoint>) -> Unit = onLasso@{ points ->
         val maskId = selectedMaskId ?: return@onLasso
         val subId = selectedSubMaskId ?: return@onLasso
@@ -1261,6 +1277,49 @@ internal fun EditorScreen(
             isGeneratingAiMask = false
             delay(1500)
             if (statusMessage == "Subject mask added.") statusMessage = null
+        }
+    }
+
+    val onGenerateAiEnvironmentMask: () -> Unit = onEnv@{
+        val maskId = selectedMaskId ?: return@onEnv
+        val subId = selectedSubMaskId ?: return@onEnv
+        val bmp = editedBitmap ?: return@onEnv
+        val sub =
+            masks.firstOrNull { it.id == maskId }?.subMasks?.firstOrNull { it.id == subId }
+                ?: return@onEnv
+        if (sub.type != SubMaskType.AiEnvironment.id) return@onEnv
+
+        val category = com.dueckis.kawaiiraweditor.data.model.AiEnvironmentCategory.fromId(sub.aiEnvironment.category)
+        coroutineScope.launch {
+            isGeneratingAiMask = true
+            statusMessage = "Generating ${category.label.lowercase()} mask…"
+            val dataUrl =
+                runCatching {
+                    aiEnvironmentMaskGenerator.generateEnvironmentMaskDataUrl(
+                        previewBitmap = bmp,
+                        category = category
+                    )
+                }.getOrNull()
+
+            if (dataUrl == null) {
+                statusMessage = "Failed to generate environment mask."
+            } else {
+                masks =
+                    masks.map { mask ->
+                        if (mask.id != maskId) return@map mask
+                        mask.copy(
+                            subMasks =
+                                mask.subMasks.map { s ->
+                                    if (s.id != subId) s else s.copy(aiEnvironment = s.aiEnvironment.copy(maskDataBase64 = dataUrl))
+                                }
+                        )
+                    }
+                showMaskOverlay = true
+                statusMessage = "${category.label} mask added."
+            }
+            isGeneratingAiMask = false
+            delay(1500)
+            if (statusMessage == "${category.label} mask added.") statusMessage = null
         }
     }
 
@@ -1464,7 +1523,9 @@ internal fun EditorScreen(
                                     rotationDraft = rotationDraft,
                                     onRotationDraftChange = { rotationDraft = it },
                                     isStraightenActive = isStraightenActive,
-                                    onStraightenActiveChange = { isStraightenActive = it }
+                                    onStraightenActiveChange = { isStraightenActive = it },
+                                    isGeneratingAiMask = isGeneratingAiMask,
+                                    onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask
                                 )
 
                                 errorMessage?.let { Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
@@ -1744,7 +1805,9 @@ internal fun EditorScreen(
                                         rotationDraft = rotationDraft,
                                         onRotationDraftChange = { rotationDraft = it },
                                         isStraightenActive = isStraightenActive,
-                                        onStraightenActiveChange = { isStraightenActive = it }
+                                        onStraightenActiveChange = { isStraightenActive = it },
+                                        isGeneratingAiMask = isGeneratingAiMask,
+                                        onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask
                                     )
                                 }
                             }

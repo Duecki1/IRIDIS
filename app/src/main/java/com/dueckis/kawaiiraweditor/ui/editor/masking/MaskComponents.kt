@@ -43,6 +43,7 @@ internal fun MaskIcon(type: String, modifier: Modifier = Modifier) {
     val icon =
         when (type) {
             SubMaskType.AiSubject.id -> Icons.Outlined.AutoAwesome
+            SubMaskType.AiEnvironment.id -> Icons.Outlined.AutoAwesome
             SubMaskType.Brush.id -> Icons.Filled.Edit
             SubMaskType.Linear.id -> Icons.Outlined.Tune
             SubMaskType.Radial.id -> Icons.Filled.RadioButtonChecked
@@ -164,6 +165,7 @@ internal fun SubMaskItemChip(
                 text =
                     when (subMask.type) {
                         SubMaskType.AiSubject.id -> "Subject"
+                        SubMaskType.AiEnvironment.id -> "Environment"
                         SubMaskType.Brush.id -> "Brush"
                         SubMaskType.Linear.id -> "Linear"
                         SubMaskType.Radial.id -> "Radial"
@@ -183,4 +185,3 @@ internal fun SubMaskItemChip(
         }
     }
 }
-

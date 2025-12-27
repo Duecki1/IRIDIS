@@ -1,6 +1,7 @@
 package com.dueckis.kawaiiraweditor.ui.editor.masking
 
 import com.dueckis.kawaiiraweditor.data.model.AiSubjectMaskParametersState
+import com.dueckis.kawaiiraweditor.data.model.AiEnvironmentMaskParametersState
 import com.dueckis.kawaiiraweditor.data.model.LinearMaskParametersState
 import com.dueckis.kawaiiraweditor.data.model.MaskState
 import com.dueckis.kawaiiraweditor.data.model.RadialMaskParametersState
@@ -16,6 +17,8 @@ internal fun newSubMaskState(id: String, mode: SubMaskMode, type: SubMaskType): 
             SubMaskState(id = id, type = type.id, mode = mode, linear = LinearMaskParametersState())
         SubMaskType.Radial ->
             SubMaskState(id = id, type = type.id, mode = mode, radial = RadialMaskParametersState())
+        SubMaskType.AiEnvironment ->
+            SubMaskState(id = id, type = type.id, mode = mode, aiEnvironment = AiEnvironmentMaskParametersState())
         SubMaskType.AiSubject ->
             SubMaskState(id = id, type = type.id, mode = mode, aiSubject = AiSubjectMaskParametersState())
     }
@@ -32,4 +35,3 @@ internal fun duplicateMaskState(mask: MaskState, invertDuplicate: Boolean): Mask
         subMasks = mask.subMasks.map(::copySubMask)
     )
 }
-
