@@ -48,18 +48,18 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Color grading (shadows/midtones/highlights) + blending/balance.
 - Effects: vignette.
 - Masks: brush, linear gradient, radial, and AI subject mask (lasso-assisted).
+- S-Pen support for brush masks (line width depending on pressure)
+- Choose export file format and resolution 
+- Automatic masks for part of landscapes (like architecture or sky)
 
 ## Planned:
 
 - Tab for cropping and rotating the image
-- S-Pen support for brush masks (line width depending on pressure)
 - Clarity and such slider need to actually work
 - Highlight recovery needs to be better for the highlight slider. (use the exposure slider for now)
 - Holding down on the Preview should show the original picture until let go
 - Use a more intuitive rating system
 - Rename files
-- Choose export file format and resolution 
-- Automatic masks for part of landscapes (like architecture or sky)
 - Be able to reorder subtract and add masks
 - UI needs to be improved for masking. (And more)
 - Fix overlapping Add and subtract submasks generate hard cut
