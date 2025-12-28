@@ -20,8 +20,8 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = android.net.Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
             }
-            views.setRemoteAdapter(R.id.stackView, svcIntent)
-            views.setEmptyView(R.id.stackView, R.id.emptyText)
+            views.setRemoteAdapter(R.id.flipperView, svcIntent)
+            views.setEmptyView(R.id.flipperView, R.id.emptyText)
 
             // Clicking an image opens MainActivity (app entry) — update if you have a detail activity
             val clickIntent = Intent(context, MainActivity::class.java)
@@ -31,10 +31,10 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
                 clickIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            views.setPendingIntentTemplate(R.id.stackView, clickPI)
+            views.setPendingIntentTemplate(R.id.flipperView, clickPI)
 
             appWidgetManager.updateAppWidget(appWidgetId, views)
-            appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.stackView)
+            appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.flipperView)
         }
     }
 }

@@ -3,10 +3,12 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
-    <StackView
-        android:id="@+id/stackView"
+    <AdapterViewFlipper
+        android:id="@+id/flipperView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:autoStart="true"
+        android:flipInterval="300000"
         android:loopViews="true" />
 
     <TextView
@@ -14,6 +16,6 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:gravity="center"
-        android:text="No edited images yet :)"
+        android:text="No images yet :)"
         android:textSize="14sp" />
 </FrameLayout>

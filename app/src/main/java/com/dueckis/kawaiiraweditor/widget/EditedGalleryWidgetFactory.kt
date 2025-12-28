@@ -30,19 +30,22 @@ class EditedGalleryWidgetFactory(
 
     override fun getViewAt(position: Int): RemoteViews {
         val rv = RemoteViews(context.packageName, R.layout.widget_item_image)
-        val path = imagePaths[position]
+        return try {
+            val path = imagePaths[position]
 
-        val thumb = loadThumb(path, 420, 420) // keep small-ish to avoid binder limits
-        if (thumb != null) rv.setImageViewBitmap(R.id.itemImage, thumb)
-        else rv.setImageViewResource(R.id.itemImage, android.R.drawable.ic_menu_report_image)
+            val thumb = loadThumb(path, 320, 320) // smaller to avoid binder limits
+            if (thumb != null) rv.setImageViewBitmap(R.id.itemImage, thumb)
+            else rv.setImageViewResource(R.id.itemImage, android.R.drawable.ic_menu_report_image)
 
-        // Optional: pass something for click handling (if your GalleryActivity reads it)
-        val fillIn = android.content.Intent().apply {
-            putExtra("image_path", path)
+            // Optional: pass something for click handling (if your GalleryActivity reads it)
+            val fillIn = android.content.Intent().apply { putExtra("image_path", path) }
+            rv.setOnClickFillInIntent(R.id.itemImage, fillIn)
+
+            rv
+        } catch (t: Throwable) {
+            rv.setImageViewResource(R.id.itemImage, android.R.drawable.ic_menu_report_image)
+            rv
         }
-        rv.setOnClickFillInIntent(R.id.itemImage, fillIn)
-
-        return rv
     }
 
     override fun getLoadingView(): RemoteViews? = null
