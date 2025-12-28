@@ -921,6 +921,7 @@ internal fun EditorScreen(
                         val maskHsl = parseHsl(maskAdjustmentsObj.optJSONObject("hsl"))
                         val maskAdjustments =
                             AdjustmentState(
+                                exposure = maskAdjustmentsObj.optDouble("exposure", 0.0).toFloat(),
                                 brightness = maskAdjustmentsObj.optDouble("brightness", 0.0).toFloat(),
                                 contrast = maskAdjustmentsObj.optDouble("contrast", 0.0).toFloat(),
                                 highlights = maskAdjustmentsObj.optDouble("highlights", 0.0).toFloat(),

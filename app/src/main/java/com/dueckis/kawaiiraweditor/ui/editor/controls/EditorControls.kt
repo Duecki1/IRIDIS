@@ -71,6 +71,7 @@ import com.dueckis.kawaiiraweditor.ui.editor.masking.MaskItemCard
 import com.dueckis.kawaiiraweditor.ui.editor.masking.SubMaskItemChip
 import com.dueckis.kawaiiraweditor.ui.editor.masking.duplicateMaskState
 import com.dueckis.kawaiiraweditor.ui.editor.masking.newSubMaskState
+import java.util.Locale
 import java.util.UUID
 import kotlin.math.roundToInt
 
@@ -1133,24 +1134,40 @@ internal fun EditorControlsContent(
 
                 else -> {
                     PanelSectionCard(title = "Mask Adjustments", subtitle = "Edits inside this mask") {
-                        adjustmentSections.forEach { (sectionTitle, controls) ->
-                            Text(text = sectionTitle, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
-                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                controls.forEach { control ->
-                                    val currentValue = selectedMask.adjustments.valueFor(control.field)
-                                    AdjustmentSlider(
-                                        label = control.label,
-                                        value = currentValue,
-                                        range = control.range,
-                                        step = control.step,
-                                        defaultValue = control.defaultValue,
-                                        formatter = control.formatter,
-                                        onValueChange = { snapped ->
-                                            updateSelectedMaskAdjustments(selectedMask.adjustments.withValue(control.field, snapped))
-                                        },
-                                        onInteractionStart = onBeginEditInteraction,
-                                        onInteractionEnd = onEndEditInteraction
-                                    )
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            AdjustmentSlider(
+                                label = "Exposure",
+                                value = selectedMask.adjustments.exposure,
+                                range = -5f..5f,
+                                step = 0.01f,
+                                defaultValue = 0f,
+                                formatter = { value -> String.format(Locale.US, "%.2f", value) },
+                                onValueChange = { snapped ->
+                                    updateSelectedMaskAdjustments(selectedMask.adjustments.copy(exposure = snapped))
+                                },
+                                onInteractionStart = onBeginEditInteraction,
+                                onInteractionEnd = onEndEditInteraction
+                            )
+
+                            adjustmentSections.forEach { (sectionTitle, controls) ->
+                                Text(text = sectionTitle, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+                                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    controls.forEach { control ->
+                                        val currentValue = selectedMask.adjustments.valueFor(control.field)
+                                        AdjustmentSlider(
+                                            label = control.label,
+                                            value = currentValue,
+                                            range = control.range,
+                                            step = control.step,
+                                            defaultValue = control.defaultValue,
+                                            formatter = control.formatter,
+                                            onValueChange = { snapped ->
+                                                updateSelectedMaskAdjustments(selectedMask.adjustments.withValue(control.field, snapped))
+                                            },
+                                            onInteractionStart = onBeginEditInteraction,
+                                            onInteractionEnd = onEndEditInteraction
+                                        )
+                                    }
                                 }
                             }
                         }
