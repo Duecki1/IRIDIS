@@ -13,7 +13,7 @@ use image::{
     Rgba,
 };
 use jni::objects::{JByteArray, JClass, JString};
-use jni::sys::{jbyteArray, jlong, jstring};
+use jni::sys::{jbyteArray, jlong, jstring, jint, jboolean};
 use jni::JNIEnv;
 use log::error;
 #[cfg(target_os = "android")]
@@ -2676,6 +2676,101 @@ fn render_raw(
     let height = transformed.height();
     let mask_runtimes = parse_masks(payload.masks.clone(), width, height);
     render_linear_with_payload(transformed.as_ref(), &payload, &mask_runtimes, fast_demosaic)
+}
+
+// Helper to handle the specific export logic
+fn render_export_from_session(
+    handle: jlong,
+    adjustments_json: Option<&str>,
+    max_dimension: u32,
+    low_ram_mode: bool,
+) -> Result<Vec<u8>> {
+    let session = get_session(handle).context("Invalid session handle")?;
+    let session = session.lock().map_err(|_| anyhow::anyhow!("Session lock poisoned"))?;
+
+    let payload = parse_adjustments_payload(adjustments_json);
+
+    // 1. Determine dimensions
+    // If max_dimension is > 0, we pass it to develop_preview_linear.
+    // This ensures that even if we decode full, we resize strictly BEFORE
+    // applying complex masks, curves, and tone mapping, saving RAM.
+    let (req_w, req_h) = if max_dimension > 0 {
+        (Some(max_dimension), Some(max_dimension))
+    } else {
+        (None, None)
+    };
+
+    // 2. Develop
+    // If low_ram_mode is TRUE, we force fast_demosaic.
+    // fast_demosaic uses significantly less RAM (approx 1/4) during the initial decode.
+    let fast_demosaic = low_ram_mode;
+    
+    // We bypass the cache (session.preview/zoom) because export settings 
+    // (size/quality/demosaic) might differ from what's cached.
+    let linear = develop_preview_linear(
+        &session.raw_bytes, 
+        fast_demosaic, 
+        req_w, 
+        req_h
+    )?;
+
+    // 3. Apply Adjustments
+    let transformed = apply_transformations(&linear, &payload);
+    let width = transformed.width();
+    let height = transformed.height();
+    
+    // For export, we regenerate masks at the exact export resolution
+    let mask_runtimes = parse_masks(payload.masks.clone(), width, height);
+
+    // 4. Render
+    // We use fast_demosaic flag here only to control JPEG quality (88 vs 96), 
+    // but for export we might want High Quality JPEG even if Low RAM mode used for decoding.
+    // Let's force high quality (false) for the JPEG encoder step unless extremely constrained,
+    // but the function signature requires a bool. Let's pass the low_ram_mode.
+    render_linear_with_payload(transformed.as_ref(), &payload, &mask_runtimes, fast_demosaic)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecoder_exportFromSession(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    adjustments_json: JString,
+    max_dimension: jint,
+    low_ram_mode: jboolean,
+) -> jbyteArray {
+    ensure_logger();
+    let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        let adjustments = read_adjustments_json(&mut env, adjustments_json);
+        let max_dim = if max_dimension < 0 { 0 } else { max_dimension as u32 };
+        let is_low_ram = low_ram_mode != 0;
+
+        match render_export_from_session(handle, adjustments.as_deref(), max_dim, is_low_ram) {
+            Ok(payload) => make_byte_array(&env, &payload),
+            Err(err) => {
+                error!("Failed to export session: {}", err);
+                if err.to_string().contains("Out of memory") {
+                    let _ = env.throw_new(
+                        "java/lang/OutOfMemoryError",
+                        "Native heap limit exceeded during export",
+                    );
+                }
+                ptr::null_mut()
+            }
+        }
+    }));
+
+    match result {
+        Ok(byte_array) => byte_array,
+        Err(_) => {
+            error!("Native panic in exportFromSession");
+            let _ = env.throw_new(
+                "java/lang/OutOfMemoryError",
+                "Native heap limit exceeded during export",
+            );
+            ptr::null_mut()
+        }
+    }
 }
 
 static LOGGER_INIT: Once = Once::new();

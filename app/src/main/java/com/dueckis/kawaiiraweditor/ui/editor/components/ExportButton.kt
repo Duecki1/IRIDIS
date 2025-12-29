@@ -26,6 +26,7 @@ import com.dueckis.kawaiiraweditor.data.model.MaskState
 import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
 import com.dueckis.kawaiiraweditor.data.media.ExportImageFormat
 import com.dueckis.kawaiiraweditor.data.media.decodeJpegToBitmapSampled
+import com.dueckis.kawaiiraweditor.data.media.decodeToBitmap
 import com.dueckis.kawaiiraweditor.data.media.saveBitmapToPictures
 import com.dueckis.kawaiiraweditor.data.media.saveJpegToPictures
 import kotlinx.coroutines.CoroutineDispatcher
@@ -91,26 +92,38 @@ internal fun ExportButton(
                 onExportStart()
                 coroutineScope.launch {
                     val currentJson = withContext(Dispatchers.Default) { currentAdjustments.toJson(currentMasks) }
+
+                    // CALCULATE MAX DIMENSION
+                    // If user requested resize, pass that. Otherwise 0 (Full Res).
+                    val maxDim = options.resizeLongEdgePx ?: 0
+
                     val fullBytes = withContext(nativeDispatcher) {
-                        runCatching { LibRawDecoder.decodeFullResFromSession(sessionHandle, currentJson) }.getOrNull()
+                        runCatching {
+                            LibRawDecoder.exportFromSession(
+                                sessionHandle,
+                                currentJson,
+                                maxDim,
+                                options.lowRamMode
+                            )
+                        }.getOrNull()
                     }
                     if (fullBytes == null) {
-                        onExportComplete(false, "Export failed.")
+                        onExportComplete(false, "Export failed (Out of Memory). Try enabling Low RAM Mode.")
                         return@launch
                     }
 
                     val savedUri =
                         withContext(Dispatchers.IO) {
-                            if (options.format == ExportImageFormat.Jpeg && options.quality == 96 && options.resizeLongEdgePx == null) {
+                            // Bytes are already resized/processed by Native if needed
+                            if (options.format == ExportImageFormat.Jpeg && options.quality == 96) {
                                 saveJpegToPictures(context, fullBytes)
                             } else {
-                                val bitmap =
-                                    withContext(Dispatchers.Default) {
-                                        fullBytes.decodeJpegToBitmapSampled(
-                                            targetLongEdgePx = options.resizeLongEdgePx,
-                                            dontEnlarge = options.dontEnlarge
-                                        )
-                                    } ?: return@withContext null
+                                // Only need to decode for format conversion (PNG/WebP) or if quality changed
+                                // Note: Native export is always JPEG Q96 based on lib.rs
+                                val bitmap = withContext(Dispatchers.Default) {
+                                    fullBytes.decodeToBitmap() 
+                                } ?: return@withContext null
+
                                 saveBitmapToPictures(context, bitmap, options.format, options.quality).also { bitmap.recycle() }
                             }
                         }

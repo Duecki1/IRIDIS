@@ -38,7 +38,8 @@ internal data class ExportOptions(
     val format: ExportImageFormat,
     val quality: Int,
     val resizeLongEdgePx: Int?,
-    val dontEnlarge: Boolean
+    val dontEnlarge: Boolean,
+    val lowRamMode: Boolean = false
 )
 
 @Composable
@@ -52,6 +53,7 @@ internal fun ExportOptionsDialog(
     var resizeEnabled by remember(initial) { mutableStateOf(initial.resizeLongEdgePx != null) }
     var longEdgeText by remember(initial) { mutableStateOf((initial.resizeLongEdgePx ?: 2048).toString()) }
     var dontEnlarge by remember(initial) { mutableStateOf(initial.dontEnlarge) }
+    var lowRamMode by remember(initial) { mutableStateOf(initial.lowRamMode) }
 
     val longEdgeValue = longEdgeText.toIntOrNull()?.coerceIn(64, 20000)
     val isLongEdgeValid = !resizeEnabled || longEdgeValue != null
@@ -130,6 +132,17 @@ internal fun ExportOptionsDialog(
                         Switch(checked = dontEnlarge, onCheckedChange = { dontEnlarge = it })
                     }
                 }
+
+                // Low RAM / Hardware mode toggle
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Low RAM / Hardware Mode", style = MaterialTheme.typography.bodyMedium)
+                    Switch(checked = lowRamMode, onCheckedChange = { lowRamMode = it })
+                }
             }
         },
         confirmButton = {
@@ -141,7 +154,8 @@ internal fun ExportOptionsDialog(
                             format = format,
                             quality = quality.coerceIn(1, 100),
                             resizeLongEdgePx = if (resizeEnabled) longEdgeValue else null,
-                            dontEnlarge = dontEnlarge
+                            dontEnlarge = dontEnlarge,
+                            lowRamMode = lowRamMode
                         )
                     )
                 }
