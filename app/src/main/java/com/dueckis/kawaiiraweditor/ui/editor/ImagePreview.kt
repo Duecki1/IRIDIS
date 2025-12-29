@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -60,6 +61,13 @@ import com.dueckis.kawaiiraweditor.data.model.SubMaskState
 import com.dueckis.kawaiiraweditor.data.model.SubMaskType
 import com.dueckis.kawaiiraweditor.data.model.buildMaskOverlayBitmap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material3.IconButtonDefaults
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -80,6 +88,8 @@ internal fun ImagePreview(
     viewportRoi: CropState? = null,
     onViewportRoiChange: ((CropState?, Float) -> Unit)? = null,
     maskOverlay: MaskState? = null,
+    // Callback to request a one-off original/no-adjustments preview. Called from this composable when needed.
+    requestBeforePreview: (suspend () -> Bitmap?)? = null,
     activeSubMask: SubMaskState? = null,
     isMaskMode: Boolean = false,
     showMaskOverlay: Boolean = true,
@@ -106,6 +116,10 @@ internal fun ImagePreview(
 ) {
     var scale by remember { mutableStateOf(1f) }
     var offsetX by remember { mutableStateOf(0f) }
+    var beforeBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var beforeDirty by remember { mutableStateOf(true) }
+    var showingBeforeLocal by remember { mutableStateOf(false) }
+    val beforeAlpha = remember { Animatable(0f) }
     var offsetY by remember { mutableStateOf(0f) }
 
     val currentStroke = remember { mutableStateListOf<MaskPoint>() }
@@ -135,6 +149,7 @@ internal fun ImagePreview(
                                     val pressed = event.changes.filter { it.pressed }
                                     if (pressed.isEmpty()) break
 
+
                                     if (pressed.any { it.type == PointerType.Stylus }) continue
 
                                     val touchCount = pressed.count { it.type == PointerType.Touch }
@@ -148,6 +163,7 @@ internal fun ImagePreview(
                                         Offset(
                                             (a.previousPosition.x + b.previousPosition.x) / 2f,
                                             (a.previousPosition.y + b.previousPosition.y) / 2f
+
                                         )
                                     val currCentroid =
                                         Offset(
@@ -280,6 +296,59 @@ internal fun ImagePreview(
                 filterQuality = FilterQuality.High,
                 modifier = imageModifier
             )
+
+            // Before overlay and compare button
+            val scope = rememberCoroutineScope()
+
+            val rb = beforeBitmap
+            if (rb != null) {
+                Image(
+                    bitmap = rb.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offsetX,
+                            translationY = offsetY,
+                            alpha = beforeAlpha.value
+                        )
+                )
+            }
+
+            IconButton(
+                onClick = {
+                    showingBeforeLocal = !showingBeforeLocal
+                    if (showingBeforeLocal) {
+                        if (beforeDirty || beforeBitmap == null) {
+                            requestBeforePreview?.let { req ->
+                                scope.launch {
+                                    val bmp = req()
+                                    if (bmp != null) {
+                                        beforeBitmap = bmp
+                                        beforeDirty = false
+                                        beforeAlpha.snapTo(0f)
+                                        beforeAlpha.animateTo(1f, animationSpec = tween(180))
+                                    }
+                                }
+                            }
+                        } else {
+                            scope.launch { beforeAlpha.animateTo(1f, animationSpec = tween(180)) }
+                        }
+                    } else {
+                        scope.launch { beforeAlpha.animateTo(0f, animationSpec = tween(180)) }
+                    }
+                },
+                modifier = Modifier
+                    .size(44.dp)
+                    .align(Alignment.BottomStart)
+                    .padding(12.dp),
+                colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
+            ) {
+                Icon(imageVector = Icons.Filled.Info, contentDescription = "Compare before/after", tint = Color.White)
+            }
 
             val viewportBmp = viewportBitmap
             val viewportRoiSnapshot = viewportRoi?.normalized()

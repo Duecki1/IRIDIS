@@ -719,6 +719,40 @@ internal fun EditorScreen(
     val lastOriginalPreviewStamp = remember { AtomicLong(-1L) }
     val lastUncroppedPreviewStamp = remember { AtomicLong(-1L) }
     val renderRequests = remember { Channel<RenderRequest>(capacity = Channel.CONFLATED) }
+    // Helper to request a one-off "original / no-adjustments" preview without changing global compare state
+    suspend fun requestIdentityPreview(): Bitmap? {
+        val handle = sessionHandle
+        if (handle == 0L) return null
+        val json = withContext(Dispatchers.Default) {
+            AdjustmentState(
+                rotation = adjustments.rotation,
+                flipHorizontal = adjustments.flipHorizontal,
+                flipVertical = adjustments.flipVertical,
+                orientationSteps = adjustments.orientationSteps,
+                crop = adjustments.crop,
+                toneMapper = adjustments.toneMapper
+            ).toJson(emptyList())
+        }
+        val version = renderVersion.incrementAndGet()
+        val stampBefore = lastOriginalPreviewStamp.get()
+        renderRequests.trySend(
+            RenderRequest(
+                version = version,
+                adjustmentsJson = json,
+                target = RenderTarget.Original,
+                rotationDegrees = adjustments.rotation
+            )
+        )
+
+        // Wait for the renderer to update originalBitmap (with a short timeout)
+        var waited = 0
+        while (waited < 500) {
+            if (lastOriginalPreviewStamp.get() > stampBefore) break
+            kotlinx.coroutines.delay(20)
+            waited += 20
+        }
+        return originalBitmap
+    }
     val renderDispatcher = remember { Executors.newSingleThreadExecutor().asCoroutineDispatcher() }
     DisposableEffect(renderDispatcher) { onDispose { renderDispatcher.close() } }
 
