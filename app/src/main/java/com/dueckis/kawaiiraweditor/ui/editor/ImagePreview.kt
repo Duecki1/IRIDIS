@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
@@ -66,7 +67,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material3.IconButtonDefaults
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -120,6 +121,7 @@ internal fun ImagePreview(
     var beforeDirty by remember { mutableStateOf(true) }
     var showingBeforeLocal by remember { mutableStateOf(false) }
     val beforeAlpha = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
     var offsetY by remember { mutableStateOf(0f) }
 
     val currentStroke = remember { mutableStateListOf<MaskPoint>() }
@@ -138,63 +140,7 @@ internal fun ImagePreview(
         modifier =
             Modifier
                 .fillMaxSize()
-                .clipToBounds()
-                .let { base ->
-                    if (!isMaskMode && !isCropMode) base
-                    else
-                        base.pointerInput(bitmap) {
-                            awaitEachGesture {
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    val pressed = event.changes.filter { it.pressed }
-                                    if (pressed.isEmpty()) break
-
-
-                                    if (pressed.any { it.type == PointerType.Stylus }) continue
-
-                                    val touchCount = pressed.count { it.type == PointerType.Touch }
-                                    if (touchCount < 2) continue
-
-                                    val touches = pressed.filter { it.type == PointerType.Touch }
-                                    val a = touches[0]
-                                    val b = touches[1]
-
-                                    val prevCentroid =
-                                        Offset(
-                                            (a.previousPosition.x + b.previousPosition.x) / 2f,
-                                            (a.previousPosition.y + b.previousPosition.y) / 2f
-
-                                        )
-                                    val currCentroid =
-                                        Offset(
-                                            (a.position.x + b.position.x) / 2f,
-                                            (a.position.y + b.position.y) / 2f
-                                        )
-                                    val pan = currCentroid - prevCentroid
-
-                                    val prevDx = a.previousPosition.x - b.previousPosition.x
-                                    val prevDy = a.previousPosition.y - b.previousPosition.y
-                                    val currDx = a.position.x - b.position.x
-                                    val currDy = a.position.y - b.position.y
-                                    val prevDist =
-                                        kotlin.math
-                                            .sqrt(prevDx * prevDx + prevDy * prevDy)
-                                            .coerceAtLeast(0.0001f)
-                                    val currDist =
-                                        kotlin.math
-                                            .sqrt(currDx * currDx + currDy * currDy)
-                                            .coerceAtLeast(0.0001f)
-                                    val zoom = currDist / prevDist
-
-                                    scale = (scale * zoom).coerceIn(0.5f, 5f)
-                                    offsetX += pan.x
-                                    offsetY += pan.y
-
-                                    event.changes.forEach { it.consume() }
-                                }
-                            }
-                        }
-                },
+                .clipToBounds(),
         contentAlignment = Alignment.Center
     ) {
         val containerW = with(density) { maxWidth.toPx() }
@@ -272,11 +218,44 @@ internal fun ImagePreview(
                     .let { base ->
                         if (isMaskMode || isCropMode) base
                         else
-                            base.pointerInput(Unit) {
-                                detectTransformGestures { _, pan, zoom, _ ->
-                                    scale = (scale * zoom).coerceIn(0.5f, 5f)
-                                    offsetX += pan.x
-                                    offsetY += pan.y
+                            base.pointerInput(bitmap) {
+                                awaitEachGesture {
+                                    val down = awaitFirstDown()
+                                    // if stylus, ignore
+                                    if (down.type == PointerType.Stylus) return@awaitEachGesture
+
+                                    // wait for additional pointers to enable transform
+                                    var transform = false
+                                    var pointers = listOf(down)
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val pressed = event.changes.filter { it.pressed }
+                                        if (pressed.size >= 2) {
+                                            transform = true
+                                            val touches = pressed.filter { it.type == PointerType.Touch }
+                                            if (touches.size >= 2) {
+                                                val a = touches[0]
+                                                val b = touches[1]
+                                                val prevCentroid = Offset((a.previousPosition.x + b.previousPosition.x) / 2f, (a.previousPosition.y + b.previousPosition.y) / 2f)
+                                                val currCentroid = Offset((a.position.x + b.position.x) / 2f, (a.position.y + b.position.y) / 2f)
+                                                val pan = currCentroid - prevCentroid
+                                                val prevDx = a.previousPosition.x - b.previousPosition.x
+                                                val prevDy = a.previousPosition.y - b.previousPosition.y
+                                                val currDx = a.position.x - b.position.x
+                                                val currDy = a.position.y - b.position.y
+                                                val prevDist = kotlin.math.sqrt(prevDx * prevDx + prevDy * prevDy).coerceAtLeast(0.0001f)
+                                                val currDist = kotlin.math.sqrt(currDx * currDx + currDy * currDy).coerceAtLeast(0.0001f)
+                                                val zoom = currDist / prevDist
+                                                scale = (scale * zoom).coerceIn(0.5f, 5f)
+                                                offsetX += pan.x
+                                                offsetY += pan.y
+                                                event.changes.forEach { if (transform) it.consume() }
+                                            }
+                                        } else {
+                                            // no transform; allow taps to pass through
+                                            if (pressed.isEmpty()) break
+                                        }
+                                    }
                                 }
                             }
                     }
@@ -297,9 +276,7 @@ internal fun ImagePreview(
                 modifier = imageModifier
             )
 
-            // Before overlay and compare button
-            val scope = rememberCoroutineScope()
-
+            // Before overlay
             val rb = beforeBitmap
             if (rb != null) {
                 Image(
@@ -313,42 +290,13 @@ internal fun ImagePreview(
                             scaleY = scale,
                             translationX = offsetX,
                             translationY = offsetY,
+                            rotationZ = if (isCropMode) extraRotationDegrees else 0f,
                             alpha = beforeAlpha.value
                         )
                 )
             }
 
-            IconButton(
-                onClick = {
-                    showingBeforeLocal = !showingBeforeLocal
-                    if (showingBeforeLocal) {
-                        if (beforeDirty || beforeBitmap == null) {
-                            requestBeforePreview?.let { req ->
-                                scope.launch {
-                                    val bmp = req()
-                                    if (bmp != null) {
-                                        beforeBitmap = bmp
-                                        beforeDirty = false
-                                        beforeAlpha.snapTo(0f)
-                                        beforeAlpha.animateTo(1f, animationSpec = tween(180))
-                                    }
-                                }
-                            }
-                        } else {
-                            scope.launch { beforeAlpha.animateTo(1f, animationSpec = tween(180)) }
-                        }
-                    } else {
-                        scope.launch { beforeAlpha.animateTo(0f, animationSpec = tween(180)) }
-                    }
-                },
-                modifier = Modifier
-                    .size(44.dp)
-                    .align(Alignment.BottomStart)
-                    .padding(12.dp),
-                colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
-            ) {
-                Icon(imageVector = Icons.Filled.Info, contentDescription = "Compare before/after", tint = Color.White)
-            }
+            // (Compare IconButton moved to end of Box to ensure it is topmost and clickable)
 
             val viewportBmp = viewportBitmap
             val viewportRoiSnapshot = viewportRoi?.normalized()
@@ -1118,6 +1066,40 @@ internal fun ImagePreview(
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+
+        // Top-most compare toggle button: last in tree and high zIndex so it receives taps
+        IconButton(
+            onClick = {
+                showingBeforeLocal = !showingBeforeLocal
+                if (showingBeforeLocal) {
+                    if (beforeDirty || beforeBitmap == null) {
+                        requestBeforePreview?.let { req ->
+                            scope.launch {
+                                val bmp = req()
+                                if (bmp != null) {
+                                    beforeBitmap = bmp
+                                    beforeDirty = false
+                                    beforeAlpha.snapTo(0f)
+                                    beforeAlpha.animateTo(1f, animationSpec = tween(180))
+                                }
+                            }
+                        }
+                    } else {
+                        scope.launch { beforeAlpha.animateTo(1f, animationSpec = tween(180)) }
+                    }
+                } else {
+                    scope.launch { beforeAlpha.animateTo(0f, animationSpec = tween(180)) }
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(12.dp)
+                .size(48.dp)
+                .zIndex(10f),
+            colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
+        ) {
+            Icon(imageVector = Icons.Filled.CompareArrows, contentDescription = "Toggle original", tint = Color.White)
         }
 
         if (isLoading) {
