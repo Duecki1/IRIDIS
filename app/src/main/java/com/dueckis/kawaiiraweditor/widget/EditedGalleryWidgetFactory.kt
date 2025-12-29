@@ -33,12 +33,19 @@ class EditedGalleryWidgetFactory(
         return try {
             val path = imagePaths[position]
 
-            val thumb = loadThumb(path, 320, 320) // smaller to avoid binder limits
+            val thumb = loadThumb(path, 720, 720) // decode higher-quality square thumbnail
             if (thumb != null) rv.setImageViewBitmap(R.id.itemImage, thumb)
             else rv.setImageViewResource(R.id.itemImage, android.R.drawable.ic_menu_report_image)
 
-            // Optional: pass something for click handling (if your GalleryActivity reads it)
-            val fillIn = android.content.Intent().apply { putExtra("image_path", path) }
+            // Pass project id (parent folder name) so the app can open the editor for that project
+            val projectId = try {
+                File(path).parentFile?.name
+            } catch (t: Throwable) {
+                null
+            }
+            val fillIn = android.content.Intent().apply {
+                projectId?.let { putExtra("project_id", it) }
+            }
             rv.setOnClickFillInIntent(R.id.itemImage, fillIn)
 
             rv
@@ -54,15 +61,34 @@ class EditedGalleryWidgetFactory(
     override fun hasStableIds(): Boolean = true
 
     private fun loadThumb(path: String, reqW: Int, reqH: Int): Bitmap? {
+        // Decode bounds first
         val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(path, opts)
 
+        // Calculate an inSampleSize to avoid decoding huge bitmaps
         opts.inSampleSize = calculateInSampleSize(opts, reqW, reqH)
         opts.inJustDecodeBounds = false
-        opts.inPreferredConfig = Bitmap.Config.RGB_565
+        opts.inPreferredConfig = Bitmap.Config.ARGB_8888
 
         val decoded = BitmapFactory.decodeFile(path, opts) ?: return null
-        return Bitmap.createScaledBitmap(decoded, reqW, reqH, true)
+
+        // Center-crop to a square based on the shortest edge, then scale to requested size
+        val width = decoded.width
+        val height = decoded.height
+        val size = minOf(width, height)
+        val x = (width - size) / 2
+        val y = (height - size) / 2
+
+        val cropped = try {
+            Bitmap.createBitmap(decoded, x, y, size, size)
+        } catch (t: Throwable) {
+            decoded
+        }
+
+        val scaled = Bitmap.createScaledBitmap(cropped, reqW, reqH, true)
+        if (cropped !== decoded) decoded.recycle()
+        if (scaled !== cropped) cropped.recycle()
+        return scaled
     }
 
     private fun calculateInSampleSize(opts: BitmapFactory.Options, reqW: Int, reqH: Int): Int {

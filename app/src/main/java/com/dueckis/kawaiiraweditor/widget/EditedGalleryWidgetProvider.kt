@@ -23,8 +23,11 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
             views.setRemoteAdapter(R.id.flipperView, svcIntent)
             views.setEmptyView(R.id.flipperView, R.id.emptyText)
 
-            // Clicking an image opens MainActivity (app entry) — update if you have a detail activity
-            val clickIntent = Intent(context, MainActivity::class.java)
+            // Clicking an image should open the editor for that project. Route clicks to MainActivity
+            // so onNewIntent can hand the project id to the composable app.
+            val clickIntent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
             val clickPI = PendingIntent.getActivity(
                 context,
                 0,

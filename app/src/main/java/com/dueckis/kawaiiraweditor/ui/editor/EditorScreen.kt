@@ -1317,14 +1317,14 @@ internal fun EditorScreen(
 
             if (requestTarget == RenderTarget.Edited && requestPreviewRoi == null && isLatest) fullBitmap?.let { bmp ->
                 withContext(Dispatchers.IO) {
-                    val maxSize = 512
+                    val maxSize = 1024
                     val scale = minOf(maxSize.toFloat() / bmp.width, maxSize.toFloat() / bmp.height)
                     val scaledWidth = (bmp.width * scale).toInt()
                     val scaledHeight = (bmp.height * scale).toInt()
                     val thumbnail = Bitmap.createScaledBitmap(bmp, scaledWidth, scaledHeight, true)
 
                     val outputStream = java.io.ByteArrayOutputStream()
-                    thumbnail.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+                    thumbnail.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                     val thumbnailBytes = outputStream.toByteArray()
                     storage.saveThumbnail(galleryItem.projectId, thumbnailBytes)
                     if (thumbnail != bmp) thumbnail.recycle()
