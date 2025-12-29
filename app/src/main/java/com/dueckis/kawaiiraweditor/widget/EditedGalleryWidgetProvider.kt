@@ -9,7 +9,18 @@ import android.widget.RemoteViews
 import com.dueckis.kawaiiraweditor.MainActivity
 import com.dueckis.kawaiiraweditor.R
 
+import android.content.ComponentName
+
+import android.app.AlarmManager
+import android.content.BroadcastReceiver
+import android.os.SystemClock
+
 class EditedGalleryWidgetProvider : AppWidgetProvider() {
+
+    companion object {
+        private const val ACTION_AUTO_UPDATE = "com.dueckis.kawaiiraweditor.widget.ACTION_AUTO_UPDATE"
+        private const val UPDATE_INTERVAL_MS = 300_000L // 5 minutes
+    }
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         for (appWidgetId in appWidgetIds) {
@@ -39,5 +50,37 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
             appWidgetManager.updateAppWidget(appWidgetId, views)
             appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.flipperView)
         }
+
+        // Schedule periodic updates to keep flipping alive
+        scheduleNextUpdate(context)
     }
-}
+
+    override fun onReceive(context: Context, intent: Intent) {
+        super.onReceive(context, intent)
+        if (intent.action == ACTION_AUTO_UPDATE) {
+            val mgr = AppWidgetManager.getInstance(context)
+            val ids = mgr.getAppWidgetIds(ComponentName(context, EditedGalleryWidgetProvider::class.java))
+            if (ids.isNotEmpty()) {
+                onUpdate(context, mgr, ids)
+            }
+            scheduleNextUpdate(context)
+        }
+    }
+
+    private fun scheduleNextUpdate(context: Context) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+        val intent = Intent(context, EditedGalleryWidgetProvider::class.java).apply { action = ACTION_AUTO_UPDATE }
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.setExactAndAllowWhileIdle(
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SystemClock.elapsedRealtime() + UPDATE_INTERVAL_MS,
+            pendingIntent
+        )
+        }
+    }
+
