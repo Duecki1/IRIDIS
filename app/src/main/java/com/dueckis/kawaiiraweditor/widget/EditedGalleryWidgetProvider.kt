@@ -1,25 +1,23 @@
 package com.dueckis.kawaiiraweditor.widget
 
+import android.app.AlarmManager
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import android.widget.RemoteViews
 import com.dueckis.kawaiiraweditor.MainActivity
 import com.dueckis.kawaiiraweditor.R
-
-import android.content.ComponentName
-
-import android.app.AlarmManager
-import android.content.BroadcastReceiver
-import android.os.SystemClock
 
 class EditedGalleryWidgetProvider : AppWidgetProvider() {
 
     companion object {
         private const val ACTION_AUTO_UPDATE = "com.dueckis.kawaiiraweditor.widget.ACTION_AUTO_UPDATE"
-        private const val UPDATE_INTERVAL_MS = 300_000L // 5 minutes
+        // Increased interval to avoid conflicting with the AdapterViewFlipper animation (30s)
+        private const val UPDATE_INTERVAL_MS = 600_000L // 10 minutes
     }
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
@@ -51,7 +49,7 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
             appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.flipperView)
         }
 
-        // Schedule periodic updates to keep flipping alive
+        // Schedule periodic updates to keep content fresh
         scheduleNextUpdate(context)
     }
 
@@ -63,7 +61,6 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
             if (ids.isNotEmpty()) {
                 onUpdate(context, mgr, ids)
             }
-            scheduleNextUpdate(context)
         }
     }
 
@@ -76,11 +73,11 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        alarmManager.setExactAndAllowWhileIdle(
+        // Use set (inexact) instead of setExact to be friendlier to battery, since 10 mins isn't critical
+        alarmManager.set(
             AlarmManager.ELAPSED_REALTIME_WAKEUP,
             SystemClock.elapsedRealtime() + UPDATE_INTERVAL_MS,
             pendingIntent
         )
-        }
     }
-
+}

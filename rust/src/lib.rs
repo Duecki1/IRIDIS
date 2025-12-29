@@ -2686,7 +2686,18 @@ fn render_export_from_session(
     low_ram_mode: bool,
 ) -> Result<Vec<u8>> {
     let session = get_session(handle).context("Invalid session handle")?;
-    let session = session.lock().map_err(|_| anyhow::anyhow!("Session lock poisoned"))?;
+    let mut session = session.lock().map_err(|_| anyhow::anyhow!("Session lock poisoned"))?;
+
+    // Drop any cached preview/zoom/mask buffers to free native memory before export
+    // This helps avoid OOM by releasing preview caches that are not needed for export.
+    session.super_low = None;
+    session.low = None;
+    session.preview = None;
+    session.zoom = None;
+    session.masks_super_low = None;
+    session.masks_low = None;
+    session.masks_preview = None;
+    session.masks_zoom = None;
 
     let payload = parse_adjustments_payload(adjustments_json);
 
@@ -3183,13 +3194,23 @@ pub extern "system" fn Java_com_dueckis_kawaiiraweditor_data_native_LibRawDecode
                 return ptr::null_mut();
             }
         };
-        let session = match session.lock() {
+        let mut session = match session.lock() {
             Ok(s) => s,
             Err(_) => {
                 error!("Session lock poisoned");
                 return ptr::null_mut();
             }
         };
+
+        // Drop cached preview/zoom/mask buffers to free native memory before full-res decode
+        session.super_low = None;
+        session.low = None;
+        session.preview = None;
+        session.zoom = None;
+        session.masks_super_low = None;
+        session.masks_low = None;
+        session.masks_preview = None;
+        session.masks_zoom = None;
 
         match render_raw(&session.raw_bytes, adjustments.as_deref(), false, None, None) {
             Ok(payload) => make_byte_array(&env, &payload),
