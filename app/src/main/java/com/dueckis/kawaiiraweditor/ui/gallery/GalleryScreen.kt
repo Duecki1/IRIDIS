@@ -207,7 +207,7 @@ internal fun GalleryScreen(
                     }
                     val previewBitmap = previewBytes?.decodeToBitmap() ?: return@launch
 
-                    val maxSize = 512
+                    val maxSize = 1024
                     val scale = min(maxSize.toFloat() / previewBitmap.width, maxSize.toFloat() / previewBitmap.height)
                     val scaledWidth = (previewBitmap.width * scale).toInt().coerceAtLeast(1)
                     val scaledHeight = (previewBitmap.height * scale).toInt().coerceAtLeast(1)
@@ -217,7 +217,7 @@ internal fun GalleryScreen(
 
                     withContext(Dispatchers.IO) {
                         val outputStream = ByteArrayOutputStream()
-                        thumbnail.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+                        thumbnail.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                         storage.saveThumbnail(projectId, outputStream.toByteArray())
                     }
                     onThumbnailReady(projectId, thumbnail)
@@ -405,7 +405,7 @@ internal fun GalleryScreen(
                 }
 
                 withContext(Dispatchers.IO) {
-                    val maxSize = 512
+                    val maxSize = 1024
                     val scale = min(maxSize.toFloat() / previewBitmap.width, maxSize.toFloat() / previewBitmap.height)
                     val scaledWidth = (previewBitmap.width * scale).toInt().coerceAtLeast(1)
                     val scaledHeight = (previewBitmap.height * scale).toInt().coerceAtLeast(1)
@@ -414,7 +414,7 @@ internal fun GalleryScreen(
                         else Bitmap.createScaledBitmap(previewBitmap, scaledWidth, scaledHeight, true)
 
                     val outputStream = ByteArrayOutputStream()
-                    thumbnail.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+                    thumbnail.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                     storage.saveThumbnail(projectId, outputStream.toByteArray())
 
                     if (thumbnail != previewBitmap) thumbnail.recycle()

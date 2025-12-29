@@ -32,7 +32,15 @@ import com.dueckis.kawaiiraweditor.ui.startup.StartupSplash
 import com.dueckis.kawaiiraweditor.ui.theme.KawaiiRawEditorTheme
 
 class MainActivity : ComponentActivity() {
+    // Simple bridge to pass an incoming project id to the composable app
+    class IntentLaunchBridge(var pendingProjectToOpen: String? = null)
+
+    private val launchBridge = IntentLaunchBridge()
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Extract project_id from launch intent if present
+        intent?.getStringExtra("project_id")?.let { launchBridge.pendingProjectToOpen = it }
+
         setTheme(R.style.Theme_KawaiiRawEditor)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -57,7 +65,7 @@ class MainActivity : ComponentActivity() {
 
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        KawaiiApp()
+                        KawaiiApp(launchBridge = launchBridge)
                         if (showStartupSplash) {
                             StartupSplash(onFinished = { showStartupSplash = false })
                         }
@@ -89,5 +97,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        // If the activity is already running and receives a widget click, pass the project id into the bridge
+        intent?.getStringExtra("project_id")?.let { launchBridge.pendingProjectToOpen = it }
     }
 }
