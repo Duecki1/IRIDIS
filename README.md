@@ -2,7 +2,7 @@
 
 Android RAW editor built with Jetpack Compose + a Rust native decoder/processor.
 
-If you are interested in this Project and want it to be continued, let me know by giving this repo a star :)
+If you are interested in this Project and want it to be continued, let me know by giving this repo a star and sharing it :)
 
 Download the newest pre-release here: [Releases](https://github.com/Duecki1/IRIDIS/releases)
 
