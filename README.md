@@ -53,7 +53,7 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Automatic masks for part of landscapes (like architecture or sky)
 - Button to switch between unedited and edited preview
 - Widget showing all edits
-- - Tab for cropping and rotating the image (Buggy with masks)
+- Tab for cropping and rotating the image (Buggy with masks)
 
 ## Planned:
 
