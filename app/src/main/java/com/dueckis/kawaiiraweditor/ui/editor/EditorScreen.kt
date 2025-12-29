@@ -722,6 +722,49 @@ internal fun EditorScreen(
     val renderDispatcher = remember { Executors.newSingleThreadExecutor().asCoroutineDispatcher() }
     DisposableEffect(renderDispatcher) { onDispose { renderDispatcher.close() } }
 
+    // Helper to request a one-off "original / no-adjustments" preview without changing global compare state
+    suspend fun requestIdentityPreview(): Bitmap? {
+        val handle = sessionHandle
+        if (handle == 0L) return null
+        val json = withContext(Dispatchers.Default) {
+            AdjustmentState(
+                rotation = adjustments.rotation,
+                flipHorizontal = adjustments.flipHorizontal,
+                flipVertical = adjustments.flipVertical,
+                orientationSteps = adjustments.orientationSteps,
+                crop = adjustments.crop,
+                toneMapper = adjustments.toneMapper
+            ).toJson(emptyList())
+        }
+        // Try to get a quick low-quality preview directly to avoid depending on the shared
+        // render loop timing. If that fails, fall back to queuing a request and waiting briefly.
+        val bmp = withContext(renderDispatcher) {
+            runCatching { LibRawDecoder.lowdecodeFromSession(handle, json) }.getOrNull()
+                ?.decodeToBitmap()
+                ?: runCatching { LibRawDecoder.decodeFromSession(handle, json) }.getOrNull()?.decodeToBitmap()
+        }
+        if (bmp != null) return bmp
+
+        // Fallback: enqueue into the render loop and wait a bit for originalBitmap to update.
+        val version = renderVersion.incrementAndGet()
+        val stampBefore = lastOriginalPreviewStamp.get()
+        renderRequests.trySend(
+            RenderRequest(
+                version = version,
+                adjustmentsJson = json,
+                target = RenderTarget.Original,
+                rotationDegrees = adjustments.rotation
+            )
+        )
+
+        var waited = 0
+        while (waited < 2500) {
+            if (lastOriginalPreviewStamp.get() > stampBefore) break
+            kotlinx.coroutines.delay(20)
+            waited += 20
+        }
+        return originalBitmap
+    }
     DisposableEffect(sessionHandle) {
         val handleToRelease = sessionHandle
         onDispose {
@@ -1674,6 +1717,7 @@ internal fun EditorScreen(
                                 brushSize = brushSize,
                                 maskTapMode = if (isComparingOriginal) MaskTapMode.None else maskTapMode,
                                 onMaskTap = if (isComparingOriginal) null else onMaskTap,
+                                requestBeforePreview = { requestIdentityPreview() },
                                 onBrushStrokeFinished = onBrushStrokeFinished,
                                 onLassoFinished = onLassoFinished,
                                 onSubMaskHandleDrag = onSubMaskHandleDrag,
@@ -1958,6 +2002,7 @@ internal fun EditorScreen(
                                 brushSize = brushSize,
                                 maskTapMode = if (isComparingOriginal) MaskTapMode.None else maskTapMode,
                                 onMaskTap = if (isComparingOriginal) null else onMaskTap,
+                                requestBeforePreview = { requestIdentityPreview() },
                                 onBrushStrokeFinished = onBrushStrokeFinished,
                                 onLassoFinished = onLassoFinished,
                                 onSubMaskHandleDrag = onSubMaskHandleDrag,
