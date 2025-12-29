@@ -113,7 +113,8 @@ internal fun ImagePreview(
     onStraightenResult: ((Float) -> Unit)? = null,
     onCropDraftChange: ((CropState) -> Unit)? = null,
     onCropInteractionStart: (() -> Unit)? = null,
-    onCropInteractionEnd: ((CropState) -> Unit)? = null
+    onCropInteractionEnd: ((CropState) -> Unit)? = null,
+    showBeforeOverlay: Boolean = false // New flag to control before overlay and HQ overlays
 ) {
     var scale by remember { mutableStateOf(1f) }
     var offsetX by remember { mutableStateOf(0f) }
@@ -276,9 +277,10 @@ internal fun ImagePreview(
                 modifier = imageModifier
             )
 
-            // Before overlay
+
+            // Before overlay (always topmost, high zIndex)
             val rb = beforeBitmap
-            if (rb != null) {
+            if (rb != null && (showingBeforeLocal || showBeforeOverlay)) {
                 Image(
                     bitmap = rb.asImageBitmap(),
                     contentDescription = null,
@@ -293,6 +295,7 @@ internal fun ImagePreview(
                             rotationZ = if (isCropMode) extraRotationDegrees else 0f,
                             alpha = beforeAlpha.value
                         )
+                        .zIndex(100f) // Ensure before overlay is always on top
                 )
             }
 
@@ -300,7 +303,7 @@ internal fun ImagePreview(
 
             val viewportBmp = viewportBitmap
             val viewportRoiSnapshot = viewportRoi?.normalized()
-            if (!isCropMode && viewportBmp != null && viewportRoiSnapshot != null) {
+            if (!isCropMode && viewportBmp != null && viewportRoiSnapshot != null && !(showingBeforeLocal || showBeforeOverlay)) {
                 val viewportPaint = remember { android.graphics.Paint().apply { isFilterBitmap = true } }
                 Canvas(
                     modifier =
@@ -611,7 +614,7 @@ internal fun ImagePreview(
                 }
             }
 
-            if (isMaskMode) {
+            if (isMaskMode && !(showingBeforeLocal || showBeforeOverlay)) {
                 val persistentOverlayVisible = showMaskOverlay && maskOverlay != null
                 val latestPersistentOverlayVisible by rememberUpdatedState(persistentOverlayVisible)
 
@@ -1096,7 +1099,7 @@ internal fun ImagePreview(
                 .align(Alignment.BottomStart)
                 .padding(12.dp)
                 .size(48.dp)
-                .zIndex(10f),
+                .zIndex(200f),
             colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
         ) {
             Icon(imageVector = Icons.Filled.CompareArrows, contentDescription = "Toggle original", tint = Color.White)
