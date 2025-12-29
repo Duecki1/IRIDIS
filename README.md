@@ -51,19 +51,19 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - S-Pen support for brush masks (line width depending on pressure)
 - Choose export file format and resolution 
 - Automatic masks for part of landscapes (like architecture or sky)
+- Button to switch between unedited and edited preview
+- Widget showing all edits
+- - Tab for cropping and rotating the image (Buggy with masks)
 
 ## Planned:
 
-- Tab for cropping and rotating the image
 - Clarity and such slider need to actually work
 - Highlight recovery needs to be better for the highlight slider. (use the exposure slider for now)
-- Holding down on the Preview should show the original picture until let go
 - Use a more intuitive rating system
 - Rename files
 - Be able to reorder subtract and add masks
 - UI needs to be improved for masking. (And more)
 - Fix overlapping Add and subtract submasks generate hard cut
-- Widget
 
 ## License
 
