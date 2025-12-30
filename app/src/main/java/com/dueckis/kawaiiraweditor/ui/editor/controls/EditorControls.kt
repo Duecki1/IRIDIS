@@ -301,10 +301,16 @@ internal fun EditorControlsContent(
                         maskIndex = assignMaskNumber(mask.id).takeIf { it > 0 } ?: (index + 1),
                         isSelected = isSelected,
                         onClick = {
-                            onPaintingMaskChange(false)
                             onMaskTapModeChange(MaskTapMode.None)
                             onSelectedMaskIdChange(mask.id)
-                            onSelectedSubMaskIdChange(mask.subMasks.firstOrNull()?.id)
+
+                            val firstSub = mask.subMasks.firstOrNull()
+                            onSelectedSubMaskIdChange(firstSub?.id)
+
+                            val shouldPaint =
+                                firstSub?.type == SubMaskType.Brush.id || firstSub?.type == SubMaskType.AiSubject.id
+                            onPaintingMaskChange(shouldPaint)
+
                             onRequestMaskOverlayBlink(null)
                         },
                         onMenuClick = { showMenu = true }
