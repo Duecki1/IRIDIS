@@ -346,7 +346,7 @@ private fun ExpressiveSectionContainer(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .padding( vertical = 6.dp),
         shape = RoundedCornerShape(24.dp), // Expressive Large Shape
         color = MaterialTheme.colorScheme.surfaceContainer,
         tonalElevation = 2.dp

@@ -5,7 +5,6 @@ on:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
 jobs:
@@ -13,29 +12,35 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout code (Let me in!)
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 17 (Almost 18)
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
           cache: gradle
 
+      # 1. Install the specific NDK version required by your build.gradle.kts
+      - name: Install NDK
+        run: |
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;27.0.12077973"
 
-      - name: Set up Rust Toolchain >_<
+      # 2. Install Rust and the Android targets
+      - name: Set up Rust Toolchain (restrain me uwu)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
-      - name: Grant execute permission for gradlew
+      - name: Grant execute permission for gradlew (Can i p..pleawse?)
         run: chmod +x gradlew
 
-      - name: Build with Gradle uwu
+      - name: Build with Gradle (Stone by Stone)
+        # Using assembleDebug to avoid signing issues for now
         run: ./gradlew assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Upload APK (Here is your APK!)
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
