@@ -16,6 +16,7 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
 
     companion object {
         private const val ACTION_AUTO_UPDATE = "com.dueckis.kawaiiraweditor.widget.ACTION_AUTO_UPDATE"
+        const val ACTION_WIDGET_CLICK = "com.dueckis.kawaiiraweditor.widget.ACTION_WIDGET_CLICK"
         // Increased interval to avoid conflicting with the AdapterViewFlipper animation (30s)
         private const val UPDATE_INTERVAL_MS = 600_000L // 10 minutes
     }
@@ -32,16 +33,22 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
             views.setRemoteAdapter(R.id.flipperView, svcIntent)
             views.setEmptyView(R.id.flipperView, R.id.emptyText)
 
-            // Clicking an image should open the editor for that project. Route clicks to MainActivity
-            // so onNewIntent can hand the project id to the composable app.
-            val clickIntent = Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            // Clicking an image should broadcast to this provider first,
+            // which will then advance the view and start the activity.
+            val clickIntent = Intent(context, EditedGalleryWidgetProvider::class.java).apply {
+                action = ACTION_WIDGET_CLICK
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+                // We need to set data to ensure the intent is unique if we have multiple widgets?
+                // Actually for a broadcast to the provider, we just need the action.
+                // The fillInIntent will add the project_id.
             }
-            val clickPI = PendingIntent.getActivity(
+            
+            // PendingIntent for the broadcast
+            val clickPI = PendingIntent.getBroadcast(
                 context,
-                0,
+                appWidgetId, // Use appWidgetId as requestCode to distinguish multiple widgets if needed
                 clickIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             )
             views.setPendingIntentTemplate(R.id.flipperView, clickPI)
 
@@ -55,11 +62,33 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
-        if (intent.action == ACTION_AUTO_UPDATE) {
+        val action = intent.action
+        
+        if (action == ACTION_AUTO_UPDATE) {
             val mgr = AppWidgetManager.getInstance(context)
             val ids = mgr.getAppWidgetIds(ComponentName(context, EditedGalleryWidgetProvider::class.java))
             if (ids.isNotEmpty()) {
                 onUpdate(context, mgr, ids)
+            }
+        } else if (action == ACTION_WIDGET_CLICK) {
+            val appWidgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
+            val projectId = intent.getStringExtra("project_id")
+
+            // 1. Advance the flipper to the next view
+            if (appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                val views = RemoteViews(context.packageName, R.layout.widget_edited_gallery)
+                views.showNext(R.id.flipperView)
+                AppWidgetManager.getInstance(context).partiallyUpdateAppWidget(appWidgetId, views)
+            }
+
+            // 2. Open the main activity with the project ID
+            if (projectId != null) {
+                val activityIntent = Intent(context, MainActivity::class.java).apply {
+                    this.action = Intent.ACTION_VIEW
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra("project_id", projectId)
+                }
+                context.startActivity(activityIntent)
             }
         }
     }

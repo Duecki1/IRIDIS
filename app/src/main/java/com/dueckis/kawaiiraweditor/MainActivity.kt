@@ -32,14 +32,12 @@ import com.dueckis.kawaiiraweditor.ui.startup.StartupSplash
 import com.dueckis.kawaiiraweditor.ui.theme.KawaiiRawEditorTheme
 
 class MainActivity : ComponentActivity() {
-    // Simple bridge to pass an incoming project id to the composable app
-    class IntentLaunchBridge(var pendingProjectToOpen: String? = null)
 
-    private val launchBridge = IntentLaunchBridge()
+    private val pendingProjectToOpenState = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Extract project_id from launch intent if present
-        intent?.getStringExtra("project_id")?.let { launchBridge.pendingProjectToOpen = it }
+        intent?.getStringExtra("project_id")?.let { pendingProjectToOpenState.value = it }
 
         setTheme(R.style.Theme_KawaiiRawEditor)
         super.onCreate(savedInstanceState)
@@ -51,6 +49,7 @@ class MainActivity : ComponentActivity() {
                 var updateInfo by remember { mutableStateOf<StartupUpdateInfo?>(null) }
                 var didCheckForUpdates by remember { mutableStateOf(false) }
                 val currentVersionName = remember(context) { getInstalledVersionName(context) }
+                val pendingProjectToOpen by pendingProjectToOpenState
 
                 LaunchedEffect(showStartupSplash) {
                     if (showStartupSplash) return@LaunchedEffect
@@ -65,7 +64,10 @@ class MainActivity : ComponentActivity() {
 
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        KawaiiApp(launchBridge = launchBridge)
+                        KawaiiApp(
+                            pendingProjectToOpen = pendingProjectToOpen,
+                            onProjectOpened = { pendingProjectToOpenState.value = null }
+                        )
                         if (showStartupSplash) {
                             StartupSplash(onFinished = { showStartupSplash = false })
                         }
@@ -101,7 +103,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
-        // If the activity is already running and receives a widget click, pass the project id into the bridge
-        intent?.getStringExtra("project_id")?.let { launchBridge.pendingProjectToOpen = it }
+        // If the activity is already running and receives a widget click, update the state
+        intent?.getStringExtra("project_id")?.let { pendingProjectToOpenState.value = it }
     }
 }

@@ -62,7 +62,10 @@ import java.util.concurrent.Executors
 
 @SuppressLint("UnusedBoxWithConstraintsScope")
 @Composable
-fun KawaiiApp(launchBridge: MainActivity.IntentLaunchBridge? = null) {
+fun KawaiiApp(
+    pendingProjectToOpen: String? = null,
+    onProjectOpened: () -> Unit = {}
+) {
     val context = LocalContext.current
     val storage = remember { ProjectStorage(context) }
     val appPreferences = remember(context) { AppPreferences(context) }
@@ -209,6 +212,20 @@ fun KawaiiApp(launchBridge: MainActivity.IntentLaunchBridge? = null) {
         }
     }
 
+    // This LaunchedEffect monitors the pendingProjectToOpen.
+    // When a new project ID is set (e.g., from a widget click), it triggers navigation to the editor.
+    LaunchedEffect(pendingProjectToOpen, galleryItems) {
+        if (pendingProjectToOpen != null && galleryItems.isNotEmpty()) {
+            val target = galleryItems.firstOrNull { it.projectId == pendingProjectToOpen }
+            if (target != null) {
+                selectedItem = target
+                currentScreen = Screen.Editor
+                editorDismissProgress.snapTo(0f)
+                onProjectOpened()
+            }
+        }
+    }
+
     LaunchedEffect(refreshTrigger) {
         val projects = withContext(Dispatchers.IO) { storage.getAllProjects() }
         galleryItems = withContext(Dispatchers.IO) {
@@ -225,17 +242,6 @@ fun KawaiiApp(launchBridge: MainActivity.IntentLaunchBridge? = null) {
                     tags = metadata.tags ?: emptyList(),
                     rawMetadata = metadata.rawMetadata ?: emptyMap()
                 )
-            }
-        }
-
-        // If the activity was launched with a pending project id (from widget click), open it in the editor
-        launchBridge?.pendingProjectToOpen?.let { pid ->
-            val target = galleryItems.firstOrNull { it.projectId == pid }
-            if (target != null) {
-                selectedItem = target
-                currentScreen = Screen.Editor
-                // Clear pending so we don't reopen on config change
-                launchBridge.pendingProjectToOpen = null
             }
         }
 
