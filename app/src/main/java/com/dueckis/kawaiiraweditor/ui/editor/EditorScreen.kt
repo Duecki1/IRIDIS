@@ -20,6 +20,8 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,9 +47,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FloatingToolbarDefaults
 import androidx.compose.material3.HorizontalFloatingToolbar
@@ -83,7 +87,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
@@ -145,7 +148,9 @@ import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-@OptIn(kotlinx.coroutines.FlowPreview::class, ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(kotlinx.coroutines.FlowPreview::class, ExperimentalMaterial3ExpressiveApi::class,
+    ExperimentalMaterial3Api::class
+)
 @Composable
 internal fun EditorScreen(
     galleryItem: GalleryItem?,
@@ -773,7 +778,7 @@ internal fun EditorScreen(
         var waited = 0
         while (waited < 2500) {
             if (lastOriginalPreviewStamp.get() > stampBefore) break
-            kotlinx.coroutines.delay(20)
+            delay(20)
             waited += 20
         }
         return originalBitmap
@@ -1780,7 +1785,7 @@ internal fun EditorScreen(
                             Spacer(modifier = Modifier.height(56.dp))
 
                             Column(
-                                modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(scrollState).padding(horizontal = 16.dp, vertical = 16.dp),
+                                modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 16.dp),
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 EditorControlsContent(
@@ -1876,16 +1881,16 @@ internal fun EditorScreen(
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(
-                                enabled = canUndo && sessionHandle != 0L,
-                                onClick = { undo() },
+                                enabled = canUndo,
+                                onClick = ::undo,
                                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo", tint = Color.White)
                             }
                             Spacer(modifier = Modifier.width(8.dp))
                             IconButton(
-                                enabled = canRedo && sessionHandle != 0L,
-                                onClick = { redo() },
+                                enabled = canRedo,
+                                onClick = ::redo,
                                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo", tint = Color.White)
@@ -1932,7 +1937,9 @@ internal fun EditorScreen(
                                                 statusMessage = null
                                             }
                                         },
-                                        modifier = Modifier.matchParentSize().alpha(0f)
+                                        modifier = Modifier
+                                            .matchParentSize()
+                                            .alpha(0f)
                                     )
                                 }
                             }
@@ -1943,7 +1950,10 @@ internal fun EditorScreen(
                     Column(modifier = Modifier.fillMaxSize()) {
                         // TOP BAR
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp).windowInsetsPadding(WindowInsets.statusBars),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 8.dp)
+                                .windowInsetsPadding(WindowInsets.statusBars),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             IconButton(onClick = onBackClick, colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))) {
@@ -1963,22 +1973,6 @@ internal fun EditorScreen(
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 IconButton(
-                                    enabled = canUndo && sessionHandle != 0L,
-                                    onClick = { undo() },
-                                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
-                                ) {
-                                    Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo", tint = Color.White)
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                IconButton(
-                                    enabled = canRedo && sessionHandle != 0L,
-                                    onClick = { redo() },
-                                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
-                                ) {
-                                    Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo", tint = Color.White)
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                IconButton(
                                     enabled = sessionHandle != 0L,
                                     onClick = { showMetadataDialog = true },
                                     colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
@@ -1989,74 +1983,144 @@ internal fun EditorScreen(
                         }
 
                         // MAIN CONTENT AREA (Preview + Controls + Overlay FAB)
-                        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                        Box(modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)) {
                             Column(modifier = Modifier.fillMaxSize()) {
                                 // 1. Preview Area
-                                Box(modifier = Modifier.weight(1f).background(Color.Black)) {
-                                    ImagePreview(
-                                        bitmap = displayBitmap,
-                                        isLoading = isLoading || isGeneratingAiMask,
-                                        viewportBitmap = if (isComparingOriginal || isCropMode) null else editedViewportBitmap,
-                                        viewportRoi = if (isComparingOriginal || isCropMode) null else editedViewportRoi,
-                                        onViewportRoiChange = onPreviewViewportRoiChange,
-                                        maskOverlay = selectedMaskForOverlay,
-                                        activeSubMask = selectedSubMaskForEdit,
-                                        isMaskMode = isMaskMode && !isComparingOriginal,
-                                        showMaskOverlay = showMaskOverlay && !isComparingOriginal,
-                                        maskOverlayBlinkKey = maskOverlayBlinkKey,
-                                        maskOverlayBlinkSubMaskId = maskOverlayBlinkSubMaskId,
-                                        isPainting = isInteractiveMaskingEnabled && !isComparingOriginal,
-                                        brushSize = brushSize,
-                                        maskTapMode = if (isComparingOriginal) MaskTapMode.None else maskTapMode,
-                                        onMaskTap = if (isComparingOriginal) null else onMaskTap,
-                                        requestBeforePreview = { requestIdentityPreview() },
-                                        onBrushStrokeFinished = onBrushStrokeFinished,
-                                        onLassoFinished = onLassoFinished,
-                                        onSubMaskHandleDrag = onSubMaskHandleDrag,
-                                        onSubMaskHandleDragStateChange = { isDraggingMaskHandle = it },
-                                        onRequestAiSubjectOverride = {
-                                            val maskId = selectedMaskId
-                                            val subId = selectedSubMaskId
-                                            if (maskId != null && subId != null) {
-                                                aiSubjectOverrideTarget = maskId to subId
-                                                showAiSubjectOverrideDialog = true
+                                Box(modifier = Modifier
+                                    .weight(1f)
+                                    .background(Color.Black)) {
+                                    Box {
+                                        ImagePreview(
+                                            bitmap = if (isComparingOriginal) originalBitmap ?: displayBitmap else displayBitmap,
+                                            isLoading = isLoading || isGeneratingAiMask,
+                                            viewportBitmap = if (isComparingOriginal || isCropMode) null else editedViewportBitmap,
+                                            viewportRoi = if (isComparingOriginal || isCropMode) null else editedViewportRoi,
+                                            onViewportRoiChange = onPreviewViewportRoiChange,
+                                            maskOverlay = selectedMaskForOverlay,
+                                            activeSubMask = selectedSubMaskForEdit,
+                                            isMaskMode = isMaskMode && !isComparingOriginal,
+                                            showMaskOverlay = showMaskOverlay && !isComparingOriginal,
+                                            maskOverlayBlinkKey = maskOverlayBlinkKey,
+                                            maskOverlayBlinkSubMaskId = maskOverlayBlinkSubMaskId,
+                                            isPainting = isInteractiveMaskingEnabled && !isComparingOriginal,
+                                            brushSize = brushSize,
+                                            maskTapMode = if (isComparingOriginal) MaskTapMode.None else maskTapMode,
+                                            onMaskTap = if (isComparingOriginal) null else onMaskTap,
+                                            requestBeforePreview = { requestIdentityPreview() },
+                                            onBrushStrokeFinished = onBrushStrokeFinished,
+                                            onLassoFinished = onLassoFinished,
+                                            onSubMaskHandleDrag = onSubMaskHandleDrag,
+                                            onSubMaskHandleDragStateChange = { isDraggingMaskHandle = it },
+                                            onRequestAiSubjectOverride = {
+                                                val maskId = selectedMaskId
+                                                val subId = selectedSubMaskId
+                                                if (maskId != null && subId != null) {
+                                                    aiSubjectOverrideTarget = maskId to subId
+                                                    showAiSubjectOverrideDialog = true
+                                                }
+                                            },
+                                            isCropMode = isCropMode && !isComparingOriginal,
+                                            cropState = if (isCropMode && !isComparingOriginal) (cropDraft ?: adjustments.crop) else null,
+                                            cropAspectRatio = cropAspectRatio,
+                                            extraRotationDegrees = previewRotationDelta,
+                                            isStraightenActive = isCropMode && isStraightenActive && !isComparingOriginal,
+                                            onStraightenResult = { rotation ->
+                                                beginEditInteraction()
+                                                val baseRatio =
+                                                    (cropBaseWidthPx?.toFloat()?.coerceAtLeast(1f) ?: 1f) /
+                                                            (cropBaseHeightPx?.toFloat()?.coerceAtLeast(1f) ?: 1f)
+                                                val autoCrop =
+                                                    computeMaxCropNormalized(AutoCropParams(baseAspectRatio = baseRatio, rotationDegrees = rotation, aspectRatio = adjustments.aspectRatio))
+                                                cropDraft = autoCrop
+                                                rotationDraft = null
+                                                isStraightenActive = false
+                                                applyAdjustmentsPreservingMasks(adjustments.copy(rotation = rotation, crop = autoCrop))
+                                                endEditInteraction()
+                                            },
+                                            onCropDraftChange = { cropDraft = it },
+                                            onCropInteractionStart = {
+                                                isCropGestureActive = true
+                                                beginEditInteraction()
+                                            },
+                                            onCropInteractionEnd = { crop ->
+                                                isCropGestureActive = false
+                                                cropDraft = crop
+                                                applyAdjustmentsPreservingMasks(adjustments.copy(crop = crop))
+                                                endEditInteraction()
                                             }
-                                        },
-                                        isCropMode = isCropMode && !isComparingOriginal,
-                                        cropState = if (isCropMode && !isComparingOriginal) (cropDraft ?: adjustments.crop) else null,
-                                        cropAspectRatio = cropAspectRatio,
-                                        extraRotationDegrees = previewRotationDelta,
-                                        isStraightenActive = isCropMode && isStraightenActive && !isComparingOriginal,
-                                        onStraightenResult = { rotation ->
-                                            beginEditInteraction()
-                                            val baseRatio =
-                                                (cropBaseWidthPx?.toFloat()?.coerceAtLeast(1f) ?: 1f) /
-                                                        (cropBaseHeightPx?.toFloat()?.coerceAtLeast(1f) ?: 1f)
-                                            val autoCrop =
-                                                computeMaxCropNormalized(AutoCropParams(baseAspectRatio = baseRatio, rotationDegrees = rotation, aspectRatio = adjustments.aspectRatio))
-                                            cropDraft = autoCrop
-                                            rotationDraft = null
-                                            isStraightenActive = false
-                                            applyAdjustmentsPreservingMasks(adjustments.copy(rotation = rotation, crop = autoCrop))
-                                            endEditInteraction()
-                                        },
-                                        onCropDraftChange = { cropDraft = it },
-                                        onCropInteractionStart = {
-                                            isCropGestureActive = true
-                                            beginEditInteraction()
-                                        },
-                                        onCropInteractionEnd = { crop ->
-                                            isCropGestureActive = false
-                                            cropDraft = crop
-                                            applyAdjustmentsPreservingMasks(adjustments.copy(crop = crop))
-                                            endEditInteraction()
+                                        )
+
+                                        // Overlay Controls - Bottom Left (Undo/Redo)
+                                        Row(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomStart)
+                                                .padding(16.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(1.dp)
+                                        ) {
+                                            // Undo Button (Left half of pill)
+                                            IconButton(
+                                                onClick = ::undo,
+                                                enabled = canUndo,
+                                                modifier = Modifier
+                                                    .background(
+                                                        Color.Black.copy(alpha = 0.6f),
+                                                        RoundedCornerShape(topStart = 50.dp, bottomStart = 50.dp, topEnd = 0.dp, bottomEnd = 0.dp)
+                                                    ),
+                                                colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White, disabledContentColor = Color.White.copy(alpha = 0.38f))
+                                            ) {
+                                                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo")
+                                            }
+                                            // Redo Button (Right half of pill)
+                                            IconButton(
+                                                onClick = ::redo,
+                                                enabled = canRedo,
+                                                modifier = Modifier
+                                                    .background(
+                                                        Color.Black.copy(alpha = 0.6f),
+                                                        RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp, topEnd = 50.dp, bottomEnd = 50.dp)
+                                                    ),
+                                                colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White, disabledContentColor = Color.White.copy(alpha = 0.38f))
+                                            ) {
+                                                Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo")
+                                            }
                                         }
-                                    )
+
+                                        // Overlay Controls - Bottom Right (Compare)
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(16.dp)
+                                        ) {
+                                            val interactionSource = remember { MutableInteractionSource() }
+                                            val isPressed by interactionSource.collectIsPressedAsState()
+
+                                            LaunchedEffect(isPressed) {
+                                                isComparingOriginal = isPressed
+                                                if (isPressed && originalBitmap == null) {
+                                                    originalBitmap = requestIdentityPreview()
+                                                }
+                                            }
+
+                                            IconButton(
+                                                onClick = { /* handled by interactionSource */ },
+                                                interactionSource = interactionSource,
+                                                modifier = Modifier
+                                                    .background(Color.Black.copy(alpha = 0.6f), CircleShape),
+                                                colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
+                                            ) {
+                                                Icon(Icons.Filled.CompareArrows, contentDescription = "Compare")
+                                            }
+                                        }
+                                    }
                                 }
 
                                 // 2. Controls Sheet (Sits at bottom of Column)
                                 Surface(
-                                    modifier = Modifier.fillMaxWidth().height(360.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(360.dp),
                                     color = MaterialTheme.colorScheme.surface,
                                     tonalElevation = 3.dp,
                                     shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
@@ -2196,7 +2260,7 @@ internal fun EditorScreen(
                                             )
                                         }
                                     },
-                                    // Set the toolbar background to transparent so only icons float above content
+                                    // Use customColors directly to keep the Dark Grey Pill background
                                     colors = customColors,
                                     content = {
                                         // Navigation Icons
