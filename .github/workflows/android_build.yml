@@ -12,10 +12,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code (Let me in!)
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17 (Almost 18)
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
@@ -28,19 +28,19 @@ jobs:
           echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;27.0.12077973"
 
       # 2. Install Rust and the Android targets
-      - name: Set up Rust Toolchain (restrain me uwu)
+      - name: Set up Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
-      - name: Grant execute permission for gradlew (Can i p..pleawse?)
+      - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build with Gradle (Stone by Stone)
+      - name: Build with Gradle
         # Using assembleDebug to avoid signing issues for now
         run: ./gradlew assembleDebug --stacktrace
 
-      - name: Upload APK (Here is your APK!)
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
