@@ -7,6 +7,7 @@ import android.net.Uri
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -14,8 +15,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.BuildConfig
 
 @Composable
@@ -35,6 +36,7 @@ internal fun AboutDialog(onDismissRequest: () -> Unit) {
                 Text(
                     "Android app by Duecki1 using image processing from RapidRaw by CyberTimon.\n\nIRIDIS is an open-source RAW photo editor for Android, leveraging the RapidRaw engine for fast and high-quality image processing."
                 )
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     "Version: $versionName",
                     style = MaterialTheme.typography.bodySmall,

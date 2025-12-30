@@ -11,60 +11,70 @@ import android.graphics.Bitmap
 import android.os.Build
 import android.os.SystemClock
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomAppBar
+import androidx.compose.material3.DockedSearchBar
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.FloatingToolbarDefaults
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.InputChip
+import androidx.compose.material3.InputChipDefaults
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SearchBar
 import androidx.compose.material3.SearchBarDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -83,12 +93,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.traversalIndex
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -113,9 +123,10 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.Locale
 import java.util.concurrent.Executors
-import kotlin.math.min
 import kotlin.math.exp
+import kotlin.math.min
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun GalleryScreen(
     items: List<GalleryItem>,
@@ -137,6 +148,7 @@ internal fun GalleryScreen(
     onRequestRefresh: () -> Unit
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val storage = remember { ProjectStorage(context) }
     val coroutineScope = rememberCoroutineScope()
     val configuration = LocalConfiguration.current
@@ -443,89 +455,162 @@ internal fun GalleryScreen(
         bulkExportStatus = null
     }
 
-    val suggestionResults = remember(items, queryLower) {
-        val base = if (queryLower.isBlank()) items else items.filter(::matchesQuery)
-        base.take(10)
+    val topTags = remember(items) {
+        items.flatMap { it.tags }
+            .groupingBy { it }
+            .eachCount()
+            .entries
+            .sortedByDescending { it.value }
+            .take(5)
+            .map { it.key }
     }
-    var searchExpanded by rememberSaveable { mutableStateOf(false) }
+    var searchActive by rememberSaveable { mutableStateOf(false) }
+    var isExecutingSearch by remember { mutableStateOf(false) }
+
+    LaunchedEffect(searchActive) {
+        if (!searchActive) {
+            if (isExecutingSearch) {
+                isExecutingSearch = false // Reset flag, but don't clear text
+            } else {
+                queryText = "" // User cancelled, so clear text
+            }
+            focusManager.clearFocus()
+        }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
             Column {
                 Surface(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .windowInsetsPadding(TopAppBarDefaults.windowInsets),
+                    modifier = Modifier.fillMaxWidth(),
                     color = MaterialTheme.colorScheme.surface
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        modifier = Modifier
+                            .windowInsetsPadding(TopAppBarDefaults.windowInsets)
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier =
-                                Modifier
-                                    .weight(1f)
-                                    .semantics { isTraversalGroup = true }
-                        ) {
-                            SearchBar(
-                                modifier =
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .semantics { traversalIndex = 0f },
-                                inputField = {
-                                    SearchBarDefaults.InputField(
-                                        query = queryText,
-                                        onQueryChange = { queryText = it },
-                                        onSearch = { searchExpanded = false },
-                                        expanded = searchExpanded,
-                                        onExpandedChange = { searchExpanded = it },
-                                        placeholder = { Text("Search RAWs") },
-                                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
-                                        trailingIcon = {
-                                            if (queryText.isNotBlank()) {
-                                                IconButton(onClick = { queryText = "" }) {
-                                                    Icon(Icons.Default.Close, contentDescription = "Clear")
-                                                }
+                        DockedSearchBar(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics { traversalIndex = 0f },
+                            inputField = {
+                                SearchBarDefaults.InputField(
+                                    query = queryText,
+                                    onQueryChange = { queryText = it },
+                                    onSearch = {
+                                        isExecutingSearch = true
+                                        searchActive = false
+                                    },
+                                    expanded = searchActive,
+                                    onExpandedChange = { searchActive = it },
+                                    placeholder = { Text("Search RAWs") },
+                                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                                    trailingIcon = {
+                                        if (queryText.isNotBlank()) {
+                                            IconButton(onClick = { queryText = "" }) {
+                                                Icon(Icons.Default.Close, contentDescription = "Clear")
                                             }
                                         }
+                                    }
+                                )
+                            },
+                            expanded = searchActive,
+                            onExpandedChange = { searchActive = it }
+                        ) {
+                            val showPopularTags = queryText.isBlank() && topTags.isNotEmpty()
+                            val showSearchResults = queryText.isNotBlank()
+
+                            if (showPopularTags) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 8.dp) // Adjusted padding
+                                ) {
+                                    Text(
+                                        text = "Popular tags",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp)
                                     )
-                                },
-                                expanded = searchExpanded,
-                                onExpandedChange = { searchExpanded = it }
-                            ) {
+                                    LazyRow(
+                                        contentPadding = PaddingValues(horizontal = 16.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        items(topTags) { tag ->
+                                            InputChip(
+                                                selected = false,
+                                                onClick = {
+                                                    queryText = tag
+                                                    isExecutingSearch = true
+                                                    searchActive = false
+                                                },
+                                                label = { Text(tag) },
+                                                colors = InputChipDefaults.inputChipColors(
+                                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                            } else if (showSearchResults) {
+                                val matches = remember(queryLower, items) {
+                                    items.filter(::matchesQuery).take(10)
+                                }
                                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                                    suggestionResults.forEach { item ->
-                                        ListItem(
-                                            headlineContent = { Text(item.fileName) },
-                                            supportingContent = {
-                                                if (item.tags.isNotEmpty()) {
-                                                    Text(
-                                                        item.tags.take(4).joinToString(", "),
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis
-                                                    )
-                                                }
-                                            },
-                                            modifier =
-                                                Modifier
+                                    if (matches.isNotEmpty()) {
+                                        matches.forEach { item ->
+                                            ListItem(
+                                                headlineContent = { Text(item.fileName) },
+                                                supportingContent = {
+                                                    if (item.tags.isNotEmpty()) {
+                                                        Text(
+                                                            item.tags.take(4).joinToString(", "),
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                    }
+                                                },
+                                                modifier = Modifier
                                                     .fillMaxWidth()
                                                     .clickable {
                                                         queryText = item.fileName
-                                                        searchExpanded = false
+                                                        isExecutingSearch = true
+                                                        searchActive = false
                                                     }
-                                        )
+                                            )
+                                        }
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(16.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                "No matches found",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                     }
                                 }
+                            } else if (searchActive) { // No popular tags and query is blank, but search is active
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        "Start typing to search",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
-                        }
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        IconButton(onClick = onOpenSettings) {
-                            Icon(Icons.Default.Settings, contentDescription = "Settings")
                         }
                     }
                 }
@@ -538,15 +623,29 @@ internal fun GalleryScreen(
                 }
             }
         },
-        floatingActionButton = {
-            if (selectedIds.isEmpty() && !isBulkExporting) {
-                FloatingActionButton(
-                    onClick = { pickRaw.launch(mimeTypes) },
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "Add RAW file")
-                }
+        bottomBar = {
+            AnimatedVisibility(
+                visible = selectedIds.isEmpty(),
+                enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
+                exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom)
+            ) {
+                BottomAppBar(
+                    actions = {
+                        IconButton(onClick = onOpenSettings) {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        }
+                    },
+                    floatingActionButton = {
+                        FloatingActionButton(
+                            onClick = { pickRaw.launch(mimeTypes) },
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            elevation = FloatingActionButtonDefaults.bottomAppBarFabElevation()
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = "Add RAW file")
+                        }
+                    }
+                )
             }
         }
     ) { padding ->
@@ -555,7 +654,7 @@ internal fun GalleryScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            val gridBottomPadding = if (selectedIds.isNotEmpty()) 176.dp else 16.dp
+            val gridBottomPadding = if (selectedIds.isNotEmpty()) 128.dp else 88.dp
 
             Column(modifier = Modifier.fillMaxSize()) {
                 if (items.isEmpty()) {
@@ -621,13 +720,19 @@ internal fun GalleryScreen(
                 }
             }
 
-            if (selectedIds.isNotEmpty()) {
+            // Multi-selection Floating Toolbar (now wrapped in AnimatedVisibility)
+            AnimatedVisibility(
+                visible = selectedIds.isNotEmpty(),
+                enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
+                exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter) // Align the whole animated block to bottom center
+            ) {
                 Column(
-                    modifier =
-                        Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 24.dp)
-                            .padding(horizontal = 16.dp),
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp) // Horizontal padding for the column content
+                        .padding(bottom = 16.dp) // Consistent spacing from the bottom edge
+                        .windowInsetsPadding(WindowInsets.navigationBars), // Respect system navigation bars
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
