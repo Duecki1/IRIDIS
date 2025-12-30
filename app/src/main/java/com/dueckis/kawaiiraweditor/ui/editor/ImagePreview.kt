@@ -7,13 +7,13 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
+ 
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.gestures.drag
+ 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -140,7 +140,57 @@ internal fun ImagePreview(
         modifier =
             Modifier
                 .fillMaxSize()
-                .clipToBounds(),
+                .clipToBounds()
+                .let { base ->
+                    if (!isMaskMode && !isCropMode) base
+                    else
+                        base.pointerInput(bitmap) {
+                            awaitEachGesture {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val pressed = event.changes.filter { it.pressed }
+                                    if (pressed.isEmpty()) break
+
+                                    if (pressed.any { it.type == PointerType.Stylus }) continue
+
+                                    val touchCount = pressed.count { it.type == PointerType.Touch }
+                                    if (touchCount < 2) continue
+
+                                    val touches = pressed.filter { it.type == PointerType.Touch }
+                                    val a = touches[0]
+                                    val b = touches[1]
+
+                                    val prevCentroid =
+                                        Offset(
+                                            (a.previousPosition.x + b.previousPosition.x) / 2f,
+                                            (a.previousPosition.y + b.previousPosition.y) / 2f
+                                        )
+                                    val currCentroid =
+                                        Offset(
+                                            (a.position.x + b.position.x) / 2f,
+                                            (a.position.y + b.position.y) / 2f
+                                        )
+                                    val pan = currCentroid - prevCentroid
+
+                                    val prevDx = a.previousPosition.x - b.previousPosition.x
+                                    val prevDy = a.previousPosition.y - b.previousPosition.y
+                                    val currDx = a.position.x - b.position.x
+                                    val currDy = a.position.y - b.position.y
+                                    val prevDist =
+                                        kotlin.math.sqrt(prevDx * prevDx + prevDy * prevDy).coerceAtLeast(0.0001f)
+                                    val currDist =
+                                        kotlin.math.sqrt(currDx * currDx + currDy * currDy).coerceAtLeast(0.0001f)
+                                    val zoom = currDist / prevDist
+
+                                    scale = (scale * zoom).coerceIn(0.5f, 5f)
+                                    offsetX += pan.x
+                                    offsetY += pan.y
+
+                                    event.changes.forEach { it.consume() }
+                                }
+                            }
+                        }
+                },
         contentAlignment = Alignment.Center
     ) {
         val containerW = with(density) { maxWidth.toPx() }
@@ -216,46 +266,14 @@ internal fun ImagePreview(
                 Modifier
                     .fillMaxSize()
                     .let { base ->
-                        if (isMaskMode || isCropMode) base
+                        if (isMaskMode || isCropMode)
+                            base
                         else
-                            base.pointerInput(bitmap) {
-                                awaitEachGesture {
-                                    val down = awaitFirstDown()
-                                    // if stylus, ignore
-                                    if (down.type == PointerType.Stylus) return@awaitEachGesture
-
-                                    // wait for additional pointers to enable transform
-                                    var transform = false
-                                    var pointers = listOf(down)
-                                    while (true) {
-                                        val event = awaitPointerEvent()
-                                        val pressed = event.changes.filter { it.pressed }
-                                        if (pressed.size >= 2) {
-                                            transform = true
-                                            val touches = pressed.filter { it.type == PointerType.Touch }
-                                            if (touches.size >= 2) {
-                                                val a = touches[0]
-                                                val b = touches[1]
-                                                val prevCentroid = Offset((a.previousPosition.x + b.previousPosition.x) / 2f, (a.previousPosition.y + b.previousPosition.y) / 2f)
-                                                val currCentroid = Offset((a.position.x + b.position.x) / 2f, (a.position.y + b.position.y) / 2f)
-                                                val pan = currCentroid - prevCentroid
-                                                val prevDx = a.previousPosition.x - b.previousPosition.x
-                                                val prevDy = a.previousPosition.y - b.previousPosition.y
-                                                val currDx = a.position.x - b.position.x
-                                                val currDy = a.position.y - b.position.y
-                                                val prevDist = kotlin.math.sqrt(prevDx * prevDx + prevDy * prevDy).coerceAtLeast(0.0001f)
-                                                val currDist = kotlin.math.sqrt(currDx * currDx + currDy * currDy).coerceAtLeast(0.0001f)
-                                                val zoom = currDist / prevDist
-                                                scale = (scale * zoom).coerceIn(0.5f, 5f)
-                                                offsetX += pan.x
-                                                offsetY += pan.y
-                                                event.changes.forEach { if (transform) it.consume() }
-                                            }
-                                        } else {
-                                            // no transform; allow taps to pass through
-                                            if (pressed.isEmpty()) break
-                                        }
-                                    }
+                            base.pointerInput(Unit) {
+                                detectTransformGestures { _, pan, zoom, _ ->
+                                    scale = (scale * zoom).coerceIn(0.5f, 5f)
+                                    offsetX += pan.x
+                                    offsetY += pan.y
                                 }
                             }
                     }
