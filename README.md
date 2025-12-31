@@ -67,6 +67,7 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Mask preview needs improvement
 - Subject masks should be stored
 - Save calculated AI Masks
+- Option to open raw files on import
 
 ## Info
 Downloading the app will automatically install a Subject selection ML Model.
