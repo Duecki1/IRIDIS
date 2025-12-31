@@ -40,17 +40,16 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 
 ## Features (current)
 
-- Import RAW files via Android’s document picker (SAF).
+- Import RAW files via Android’s document picker.
 - Gallery with thumbnails, multi-select, bulk export, and star ratings.
 - Editor with fast preview rendering (super-low → low → full).
 - Adjustments: brightness, contrast, highlights/shadows, whites/blacks, saturation, temperature/tint, vibrance, etc.
-- Curves (Luma/R/G/B) + histogram overlay.
+- Curves (Luma/R/G/B)
 - Color grading (shadows/midtones/highlights) + blending/balance.
 - Effects: vignette.
-- Masks: brush, linear gradient, radial, and AI subject mask (lasso-assisted).
+- Masks: brush, linear gradient, radial,AI environment (optional), and AI subject mask (lasso-assisted)
 - S-Pen support for brush masks (line width depending on pressure)
 - Choose export file format and resolution 
-- Automatic masks for part of landscapes (like architecture or sky)
 - Button to switch between unedited and edited preview
 - Widget showing all edits
 - Tab for cropping and rotating the image (Buggy with masks)
