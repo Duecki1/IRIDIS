@@ -53,7 +53,8 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Button to switch between unedited and edited preview
 - Widget showing all edits
 - Tab for cropping and rotating the image (Buggy with masks)
-
+- Tag system for mask names
+- 
 ## Planned/Issues:
 
 - Clarity and such slider need to actually work
@@ -63,7 +64,6 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Be able to reorder subtract and add masks
 - UI needs to be improved for masking. (And more)
 - Fix overlapping Add and subtract submasks generate hard cut
-- Tag system for mask names
 - Mask preview needs improvement
 - Subject masks should be stored
 - Save calculated AI Masks
