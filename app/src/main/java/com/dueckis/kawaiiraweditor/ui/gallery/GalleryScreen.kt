@@ -6,9 +6,13 @@
 package com.dueckis.kawaiiraweditor.ui.gallery
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Build
+import android.os.Parcelable
 import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -34,14 +38,13 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -96,7 +99,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.ui.text.font.FontWeight
@@ -154,6 +156,142 @@ internal fun GalleryScreen(
     val configuration = LocalConfiguration.current
     val screenWidthDp = configuration.screenWidthDp
 
+    val notificationPermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    fun maybeRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33) return
+        val granted =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                    PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // --- 1. REUSABLE IMPORT LOGIC ---
+    suspend fun importUri(uri: Uri) {
+        val bytes = withContext(Dispatchers.IO) {
+            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        }
+        if (bytes != null) {
+            val name = displayNameForUri(context, uri)
+            val projectId = withContext(Dispatchers.IO) {
+                storage.importRawFile(name, bytes)
+            }
+            val item = GalleryItem(
+                projectId = projectId,
+                fileName = name,
+                thumbnail = null,
+                tags = emptyList(),
+                rawMetadata = emptyMap()
+            )
+            onAddClick(item)
+
+            // Start background processing (thumbnails, tagging, metadata)
+            coroutineScope.launch {
+                val previewBytes = withContext(Dispatchers.Default) {
+                    runCatching { decodePreviewBytesForTagging(bytes, lowQualityPreviewEnabled) }.getOrNull()
+                }
+                val previewBitmap = previewBytes?.decodeToBitmap() ?: return@launch
+
+                val maxSize = 1024
+                val scale = min(maxSize.toFloat() / previewBitmap.width, maxSize.toFloat() / previewBitmap.height)
+                val scaledWidth = (previewBitmap.width * scale).toInt().coerceAtLeast(1)
+                val scaledHeight = (previewBitmap.height * scale).toInt().coerceAtLeast(1)
+                val thumbnail =
+                    if (previewBitmap.width == scaledWidth && previewBitmap.height == scaledHeight) previewBitmap
+                    else Bitmap.createScaledBitmap(previewBitmap, scaledWidth, scaledHeight, true)
+
+                withContext(Dispatchers.IO) {
+                    val outputStream = ByteArrayOutputStream()
+                    thumbnail.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                    storage.saveThumbnail(projectId, outputStream.toByteArray())
+                }
+                onThumbnailReady(projectId, thumbnail)
+                if (thumbnail != previewBitmap) previewBitmap.recycle()
+
+                if (automaticTaggingEnabled) {
+                    maybeRequestNotificationPermission()
+                    onTaggingInFlightChange(projectId, true)
+                    try {
+                        val tags = withContext(Dispatchers.Default) {
+                            runCatching {
+                                tagger.generateTags(thumbnail, onProgress = { p -> onTagProgressChange(projectId, p) })
+                            }.getOrDefault(emptyList())
+                        }
+                        withContext(Dispatchers.IO) { storage.setTags(projectId, tags) }
+                        onTagsChanged(projectId, tags)
+                    } finally {
+                        onTaggingInFlightChange(projectId, false)
+                    }
+                }
+            }
+
+            if (automaticTaggingEnabled) {
+                coroutineScope.launch {
+                    val meta = withContext(Dispatchers.Default) {
+                        runCatching {
+                            val handle = LibRawDecoder.createSession(bytes)
+                            if (handle == 0L) return@runCatching emptyMap<String, String>()
+                            try {
+                                val json = LibRawDecoder.getMetadataJsonFromSession(handle)
+                                parseRawMetadataForSearch(json)
+                            } finally {
+                                LibRawDecoder.releaseSession(handle)
+                            }
+                        }.getOrDefault(emptyMap())
+                    }
+                    if (meta.isNotEmpty()) {
+                        withContext(Dispatchers.IO) { storage.setRawMetadata(projectId, meta) }
+                        onMetadataChanged(projectId, meta)
+                    }
+                }
+            }
+        }
+    }
+
+    // --- 2. HANDLE INTENTS (Open With / Share) ---
+    val activity = context as? Activity
+    val intent = activity?.intent
+
+    LaunchedEffect(intent) {
+        if (intent == null) return@LaunchedEffect
+
+        val action = intent.action
+        val type = intent.type
+        val urisToImport = mutableListOf<Uri>()
+
+        // Case A: "Open with" (Single file via Data)
+        if (Intent.ACTION_VIEW == action && intent.data != null) {
+            urisToImport.add(intent.data!!)
+        }
+        // Case B: "Share" (Single image)
+        else if (Intent.ACTION_SEND == action && type?.startsWith("image/") == true) {
+            @Suppress("DEPRECATION")
+            (intent.getParcelableExtra<Parcelable>(Intent.EXTRA_STREAM) as? Uri)?.let {
+                urisToImport.add(it)
+            }
+        }
+        // Case C: "Share Multiple"
+        else if (Intent.ACTION_SEND_MULTIPLE == action && type?.startsWith("image/") == true) {
+            @Suppress("DEPRECATION")
+            intent.getParcelableArrayListExtra<Parcelable>(Intent.EXTRA_STREAM)?.let { list ->
+                list.filterIsInstance<Uri>().forEach { urisToImport.add(it) }
+            }
+        }
+
+        if (urisToImport.isNotEmpty()) {
+            urisToImport.forEach { uri ->
+                importUri(uri)
+            }
+            // Clear the action so we don't re-import on rotation
+            intent.action = null
+            intent.data = null
+        }
+    }
+
+
     val columns = when {
         screenWidthDp >= 900 -> 5
         screenWidthDp >= 600 -> 4
@@ -162,8 +300,6 @@ internal fun GalleryScreen(
     }
 
     val mimeTypes = arrayOf("image/x-sony-arw", "image/*")
-    val notificationPermissionLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     var queryText by rememberSaveable { mutableStateOf("") }
     val queryLower = remember(queryText) { queryText.trim().lowercase(Locale.US) }
@@ -183,96 +319,11 @@ internal fun GalleryScreen(
         if (queryLower.isBlank()) items else items.filter(::matchesQuery)
     }
 
-    fun maybeRequestNotificationPermission() {
-        if (Build.VERSION.SDK_INT < 33) return
-        val granted =
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-                PackageManager.PERMISSION_GRANTED
-        if (!granted) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
-    }
-
+    // --- 3. UPDATED FILE PICKER TO USE SHARED LOGIC ---
     val pickRaw = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         coroutineScope.launch {
-            val bytes = withContext(Dispatchers.IO) {
-                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            }
-            if (bytes != null) {
-                val name = displayNameForUri(context, uri)
-                val projectId = withContext(Dispatchers.IO) {
-                    storage.importRawFile(name, bytes)
-                }
-                val item = GalleryItem(
-                    projectId = projectId,
-                    fileName = name,
-                    thumbnail = null,
-                    tags = emptyList(),
-                    rawMetadata = emptyMap()
-                )
-                onAddClick(item)
-
-                coroutineScope.launch {
-                    val previewBytes = withContext(Dispatchers.Default) {
-                        runCatching { decodePreviewBytesForTagging(bytes, lowQualityPreviewEnabled) }.getOrNull()
-                    }
-                    val previewBitmap = previewBytes?.decodeToBitmap() ?: return@launch
-
-                    val maxSize = 1024
-                    val scale = min(maxSize.toFloat() / previewBitmap.width, maxSize.toFloat() / previewBitmap.height)
-                    val scaledWidth = (previewBitmap.width * scale).toInt().coerceAtLeast(1)
-                    val scaledHeight = (previewBitmap.height * scale).toInt().coerceAtLeast(1)
-                    val thumbnail =
-                        if (previewBitmap.width == scaledWidth && previewBitmap.height == scaledHeight) previewBitmap
-                        else Bitmap.createScaledBitmap(previewBitmap, scaledWidth, scaledHeight, true)
-
-                    withContext(Dispatchers.IO) {
-                        val outputStream = ByteArrayOutputStream()
-                        thumbnail.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                        storage.saveThumbnail(projectId, outputStream.toByteArray())
-                    }
-                    onThumbnailReady(projectId, thumbnail)
-                    if (thumbnail != previewBitmap) previewBitmap.recycle()
-
-                    if (automaticTaggingEnabled) {
-                        maybeRequestNotificationPermission()
-                        onTaggingInFlightChange(projectId, true)
-                        try {
-                            val tags = withContext(Dispatchers.Default) {
-                                runCatching {
-                                    tagger.generateTags(thumbnail, onProgress = { p -> onTagProgressChange(projectId, p) })
-                                }.getOrDefault(emptyList())
-                            }
-                            withContext(Dispatchers.IO) { storage.setTags(projectId, tags) }
-                            onTagsChanged(projectId, tags)
-                        } finally {
-                            onTaggingInFlightChange(projectId, false)
-                        }
-                    }
-                }
-
-                if (automaticTaggingEnabled) {
-                    coroutineScope.launch {
-                        val meta = withContext(Dispatchers.Default) {
-                            runCatching {
-                                val handle = LibRawDecoder.createSession(bytes)
-                                if (handle == 0L) return@runCatching emptyMap<String, String>()
-                                try {
-                                    val json = LibRawDecoder.getMetadataJsonFromSession(handle)
-                                    parseRawMetadataForSearch(json)
-                                } finally {
-                                    LibRawDecoder.releaseSession(handle)
-                                }
-                            }.getOrDefault(emptyMap())
-                        }
-                        if (meta.isNotEmpty()) {
-                            withContext(Dispatchers.IO) { storage.setRawMetadata(projectId, meta) }
-                            onMetadataChanged(projectId, meta)
-                        }
-                    }
-                }
-            }
+            importUri(uri)
         }
     }
 
@@ -527,7 +578,7 @@ internal fun GalleryScreen(
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(bottom = 8.dp) // Adjusted padding
+                                        .padding(bottom = 8.dp)
                                 ) {
                                     Text(
                                         text = "Popular tags",
@@ -539,7 +590,8 @@ internal fun GalleryScreen(
                                         contentPadding = PaddingValues(horizontal = 16.dp),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        items(topTags) { tag ->
+                                        items(topTags.size) { index ->
+                                            val tag = topTags[index]
                                             InputChip(
                                                 selected = false,
                                                 onClick = {
@@ -597,7 +649,7 @@ internal fun GalleryScreen(
                                         }
                                     }
                                 }
-                            } else if (searchActive) { // No popular tags and query is blank, but search is active
+                            } else if (searchActive) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -720,19 +772,19 @@ internal fun GalleryScreen(
                 }
             }
 
-            // Multi-selection Floating Toolbar (now wrapped in AnimatedVisibility)
+            // Multi-selection Floating Toolbar
             AnimatedVisibility(
                 visible = selectedIds.isNotEmpty(),
                 enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
                 exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom),
                 modifier = Modifier
-                    .align(Alignment.BottomCenter) // Align the whole animated block to bottom center
+                    .align(Alignment.BottomCenter)
             ) {
                 Column(
                     modifier = Modifier
-                        .padding(horizontal = 16.dp) // Horizontal padding for the column content
-                        .padding(bottom = 16.dp) // Consistent spacing from the bottom edge
-                        .windowInsetsPadding(WindowInsets.navigationBars), // Respect system navigation bars
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = 16.dp)
+                        .windowInsetsPadding(WindowInsets.navigationBars),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {

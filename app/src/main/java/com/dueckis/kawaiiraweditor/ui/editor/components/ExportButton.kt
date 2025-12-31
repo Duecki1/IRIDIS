@@ -33,7 +33,6 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
 @Composable
 internal fun ExportButton(
     modifier: Modifier = Modifier,
@@ -81,57 +80,70 @@ internal fun ExportButton(
     if (showExportDialog) {
         ExportOptionsDialog(
             initial = lastOptions,
-            onDismissRequest = { showExportDialog = false },
+            isLoading = isExporting, // This should trigger a LoadingIndicator inside your Dialog UI
+            onDismissRequest = {
+                // Prevent dismissing if an export is currently in progress
+                if (!isExporting) {
+                    showExportDialog = false
+                }
+            },
             onConfirm = { options ->
-                showExportDialog = false
+                // 1. Update local state but DO NOT close the dialog yet
                 lastOptions = options
                 if (isExporting || sessionHandle == 0L) return@ExportOptionsDialog
 
                 val currentAdjustments = adjustments
                 val currentMasks = masks
+
+                // 2. Notify parent to set isExporting = true
                 onExportStart()
+
                 coroutineScope.launch {
-                    val currentJson = withContext(Dispatchers.Default) { currentAdjustments.toJson(currentMasks) }
+                    try {
+                        val currentJson = withContext(Dispatchers.Default) {
+                            currentAdjustments.toJson(currentMasks)
+                        }
 
-                    // CALCULATE MAX DIMENSION
-                    // If user requested resize, pass that. Otherwise 0 (Full Res).
-                    val maxDim = options.resizeLongEdgePx ?: 0
+                        val maxDim = options.resizeLongEdgePx ?: 0
 
-                    val fullBytes = withContext(nativeDispatcher) {
-                        runCatching {
-                            LibRawDecoder.exportFromSession(
-                                sessionHandle,
-                                currentJson,
-                                maxDim,
-                                options.lowRamMode
-                            )
-                        }.getOrNull()
-                    }
-                    if (fullBytes == null) {
-                        onExportComplete(false, "Export failed (Out of Memory). Try enabling Low RAM Mode.")
-                        return@launch
-                    }
+                        val fullBytes = withContext(nativeDispatcher) {
+                            runCatching {
+                                LibRawDecoder.exportFromSession(
+                                    sessionHandle,
+                                    currentJson,
+                                    maxDim,
+                                    options.lowRamMode
+                                )
+                            }.getOrNull()
+                        }
 
-                    val savedUri =
-                        withContext(Dispatchers.IO) {
-                            // Bytes are already resized/processed by Native if needed
+                        if (fullBytes == null) {
+                            onExportComplete(false, "Export failed (Out of Memory). Try Low RAM Mode.")
+                            return@launch
+                        }
+
+                        val savedUri = withContext(Dispatchers.IO) {
                             if (options.format == ExportImageFormat.Jpeg && options.quality == 96) {
                                 saveJpegToPictures(context, fullBytes)
                             } else {
-                                // Only need to decode for format conversion (PNG/WebP) or if quality changed
-                                // Note: Native export is always JPEG Q96 based on lib.rs
                                 val bitmap = withContext(Dispatchers.Default) {
-                                    fullBytes.decodeToBitmap() 
+                                    fullBytes.decodeToBitmap()
                                 } ?: return@withContext null
 
-                                saveBitmapToPictures(context, bitmap, options.format, options.quality).also { bitmap.recycle() }
+                                saveBitmapToPictures(context, bitmap, options.format, options.quality)
+                                    .also { bitmap.recycle() }
                             }
                         }
 
-                    if (savedUri != null) {
-                        onExportComplete(true, "Saved to $savedUri")
-                    } else {
-                        onExportComplete(false, "Export failed: could not save image.")
+                        if (savedUri != null) {
+                            onExportComplete(true, "Saved to $savedUri")
+                        } else {
+                            onExportComplete(false, "Export failed: could not save image.")
+                        }
+                    } finally {
+                        // 3. Close the dialog only when the coroutine is finished
+                        // (regardless of success or failure)
+                        showExportDialog = false
                     }
                 }
             }
