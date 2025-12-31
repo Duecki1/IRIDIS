@@ -20,9 +20,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,10 +40,12 @@ internal fun SettingsScreen(
     automaticTaggingEnabled: Boolean,
     environmentMaskingEnabled: Boolean,
     openEditorOnImportEnabled: Boolean,
+    maskRenameTags: List<String>,
     onLowQualityPreviewEnabledChange: (Boolean) -> Unit,
     onAutomaticTaggingEnabledChange: (Boolean) -> Unit,
     onEnvironmentMaskingEnabledChange: (Boolean) -> Unit,
     onOpenEditorOnImportEnabledChange: (Boolean) -> Unit,
+    onMaskRenameTagsChange: (List<String>) -> Unit,
     onBackClick: () -> Unit
 ) {
     var showInfoDialog by remember { mutableStateOf(false) }
@@ -139,6 +143,55 @@ internal fun SettingsScreen(
                 },
                 modifier = Modifier.clickable { onOpenEditorOnImportEnabledChange(!openEditorOnImportEnabled) }
             )
+            var showMaskTagsDialog by remember { mutableStateOf(false) }
+            var maskTagsDraft by remember { mutableStateOf("") }
+
+            ListItem(
+                headlineContent = { Text("Mask rename tags") },
+                supportingContent = {
+                    Text(
+                        "Used as quick-pick suggestions when renaming masks.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                trailingContent = { Text("${maskRenameTags.size}") },
+                modifier = Modifier.clickable {
+                    maskTagsDraft = maskRenameTags.joinToString("\n")
+                    showMaskTagsDialog = true
+                }
+            )
+
+            if (showMaskTagsDialog) {
+                AlertDialog(
+                    onDismissRequest = { showMaskTagsDialog = false },
+                    title = { Text("Mask rename tags") },
+                    text = {
+                        OutlinedTextField(
+                            value = maskTagsDraft,
+                            onValueChange = { maskTagsDraft = it },
+                            label = { Text("One tag per line") },
+                            minLines = 6
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            val tags =
+                                maskTagsDraft
+                                    .lines()
+                                    .map { it.trim() }
+                                    .filter { it.isNotEmpty() }
+                                    .distinct()
+                            onMaskRenameTagsChange(tags)
+                            showMaskTagsDialog = false
+                        }) { Text("Save") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showMaskTagsDialog = false }) { Text("Cancel") }
+                    }
+                )
+            }
+
         }
     }
 

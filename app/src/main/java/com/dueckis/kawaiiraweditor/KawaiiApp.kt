@@ -87,6 +87,9 @@ fun KawaiiApp(
     var environmentMaskingEnabled by remember { mutableStateOf(appPreferences.isEnvironmentMaskingEnabled()) }
     var openEditorOnImportEnabled by remember { mutableStateOf(appPreferences.isOpenEditorOnImportEnabled()) }
 
+    appPreferences.ensureDefaultMaskRenameTagsSeeded()
+    var maskRenameTags by remember { mutableStateOf(appPreferences.getMaskRenameTags()) }
+
     BackHandler(enabled = currentScreen == Screen.Settings) {
         currentScreen = Screen.Gallery
     }
@@ -391,6 +394,7 @@ fun KawaiiApp(
                             galleryItem = selectedItem,
                             lowQualityPreviewEnabled = lowQualityPreviewEnabled,
                             environmentMaskingEnabled = environmentMaskingEnabled,
+                            maskRenameTags = maskRenameTags,
                             onBackClick = { requestExitEditor(animated = true) },
                             onPredictiveBackProgress = { progress ->
                                 editorDismissProgressTarget = progress.coerceIn(0f, 1f)
@@ -418,6 +422,11 @@ fun KawaiiApp(
                         automaticTaggingEnabled = automaticTaggingEnabled,
                         environmentMaskingEnabled = environmentMaskingEnabled,
                         openEditorOnImportEnabled = openEditorOnImportEnabled,
+                        maskRenameTags = maskRenameTags,
+                        onMaskRenameTagsChange = { tags ->
+                            maskRenameTags = tags
+                            appPreferences.setMaskRenameTags(tags)
+                        },
                         onLowQualityPreviewEnabledChange = { enabled ->
                             lowQualityPreviewEnabled = enabled
                             appPreferences.setLowQualityPreviewEnabled(enabled)

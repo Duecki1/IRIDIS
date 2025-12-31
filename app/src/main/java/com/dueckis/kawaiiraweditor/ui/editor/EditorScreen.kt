@@ -159,6 +159,7 @@ internal fun EditorScreen(
     galleryItem: GalleryItem?,
     lowQualityPreviewEnabled: Boolean,
     environmentMaskingEnabled: Boolean,
+    maskRenameTags: List<String> = emptyList(),
     onBackClick: () -> Unit,
     onPredictiveBackProgress: (Float) -> Unit,
     onPredictiveBackCancelled: () -> Unit,
@@ -1834,7 +1835,8 @@ internal fun EditorScreen(
                                     onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask,
                                     detectedAiEnvironmentCategories = detectedAiEnvironmentCategories,
                                     isDetectingAiEnvironmentCategories = isDetectingAiEnvironmentCategories,
-                                    onDetectAiEnvironmentCategories = onDetectAiEnvironmentCategories
+                                    onDetectAiEnvironmentCategories = onDetectAiEnvironmentCategories,
+                                    maskRenameTags = maskRenameTags
                                 )
 
                                 errorMessage?.let { Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
@@ -2225,7 +2227,8 @@ internal fun EditorScreen(
                                                 onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask,
                                                 detectedAiEnvironmentCategories = detectedAiEnvironmentCategories,
                                                 isDetectingAiEnvironmentCategories = isDetectingAiEnvironmentCategories,
-                                                onDetectAiEnvironmentCategories = onDetectAiEnvironmentCategories
+                                                onDetectAiEnvironmentCategories = onDetectAiEnvironmentCategories,
+                                                maskRenameTags = maskRenameTags
                                             )
                                             // Extra spacing at bottom so content isn't hidden by FAB
                                             Spacer(modifier = Modifier.height(100.dp))

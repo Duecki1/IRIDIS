@@ -14,6 +14,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -51,11 +53,13 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -134,7 +138,8 @@ internal fun EditorControlsContent(
     onGenerateAiEnvironmentMask: (() -> Unit)?,
     detectedAiEnvironmentCategories: List<AiEnvironmentCategory>?,
     isDetectingAiEnvironmentCategories: Boolean,
-    onDetectAiEnvironmentCategories: (() -> Unit)?
+    onDetectAiEnvironmentCategories: (() -> Unit)?,
+    maskRenameTags: List<String> = emptyList()
 ) {
     // Container for the entire control panel
     Column(
@@ -303,7 +308,8 @@ internal fun EditorControlsContent(
                             onDetectAiEnvironmentCategories = onDetectAiEnvironmentCategories,
                             onBeginEditInteraction = onBeginEditInteraction,
                             onEndEditInteraction = onEndEditInteraction,
-                            histogramData = histogramData
+                            histogramData = histogramData,
+                            maskRenameTags = maskRenameTags
                         )
                     }
                 }
@@ -451,7 +457,8 @@ private fun MaskingUI(
     onDetectAiEnvironmentCategories: (() -> Unit)?,
     onBeginEditInteraction: () -> Unit,
     onEndEditInteraction: () -> Unit,
-    histogramData: HistogramData?
+    histogramData: HistogramData?,
+    maskRenameTags: List<String>
 ) {
     val availableSubMaskTypes = remember(environmentMaskingEnabled) {
         if (environmentMaskingEnabled) {
@@ -460,6 +467,8 @@ private fun MaskingUI(
             listOf(SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial)
         }
     }
+    var renamingMaskId by remember { mutableStateOf<String?>(null) }
+    var showRenameDialog by remember { mutableStateOf(false) }
 
     fun assignMaskNumber(maskId: String): Int {
         if (maskId !in maskNumbers) {
@@ -577,6 +586,16 @@ private fun MaskingUI(
                         if (isSelected) onRequestMaskOverlayBlink(null)
                     }
                 )
+                DropdownMenuItem(
+                        text = { Text("Rename") },
+                onClick = {
+                    showMenu = false
+                    renamingMaskId = mask.id
+                    showRenameDialog = true
+                }
+                )
+                HorizontalDivider()
+
                 HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text("Duplicate") },
@@ -587,6 +606,7 @@ private fun MaskingUI(
                         onMasksChange(masks.toMutableList().apply { add(index + 1, dup) }.toList())
                     }
                 )
+
                 DropdownMenuItem(
                     text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
                     onClick = {
@@ -602,8 +622,30 @@ private fun MaskingUI(
                         }
                     }
                 )
+
             }
         }
+    }
+    val maskToRename = masks.firstOrNull { it.id == renamingMaskId }
+
+    if (showRenameDialog && maskToRename != null) {
+        RenameMaskDialog(
+            currentName = maskToRename.name,
+            tagPresets = maskRenameTags,
+            onDismiss = {
+                showRenameDialog = false
+                renamingMaskId = null
+            },
+            onConfirm = { newName ->
+                onMasksChange(
+                    masks.map { m ->
+                        if (m.id == maskToRename.id) m.copy(name = newName) else m
+                    }
+                )
+                showRenameDialog = false
+                renamingMaskId = null
+            }
+        )
     }
 
     val selectedMask = masks.firstOrNull { it.id == selectedMaskId }
@@ -1095,4 +1137,95 @@ private fun MaskToolControls(
             }
         }
     }
+}
+
+
+@Composable
+private fun RenameMaskDialog(
+    currentName: String,
+    tagPresets: List<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var text by remember(currentName) { mutableStateOf(currentName) }
+    var userTyped by remember { mutableStateOf(false) }
+
+    val base = remember(tagPresets) {
+        tagPresets.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    }
+
+    val isGenericMaskName = remember(text) {
+        Regex("^Mask\\s*\\d+$", RegexOption.IGNORE_CASE).matches(text.trim())
+    }
+
+    // Only filter after user starts typing, and never filter for generic "Mask 1"
+    val query = remember(text, userTyped, isGenericMaskName) {
+        if (!userTyped || isGenericMaskName) "" else text.trim()
+    }
+
+    val suggestions = remember(query, base) {
+        if (query.isBlank()) base
+        else base.filter { it.contains(query, ignoreCase = true) }.ifEmpty { base } // fallback to all
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename mask") },
+        text = {
+            Column(Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = {
+                        text = it
+                        userTyped = true
+                    },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                if (base.isEmpty()) {
+                    Text(
+                        "No tags saved yet. Add some in Settings.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Text(
+                        "Tap a tag or type your own:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        suggestions.forEach { tag ->
+                            SuggestionChip(
+                                onClick = {
+                                    val v = tag.trim()
+                                    if (v.isNotEmpty()) onConfirm(v) // picks tag + closes dialog
+                                },
+                                label = { Text(tag) }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val v = text.trim()
+                if (v.isNotEmpty()) onConfirm(v)
+            }) { Text("OK") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }
