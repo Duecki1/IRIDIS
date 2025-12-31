@@ -1702,8 +1702,8 @@ internal fun EditorScreen(
             }
     }
 
-    MaterialTheme(colorScheme = darkColorScheme()) {
-        Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF121212)) {
+    MaterialTheme(colorScheme = MaterialTheme.colorScheme) {
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
             val onSelectPanelTab: (EditorPanelTab) -> Unit = { tab ->
                 when (tab) {
                     EditorPanelTab.Masks -> {
@@ -1720,231 +1720,7 @@ internal fun EditorScreen(
             val cropAspectRatio = if (isCropMode) adjustments.aspectRatio else null
 
             Box(modifier = Modifier.fillMaxSize()) {
-                if (isTablet) {
-                    Row(modifier = Modifier.fillMaxSize()) {
-                        Box(modifier = Modifier.weight(3f).fillMaxHeight().background(Color.Black)) {
-                            ImagePreview(
-                                bitmap = displayBitmap,
-                                isLoading = isLoading || isGeneratingAiMask,
-                                viewportBitmap = if (isComparingOriginal || isCropMode) null else editedViewportBitmap,
-                                viewportRoi = if (isComparingOriginal || isCropMode) null else editedViewportRoi,
-                                onViewportRoiChange = onPreviewViewportRoiChange,
-                                maskOverlay = selectedMaskForOverlay,
-                                activeSubMask = selectedSubMaskForEdit,
-                                isMaskMode = isMaskMode && !isComparingOriginal,
-                                showMaskOverlay = showMaskOverlay && !isComparingOriginal,
-                                maskOverlayBlinkKey = maskOverlayBlinkKey,
-                                maskOverlayBlinkSubMaskId = maskOverlayBlinkSubMaskId,
-                                isPainting = isInteractiveMaskingEnabled && !isComparingOriginal,
-                                brushSize = brushSize,
-                                maskTapMode = if (isComparingOriginal) MaskTapMode.None else maskTapMode,
-                                onMaskTap = if (isComparingOriginal) null else onMaskTap,
-                                requestBeforePreview = { requestIdentityPreview() },
-                                onBrushStrokeFinished = onBrushStrokeFinished,
-                                onLassoFinished = onLassoFinished,
-                                onSubMaskHandleDrag = onSubMaskHandleDrag,
-                                onSubMaskHandleDragStateChange = { isDraggingMaskHandle = it },
-                                onRequestAiSubjectOverride = {
-                                    val maskId = selectedMaskId
-                                    val subId = selectedSubMaskId
-                                    if (maskId != null && subId != null) {
-                                        aiSubjectOverrideTarget = maskId to subId
-                                        showAiSubjectOverrideDialog = true
-                                    }
-                                },
-                                isCropMode = isCropMode && !isComparingOriginal,
-                                cropState = if (isCropMode && !isComparingOriginal) (cropDraft ?: adjustments.crop) else null,
-                                cropAspectRatio = cropAspectRatio,
-                                extraRotationDegrees = previewRotationDelta,
-                                isStraightenActive = isCropMode && isStraightenActive && !isComparingOriginal,
-                                onStraightenResult = { rotation ->
-                                    beginEditInteraction()
-                                    val baseRatio =
-                                        (cropBaseWidthPx?.toFloat()?.coerceAtLeast(1f) ?: 1f) /
-                                                (cropBaseHeightPx?.toFloat()?.coerceAtLeast(1f) ?: 1f)
-                                    val autoCrop =
-                                        computeMaxCropNormalized(AutoCropParams(baseAspectRatio = baseRatio, rotationDegrees = rotation, aspectRatio = adjustments.aspectRatio))
-                                    cropDraft = autoCrop
-                                    rotationDraft = null
-                                    isStraightenActive = false
-                                    applyAdjustmentsPreservingMasks(adjustments.copy(rotation = rotation, crop = autoCrop))
-                                    endEditInteraction()
-                                },
-                                onCropDraftChange = { cropDraft = it },
-                                onCropInteractionStart = {
-                                    isCropGestureActive = true
-                                    beginEditInteraction()
-                                },
-                                onCropInteractionEnd = { crop ->
-                                    isCropGestureActive = false
-                                    cropDraft = crop
-                                    applyAdjustmentsPreservingMasks(adjustments.copy(crop = crop))
-                                    endEditInteraction()
-                                }
-                            )
-                        }
 
-                        Column(modifier = Modifier.weight(1f).fillMaxHeight().background(MaterialTheme.colorScheme.surface)) {
-                            Spacer(modifier = Modifier.windowInsetsTopHeight(WindowInsets.statusBars))
-                            Spacer(modifier = Modifier.height(56.dp))
-
-                            Column(
-                                modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 16.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                EditorControlsContent(
-                                    panelTab = panelTab,
-                                    adjustments = adjustments,
-                                    onAdjustmentsChange = { applyAdjustmentsPreservingMasks(it) },
-                                    onBeginEditInteraction = ::beginEditInteraction,
-                                    onEndEditInteraction = ::endEditInteraction,
-                                    histogramData = histogramData,
-                                    masks = masks,
-                                    onMasksChange = { updated ->
-                                        if (panelTab == EditorPanelTab.Masks && showMaskOverlay) showMaskOverlay = false
-                                        masks = updated
-                                    },
-                                    maskNumbers = maskNumbers,
-                                    selectedMaskId = selectedMaskId,
-                                    onSelectedMaskIdChange = { selectedMaskId = it },
-                                    selectedSubMaskId = selectedSubMaskId,
-                                    onSelectedSubMaskIdChange = { selectedSubMaskId = it },
-                                    isPaintingMask = isPaintingMask,
-                                    onPaintingMaskChange = { isPaintingMask = it },
-                                    showMaskOverlay = showMaskOverlay,
-                                    onShowMaskOverlayChange = { showMaskOverlay = it },
-                                    onRequestMaskOverlayBlink = ::requestMaskOverlayBlink,
-                                    brushSize = brushSize,
-                                    onBrushSizeChange = { brushSize = it },
-                                    brushTool = brushTool,
-                                    onBrushToolChange = { brushTool = it },
-                                    brushSoftness = brushSoftness,
-                                    onBrushSoftnessChange = { brushSoftness = it },
-                                    eraserSoftness = eraserSoftness,
-                                    onEraserSoftnessChange = { eraserSoftness = it },
-                                    maskTapMode = maskTapMode,
-                                    onMaskTapModeChange = { maskTapMode = it },
-                                    cropBaseWidthPx = cropBaseWidthPx,
-                                    cropBaseHeightPx = cropBaseHeightPx,
-                                    rotationDraft = rotationDraft,
-                                    onRotationDraftChange = { rotationDraft = it },
-                                    isStraightenActive = isStraightenActive,
-                                    onStraightenActiveChange = { isStraightenActive = it },
-                                    environmentMaskingEnabled = environmentMaskingEnabled,
-                                    isGeneratingAiMask = isGeneratingAiMask,
-                                    onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask,
-                                    detectedAiEnvironmentCategories = detectedAiEnvironmentCategories,
-                                    isDetectingAiEnvironmentCategories = isDetectingAiEnvironmentCategories,
-                                    onDetectAiEnvironmentCategories = onDetectAiEnvironmentCategories,
-                                    maskRenameTags = maskRenameTags
-                                )
-
-                                errorMessage?.let { Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                                statusMessage?.let { Text(text = it, color = Color(0xFF1B5E20), style = MaterialTheme.typography.bodySmall) }
-                            }
-
-                            NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 0.dp, windowInsets = WindowInsets(0)) {
-                                EditorPanelTab.entries.forEach { tab ->
-                                    val selected = panelTab == tab
-                                    NavigationBarItem(
-                                        selected = selected,
-                                        onClick = { onSelectPanelTab(tab) },
-                                        icon = { Icon(imageVector = if (selected) tab.iconSelected else tab.icon, contentDescription = tab.label) },
-                                        label = { Text(tab.label) },
-                                        colors =
-                                            NavigationBarItemDefaults.colors(
-                                                indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
-                                                selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp).windowInsetsPadding(WindowInsets.statusBars),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = onBackClick, colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
-                        }
-
-                        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                            Surface(color = Color.Black.copy(alpha = 0.4f), shape = CircleShape) {
-                                Text(
-                                    text = galleryItem.fileName,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = Color.White,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                                )
-                            }
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(
-                                enabled = canUndo,
-                                onClick = ::undo,
-                                colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
-                            ) {
-                                Icon(Icons.AutoMirrored.Rounded.Undo, contentDescription = "Undo", tint = Color.White)
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            IconButton(
-                                enabled = canRedo,
-                                onClick = ::redo,
-                                colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
-                            ) {
-                                Icon(Icons.AutoMirrored.Rounded.Redo, contentDescription = "Redo", tint = Color.White)
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            Spacer(modifier = Modifier.width(8.dp))
-                            // Using the box icon pattern for Tablet too for consistency,
-                            // though layout is different (in top bar vs floating bottom)
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = Color(0xFFBFA2F8),
-                                contentColor = Color.Black
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Filled.Download, contentDescription = "Export", modifier = Modifier.padding(8.dp))
-                                    ExportButton(
-                                        label = "",
-                                        sessionHandle = sessionHandle,
-                                        adjustments = adjustments,
-                                        masks = masksForRender(masks),
-                                        isExporting = isExporting,
-                                        nativeDispatcher = renderDispatcher,
-                                        context = context,
-                                        onExportStart = { isExporting = true },
-                                        onExportComplete = { success, message ->
-                                            isExporting = false
-                                            if (success) {
-                                                if (message.startsWith("Saved to ")) {
-                                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                                                    statusMessage = null
-                                                } else {
-                                                    statusMessage = message
-                                                }
-                                                errorMessage = null
-                                            } else {
-                                                errorMessage = message
-                                                statusMessage = null
-                                            }
-                                        },
-                                        modifier = Modifier
-                                            .matchParentSize()
-                                            .alpha(0f)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                } else {
                     // PHONE LAYOUT
                     Column(modifier = Modifier.fillMaxSize()) {
                         // TOP BAR
@@ -1955,15 +1731,15 @@ internal fun EditorScreen(
                                 .windowInsetsPadding(WindowInsets.statusBars),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            IconButton(onClick = onBackClick, colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+                            IconButton(onClick = onBackClick, colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurface)
                             }
                             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                                Surface(color = Color.Black.copy(alpha = 0.4f), shape = CircleShape) {
+                                Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f), shape = CircleShape) {
                                     Text(
                                         text = galleryItem.fileName,
                                         style = MaterialTheme.typography.labelLarge,
-                                        color = Color.White,
+                                        color = MaterialTheme.colorScheme.onSurface,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
@@ -1974,9 +1750,9 @@ internal fun EditorScreen(
                                 IconButton(
                                     enabled = sessionHandle != 0L,
                                     onClick = { showMetadataDialog = true },
-                                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
+                                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))
                                 ) {
-                                    Icon(Icons.Filled.Info, contentDescription = "Info", tint = Color.White)
+                                    Icon(Icons.Filled.Info, contentDescription = "Info", tint = MaterialTheme.colorScheme.onSurface)
                                 }
                             }
                         }
@@ -1988,8 +1764,7 @@ internal fun EditorScreen(
                             Column(modifier = Modifier.fillMaxSize()) {
                                 // 1. Preview Area
                                 Box(modifier = Modifier
-                                    .weight(1f)
-                                    .background(Color.Black)) {
+                                    .weight(1f)) {
                                     Box {
                                         ImagePreview(
                                             bitmap = if (isComparingOriginal) originalBitmap ?: displayBitmap else displayBitmap,
@@ -2057,7 +1832,7 @@ internal fun EditorScreen(
                                                 .align(Alignment.BottomStart)
                                                 .padding(16.dp),
                                             shape = CircleShape, // Fully rounded pill shape
-                                            color = Color(0xFF1C1B1F).copy(alpha = 0.8f), // Dark semi-transparent background
+                                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f), // Dark semi-transparent background
                                             contentColor = Color.White
                                         ) {
                                             Row(
@@ -2070,8 +1845,8 @@ internal fun EditorScreen(
                                                     onClick = ::undo,
                                                     enabled = canUndo,
                                                     colors = IconButtonDefaults.iconButtonColors(
-                                                        contentColor = Color.White,
-                                                        disabledContentColor = Color.White.copy(alpha = 0.38f)
+                                                        contentColor = MaterialTheme.colorScheme.onSurface,
+                                                        disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                                                     ),
                                                     modifier = Modifier.size(48.dp) // Standard expressive touch target
                                                 ) {
@@ -2096,8 +1871,8 @@ internal fun EditorScreen(
                                                     onClick = ::redo,
                                                     enabled = canRedo,
                                                     colors = IconButtonDefaults.iconButtonColors(
-                                                        contentColor = Color.White,
-                                                        disabledContentColor = Color.White.copy(alpha = 0.38f)
+                                                        contentColor = MaterialTheme.colorScheme.onSurface,
+                                                        disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                                                     ),
                                                     modifier = Modifier.size(48.dp)
                                                 ) {
@@ -2130,8 +1905,8 @@ internal fun EditorScreen(
                                                 onClick = { /* handled by interactionSource if needed, or keep empty for press-hold */ },
                                                 interactionSource = interactionSource,
                                                 shape = RoundedCornerShape(24.dp), // "Squircle" expressive shape
-                                                color = Color(0xFF1C1B1F).copy(alpha = 0.8f),
-                                                contentColor = Color.White,
+                                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                                                contentColor = MaterialTheme.colorScheme.onSurface,
                                                 modifier = Modifier.size(56.dp) // Slightly larger floating action size
                                             ) {
                                                 Box(contentAlignment = Alignment.Center) {
@@ -2178,6 +1953,7 @@ internal fun EditorScreen(
                                             modifier = Modifier
                                                 .fillMaxSize()
                                                 .verticalScroll(rememberScrollState())
+                                                .background(color=MaterialTheme.colorScheme.surface)
                                                 .padding(horizontal = 16.dp, vertical = 12.dp),
                                             verticalArrangement = Arrangement.spacedBy(12.dp)
                                         ) {
@@ -2238,10 +2014,7 @@ internal fun EditorScreen(
                             }
 
                             // 3. Floating App Bar (Overlay)
-                            val customColors = FloatingToolbarDefaults.standardFloatingToolbarColors(
-                                toolbarContainerColor = Color(0xFF1E1E1E), // Dark grey pill color
-                                toolbarContentColor = Color.White
-                            )
+
 
                             // Positioned directly over content via Box alignment
                             Box(
@@ -2253,14 +2026,18 @@ internal fun EditorScreen(
                             ) {
                                 HorizontalFloatingToolbar(
                                     expanded = true,
+                                    colors = FloatingToolbarDefaults.standardFloatingToolbarColors(
+                                        toolbarContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        toolbarContentColor = MaterialTheme.colorScheme.onSurface
+                                    ),
                                     floatingActionButton = {
                                         // The Container for the FAB
                                         Box {
                                             // The Visual FAB - using StandardFloatingActionButton for shape/elevation
                                             FloatingToolbarDefaults.StandardFloatingActionButton(
                                                 onClick = { /* No-op, intercepted by ExportButton below */ },
-                                                containerColor = Color(0xFFBFA2F8), // Accent color
-                                                contentColor = Color.Black
+                                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                                             ) {
                                                 Icon(Icons.Filled.Download, "Export")
                                             }
@@ -2295,7 +2072,6 @@ internal fun EditorScreen(
                                         }
                                     },
                                     // Use customColors directly to keep the Dark Grey Pill background
-                                    colors = customColors,
                                     content = {
                                         // Navigation Icons
                                         EditorPanelTab.entries.forEach { tab ->
@@ -2304,7 +2080,7 @@ internal fun EditorScreen(
                                                 Icon(
                                                     imageVector = if (selected) tab.iconSelected else tab.icon,
                                                     contentDescription = tab.label,
-                                                    tint = if (selected) Color.White else Color.Gray
+                                                    tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                             }
                                         }
@@ -2313,7 +2089,7 @@ internal fun EditorScreen(
                             }
                         }
                     }
-                }
+
 
                 Surface(
                     modifier = Modifier.fillMaxWidth().windowInsetsTopHeight(WindowInsets.statusBars).align(Alignment.TopCenter),

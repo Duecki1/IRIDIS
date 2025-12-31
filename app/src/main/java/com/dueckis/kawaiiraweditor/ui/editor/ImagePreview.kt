@@ -8,7 +8,8 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
- 
+import androidx.compose.foundation.background
+
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -141,6 +142,7 @@ internal fun ImagePreview(
     BoxWithConstraints(
         modifier =
             Modifier
+                .background(color = MaterialTheme.colorScheme.surfaceVariant)
                 .fillMaxSize()
                 .clipToBounds()
                 .let { base ->

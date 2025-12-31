@@ -11,6 +11,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -368,7 +369,7 @@ private fun CommonMaskHeader(
         Text(
             text = title,
             style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onSurface // Adapts to light/dark
+            color = MaterialTheme.colorScheme.onSurface// Adapts to light/dark
         )
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -392,7 +393,7 @@ private fun ExpressiveSectionContainer(
             .fillMaxWidth()
             .padding(vertical = 6.dp),
         shape = RoundedCornerShape(24.dp), // Expressive Large Shape
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = MaterialTheme.colorScheme.surfaceVariant,
         tonalElevation = 2.dp
     ) {
         Column(
@@ -568,7 +569,7 @@ private fun MaskingUI(
                     onPaintingMaskChange(shouldPaint)
                     onRequestMaskOverlayBlink(null)
                 },
-                onMenuClick = { showMenu = true }
+                onMenuClick = { showMenu = true },
             )
 
             // Mask Actions Dropdown

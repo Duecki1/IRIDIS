@@ -90,7 +90,7 @@ internal fun AdjustmentSlider(
 ) {
     val colors = SliderDefaults.colors(
         activeTrackColor = MaterialTheme.colorScheme.primary,
-        inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+        inactiveTrackColor = MaterialTheme.colorScheme.onSurfaceVariant,
         thumbColor = MaterialTheme.colorScheme.primary
     )
     val snappedDefault = snapToStep(defaultValue, step, range)
@@ -113,7 +113,7 @@ internal fun AdjustmentSlider(
             Text(
                 text = label,
                 style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
                 text = formatter(value),
@@ -270,7 +270,7 @@ internal fun PanelSectionCard(
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         shape = MaterialTheme.shapes.large
     ) {
         Column(
@@ -286,13 +286,13 @@ internal fun PanelSectionCard(
                     Text(
                         text = title,
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     subtitle?.let {
                         Text(
                             text = it,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.outline
                         )
                     }
                 }
@@ -313,7 +313,7 @@ internal fun PanelTwoTitleSectionCard(
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         shape = MaterialTheme.shapes.large
     ) {
         Column(
@@ -336,7 +336,7 @@ internal fun PanelTwoTitleSectionCard(
                         Text(
                             text = title,
                             style = MaterialTheme.typography.titleMedium, // Same font
-                            color = MaterialTheme.colorScheme.onSurface,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
                         )
                     }
@@ -350,7 +350,7 @@ internal fun PanelTwoTitleSectionCard(
                             Text(
                                 text = it,
                                 style = MaterialTheme.typography.titleMedium, // Same font as title
-                                color = MaterialTheme.colorScheme.onSurface,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center
                             )
                         }
