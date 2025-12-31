@@ -69,6 +69,9 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Subject masks should be stored
 - Save calculated AI Masks
 
+## Info
+Downloading the app will automatically install a Subject selection ML Model.
+
 ## License
 
 AGPL-3.0 — see `LICENSE`.
