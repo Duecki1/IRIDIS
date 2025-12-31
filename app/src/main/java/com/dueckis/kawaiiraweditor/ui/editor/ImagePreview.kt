@@ -2,6 +2,7 @@
 
 package com.dueckis.kawaiiraweditor.ui.editor
 
+import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -81,6 +82,7 @@ private enum class CropHandle {
     BottomRight
 }
 
+@SuppressLint("UnusedBoxWithConstraintsScope")
 @Composable
 internal fun ImagePreview(
     bitmap: Bitmap?,
@@ -1086,39 +1088,6 @@ internal fun ImagePreview(
             )
         }
 
-        // Top-most compare toggle button: last in tree and high zIndex so it receives taps
-        IconButton(
-            onClick = {
-                showingBeforeLocal = !showingBeforeLocal
-                if (showingBeforeLocal) {
-                    if (beforeDirty || beforeBitmap == null) {
-                        requestBeforePreview?.let { req ->
-                            scope.launch {
-                                val bmp = req()
-                                if (bmp != null) {
-                                    beforeBitmap = bmp
-                                    beforeDirty = false
-                                    beforeAlpha.snapTo(0f)
-                                    beforeAlpha.animateTo(1f, animationSpec = tween(180))
-                                }
-                            }
-                        }
-                    } else {
-                        scope.launch { beforeAlpha.animateTo(1f, animationSpec = tween(180)) }
-                    }
-                } else {
-                    scope.launch { beforeAlpha.animateTo(0f, animationSpec = tween(180)) }
-                }
-            },
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(12.dp)
-                .size(48.dp)
-                .zIndex(10f),
-            colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
-        ) {
-            Icon(imageVector = Icons.Filled.CompareArrows, contentDescription = "Toggle original", tint = Color.White)
-        }
 
         if (isLoading) {
             ContainedLoadingIndicator(modifier = Modifier.align(Alignment.Center))

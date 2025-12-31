@@ -1896,13 +1896,7 @@ internal fun EditorScreen(
                                 Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo", tint = Color.White)
                             }
                             Spacer(modifier = Modifier.width(8.dp))
-                            IconButton(
-                                enabled = sessionHandle != 0L,
-                                onClick = { showMetadataDialog = true },
-                                colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
-                            ) {
-                                Icon(Icons.Filled.Info, contentDescription = "Info", tint = Color.White)
-                            }
+
                             Spacer(modifier = Modifier.width(8.dp))
                             // Using the box icon pattern for Tablet too for consistency,
                             // though layout is different (in top bar vs floating bottom)

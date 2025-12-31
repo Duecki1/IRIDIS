@@ -11,7 +11,6 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -140,6 +139,8 @@ internal fun EditorControlsContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+        // Ensure background is set to surface to support light/dark mode transitions smoothly
+        // .background(MaterialTheme.colorScheme.surface) // Optional: usually handled by parent Surface
     ) {
         AnimatedContent(
             targetState = panelTab,
@@ -311,21 +312,57 @@ internal fun EditorControlsContent(
 }
 
 /**
- * Standard Header for ALL tabs to ensure alignment with the Masks tab.
+ * Standard Header for ALL tabs to ensure alignment.
+ * Uses MaterialTheme typography for correct font scaling and color adaptation.
  */
 @Composable
 private fun CommonHeader(
     title: String,
     content: @Composable RowScope.() -> Unit = {}
 ) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp)
+    ) {
+        // 1. Text is aligned to the absolute center of the header
+        Text(
+            text = title,
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.align(Alignment.Center)
+        )
+
+        // 2. Content (buttons/icons) is aligned to the right
+        Row(
+            modifier = Modifier.align(Alignment.CenterEnd),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            content = content
+        )
+    }
+}
+/**
+ * Standard Header for ALL tabs to ensure alignment.
+ * Uses MaterialTheme typography for correct font scaling and color adaptation.
+ */
+@Composable
+private fun CommonMaskHeader(
+    title: String,
+    content: @Composable RowScope.() -> Unit = {}
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 12.dp),
+            .padding(vertical = 12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(title, style = MaterialTheme.typography.headlineSmall)
+        Text(
+            text = title,
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface // Adapts to light/dark
+        )
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -333,9 +370,9 @@ private fun CommonHeader(
         )
     }
 }
-
 /**
- * A styled container for sections of the editor, using Material 3 Expressive shapes and elevations.
+ * A styled container for sections.
+ * Uses 'surfaceContainer' which automatically adjusts tone based on system theme.
  */
 @Composable
 private fun ExpressiveSectionContainer(
@@ -346,9 +383,9 @@ private fun ExpressiveSectionContainer(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding( vertical = 6.dp),
+            .padding(vertical = 6.dp),
         shape = RoundedCornerShape(24.dp), // Expressive Large Shape
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = MaterialTheme.colorScheme.surfaceContainer, // Dynamic color safe
         tonalElevation = 2.dp
     ) {
         Column(
@@ -431,8 +468,8 @@ private fun MaskingUI(
         return maskNumbers[maskId] ?: 0
     }
 
-    // --- Header & Create Button (Aligned via CommonHeader) ---
-    CommonHeader(title = "Masks") {
+    // --- Header & Create Button ---
+    CommonMaskHeader(title = "Masks") {
         // Visibility Toggle
         FilledTonalIconButton(
             enabled = masks.any { it.id == selectedMaskId },
@@ -454,7 +491,7 @@ private fun MaskingUI(
             Button(
                 onClick = { showCreateMenu = true },
                 contentPadding = PaddingValues(horizontal = 16.dp),
-                shape = RoundedCornerShape(100) // Pill shape
+                shape = RoundedCornerShape(100)
             ) {
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
@@ -464,13 +501,14 @@ private fun MaskingUI(
             DropdownMenu(
                 expanded = showCreateMenu,
                 onDismissRequest = { showCreateMenu = false },
-                shape = RoundedCornerShape(16.dp)
+                shape = RoundedCornerShape(16.dp),
+                containerColor = MaterialTheme.colorScheme.surfaceContainer // Explicit for safety
             ) {
                 Text(
                     "Create new mask...",
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.outline
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 availableSubMaskTypes.forEach { type ->
                     DropdownMenuItem(
@@ -525,7 +563,12 @@ private fun MaskingUI(
             )
 
             // Mask Actions Dropdown
-            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, shape = RoundedCornerShape(16.dp)) {
+            DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { showMenu = false },
+                shape = RoundedCornerShape(16.dp),
+                containerColor = MaterialTheme.colorScheme.surfaceContainer
+            ) {
                 DropdownMenuItem(
                     text = { Text(if (mask.invert) "Uninvert Mask" else "Invert Mask") },
                     onClick = {
@@ -575,7 +618,7 @@ private fun MaskingUI(
             val selectedSubMask = selectedMask.subMasks.firstOrNull { it.id == selectedSubMaskId }
 
             Column {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp), thickness = 0.5.dp)
+                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
 
                 // Sub-mask Toolbar (Add/Subtract + Chips)
                 Row(
@@ -598,7 +641,8 @@ private fun MaskingUI(
                         DropdownMenu(
                             expanded = showAddSubMenu,
                             onDismissRequest = { showAddSubMenu = false },
-                            shape = RoundedCornerShape(16.dp)
+                            shape = RoundedCornerShape(16.dp),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer
                         ) {
                             listOf("Add" to SubMaskMode.Additive, "Subtract" to SubMaskMode.Subtractive).forEach { (label, mode) ->
                                 DropdownMenuItem(
@@ -650,7 +694,11 @@ private fun MaskingUI(
                                 onMenuClick = { showSubMenu = true }
                             )
 
-                            DropdownMenu(expanded = showSubMenu, onDismissRequest = { showSubMenu = false }) {
+                            DropdownMenu(
+                                expanded = showSubMenu,
+                                onDismissRequest = { showSubMenu = false },
+                                containerColor = MaterialTheme.colorScheme.surfaceContainer
+                            ) {
                                 DropdownMenuItem(
                                     text = { Text(if (sub.mode == SubMaskMode.Additive) "Change to Subtract" else "Change to Add") },
                                     onClick = {
@@ -734,8 +782,8 @@ private fun MaskingUI(
                             // Common Opacity
                             Column {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("Mask Opacity", style = MaterialTheme.typography.bodyMedium)
-                                    Text("${selectedMask.opacity.roundToInt()}%", style = MaterialTheme.typography.bodyMedium)
+                                    Text("Mask Opacity", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                                    Text("${selectedMask.opacity.roundToInt()}%", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
                                 }
                                 Slider(
                                     modifier = Modifier.doubleTapSliderThumbToReset(
@@ -766,32 +814,24 @@ private fun MaskingUI(
                 var selectedMaskTab by remember(selectedMask.id) { mutableIntStateOf(0) }
                 val maskInnerTabs = listOf("Adjustments", "Color Grading")
 
-                Column(Modifier.padding(horizontal = 16.dp)) {
-                    SecondaryTabRow(
-                        selectedTabIndex = selectedMaskTab,
-                        containerColor = Color.Transparent,
-                        divider = {},
-                        indicator = {
-                            TabRowDefaults.SecondaryIndicator(
-                                modifier = Modifier.tabIndicatorOffset(selectedMaskTab),
-                                height = 3.dp,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    @OptIn(ExperimentalMaterial3Api::class)
+                    SingleChoiceSegmentedButtonRow(
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         maskInnerTabs.forEachIndexed { index, title ->
-                            Tab(
+                            SegmentedButton(
                                 selected = selectedMaskTab == index,
                                 onClick = { selectedMaskTab = index },
-                                text = {
-                                    Text(
-                                        title,
-                                        fontWeight = if(selectedMaskTab == index) FontWeight.Bold else FontWeight.Normal
-                                    )
-                                }
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = maskInnerTabs.size
+                                ),
+                                label = { Text(title) }
                             )
                         }
                     }
+
 
                     Spacer(Modifier.height(16.dp))
 
@@ -951,7 +991,7 @@ private fun MaskToolControls(
                 ) { Text("Erase") }
             }
 
-            Text("Size: ${brushSize.roundToInt()} px", style = MaterialTheme.typography.labelMedium)
+            Text("Size: ${brushSize.roundToInt()} px", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
             Slider(
                 value = brushSize,
                 onValueChange = { onBeginEditInteraction(); onBrushSizeChange(it) },
@@ -960,7 +1000,7 @@ private fun MaskToolControls(
             )
 
             val softness = if (brushTool == BrushTool.Eraser) eraserSoftness else brushSoftness
-            Text("Softness: ${(softness * 100f).roundToInt()}%", style = MaterialTheme.typography.labelMedium)
+            Text("Softness: ${(softness * 100f).roundToInt()}%", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
             Slider(
                 value = softness,
                 onValueChange = {
@@ -993,7 +1033,7 @@ private fun MaskToolControls(
                 modifier = Modifier.fillMaxWidth()
             ) { Text("Set Center") }
 
-            Text("Radius", style = MaterialTheme.typography.labelMedium)
+            Text("Radius", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
             Slider(
                 value = selectedSubMask.radial.radiusX,
                 onValueChange = { v ->
@@ -1009,7 +1049,7 @@ private fun MaskToolControls(
                 Button(onClick = { onPaintingMaskChange(false); onMaskTapModeChange(MaskTapMode.SetLinearStart) }, modifier = Modifier.weight(1f)) { Text("Start") }
                 Button(onClick = { onPaintingMaskChange(false); onMaskTapModeChange(MaskTapMode.SetLinearEnd) }, modifier = Modifier.weight(1f)) { Text("End") }
             }
-            Text("Feather", style = MaterialTheme.typography.labelMedium)
+            Text("Feather", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
             Slider(
                 value = selectedSubMask.linear.range,
                 onValueChange = { v ->
@@ -1024,7 +1064,7 @@ private fun MaskToolControls(
             if (!environmentMaskingEnabled) {
                 Text("Environment masking is disabled in settings.", color = MaterialTheme.colorScheme.error)
             } else {
-                // Category Selector logic abbreviated for brevity but styled nicely
+                // Category Selector logic
                 val selectedCategory = AiEnvironmentCategory.fromId(selectedSubMask.aiEnvironment.category)
                 var expanded by remember { mutableStateOf(false) }
 
@@ -1035,12 +1075,20 @@ private fun MaskToolControls(
                         readOnly = true,
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                         modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface
+                        )
                     )
-                    ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    ExposedDropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    ) {
                         detectedAiEnvironmentCategories?.forEach { cat ->
                             DropdownMenuItem(
-                                text = { Text(cat.label) },
+                                text = { Text(cat.label, color = MaterialTheme.colorScheme.onSurface) },
                                 onClick = {
                                     expanded = false
                                     val updated = masks.map { m -> if(m.id!=selectedMask.id) m else m.copy(subMasks = m.subMasks.map { s -> if(s.id!=selectedSubMask.id) s else s.copy(aiEnvironment = s.aiEnvironment.copy(category=cat.id, maskDataBase64=null)) }) }

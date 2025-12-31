@@ -1040,6 +1040,14 @@ internal enum class RenderTarget {
 
 internal val basicSection = listOf(
     AdjustmentControl(
+        field = AdjustmentField.Exposure,
+        label = "Exposure",
+        range = -5f..5f,
+        step = 0.01f,
+        defaultValue = 0f,
+        formatter = { value -> String.format(Locale.US, "%.2f", value) }
+    ),
+    AdjustmentControl(
         field = AdjustmentField.Brightness,
         label = "Brightness",
         range = -5f..5f,

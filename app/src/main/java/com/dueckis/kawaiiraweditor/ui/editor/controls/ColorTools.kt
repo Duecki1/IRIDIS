@@ -12,14 +12,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,8 +33,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -62,10 +62,10 @@ import com.dueckis.kawaiiraweditor.data.model.HueSatLumState
 import com.dueckis.kawaiiraweditor.data.model.defaultCurvePoints
 import com.dueckis.kawaiiraweditor.domain.CurvesMath
 import com.dueckis.kawaiiraweditor.domain.HistogramData
-import com.dueckis.kawaiiraweditor.ui.components.GradientAdjustmentSlider
-import com.dueckis.kawaiiraweditor.ui.components.PanelSectionCard
 import com.dueckis.kawaiiraweditor.ui.components.AdjustmentSlider
 import com.dueckis.kawaiiraweditor.ui.components.ColorWheelControl
+import com.dueckis.kawaiiraweditor.ui.components.GradientAdjustmentSlider
+import com.dueckis.kawaiiraweditor.ui.components.PanelSectionCard
 import kotlin.math.roundToInt
 
 private enum class CurveChannel(val label: String) {
@@ -187,12 +187,13 @@ internal fun CurvesEditor(
             }
         }
 
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            val graphSize = minOf(maxWidth, 340.dp)
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             Box(
                 modifier =
                     Modifier
-                        .size(graphSize)
+                        .fillMaxWidth()
+                        .widthIn(max = 340.dp)
+                        .aspectRatio(1f)
                         .clip(RoundedCornerShape(10.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                         .pointerInput(activeChannel, pointHitRadiusPx) {
@@ -294,7 +295,7 @@ internal fun CurvesEditor(
                             }
                         }
             ) {
-                Canvas(modifier = Modifier.fillMaxWidth().height(graphSize)) {
+                Canvas(modifier = Modifier.matchParentSize()) {
                     val w = size.width
                     val h = size.height
 
@@ -354,17 +355,77 @@ internal fun ColorTabControls(
 ) {
     val isPhoneLayout = LocalConfiguration.current.screenWidthDp < 600
 
-    if (isPhoneLayout) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            PanelSectionCard(
-                title = "Curves",
-                subtitle = "Tap to add points • Drag to adjust",
-                modifier = Modifier.weight(1f)
-            ) {
+    // WRAP EVERYTHING IN A COLUMN TO PROVIDE MARGINS BETWEEN PANELS
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        if (isPhoneLayout) {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val totalWidth = maxWidth
+                val spacing = 12.dp
+                val cardInternalPadding = 24.dp
+                val columnWidth = (totalWidth - spacing) / 2
+                val wheelSize = minOf(columnWidth - cardInternalPadding, 170.dp)
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Max),
+                    horizontalArrangement = Arrangement.spacedBy(spacing),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    PanelSectionCard(
+                        title = "Curves",
+                        subtitle = "Tap to add points • Drag to adjust",
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                    ) {
+                        CurvesEditor(
+                            adjustments = adjustments,
+                            histogramData = histogramData,
+                            onAdjustmentsChange = onAdjustmentsChange,
+                            onBeginEditInteraction = onBeginEditInteraction,
+                            onEndEditInteraction = onEndEditInteraction
+                        )
+                    }
+
+                    PanelSectionCard(
+                        title = "Midtones",
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                    ) {
+                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            ColorWheelControl(
+                                label = "Midtones",
+                                wheelSize = wheelSize,
+                                modifier = Modifier.fillMaxWidth(),
+                                value = adjustments.colorGrading.midtones,
+                                defaultValue = HueSatLumState(),
+                                onValueChange = { updated ->
+                                    onAdjustmentsChange(adjustments.copy(colorGrading = adjustments.colorGrading.copy(midtones = updated)))
+                                },
+                                onBeginEditInteraction = onBeginEditInteraction,
+                                onEndEditInteraction = onEndEditInteraction
+                            )
+                        }
+                    }
+                }
+            }
+
+            PanelSectionCard(title = "Color Grading", subtitle = "Shadows / Highlights") {
+                ColorGradingEditor(
+                    colorGrading = adjustments.colorGrading,
+                    onColorGradingChange = { updated -> onAdjustmentsChange(adjustments.copy(colorGrading = updated)) },
+                    onBeginEditInteraction = onBeginEditInteraction,
+                    onEndEditInteraction = onEndEditInteraction,
+                    showMidtones = false
+                )
+            }
+        } else {
+            PanelSectionCard(title = "Curves", subtitle = "Tap to add points • Drag to adjust") {
                 CurvesEditor(
                     adjustments = adjustments,
                     histogramData = histogramData,
@@ -374,62 +435,24 @@ internal fun ColorTabControls(
                 )
             }
 
-            PanelSectionCard(title = "Midtones", modifier = Modifier.weight(1f)) {
-                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                    val wheelSize = minOf(maxWidth, 170.dp)
-                    ColorWheelControl(
-                        label = "Midtones",
-                        wheelSize = wheelSize,
-                        modifier = Modifier.fillMaxWidth(),
-                        value = adjustments.colorGrading.midtones,
-                        defaultValue = HueSatLumState(),
-                        onValueChange = { updated ->
-                            onAdjustmentsChange(adjustments.copy(colorGrading = adjustments.colorGrading.copy(midtones = updated)))
-                        },
-                        onBeginEditInteraction = onBeginEditInteraction,
-                        onEndEditInteraction = onEndEditInteraction
-                    )
-                }
+            PanelSectionCard(title = "Color Grading", subtitle = "Shadows / Midtones / Highlights") {
+                ColorGradingEditor(
+                    colorGrading = adjustments.colorGrading,
+                    onColorGradingChange = { updated -> onAdjustmentsChange(adjustments.copy(colorGrading = updated)) },
+                    onBeginEditInteraction = onBeginEditInteraction,
+                    onEndEditInteraction = onEndEditInteraction
+                )
             }
         }
 
-        PanelSectionCard(title = "Color Grading", subtitle = "Shadows / Highlights") {
-            ColorGradingEditor(
-                colorGrading = adjustments.colorGrading,
-                onColorGradingChange = { updated -> onAdjustmentsChange(adjustments.copy(colorGrading = updated)) },
-                onBeginEditInteraction = onBeginEditInteraction,
-                onEndEditInteraction = onEndEditInteraction,
-                showMidtones = false
-            )
-        }
-    } else {
-        PanelSectionCard(title = "Curves", subtitle = "Tap to add points • Drag to adjust") {
-            CurvesEditor(
-                adjustments = adjustments,
-                histogramData = histogramData,
-                onAdjustmentsChange = onAdjustmentsChange,
+        PanelSectionCard(title = "Color Mixer", subtitle = "Hue / Saturation / Luminance") {
+            HslEditor(
+                hsl = adjustments.hsl,
+                onHslChange = { updated -> onAdjustmentsChange(adjustments.copy(hsl = updated)) },
                 onBeginEditInteraction = onBeginEditInteraction,
                 onEndEditInteraction = onEndEditInteraction
             )
         }
-
-        PanelSectionCard(title = "Color Grading", subtitle = "Shadows / Midtones / Highlights") {
-            ColorGradingEditor(
-                colorGrading = adjustments.colorGrading,
-                onColorGradingChange = { updated -> onAdjustmentsChange(adjustments.copy(colorGrading = updated)) },
-                onBeginEditInteraction = onBeginEditInteraction,
-                onEndEditInteraction = onEndEditInteraction
-            )
-        }
-    }
-
-    PanelSectionCard(title = "Color Mixer", subtitle = "Hue / Saturation / Luminance") {
-        HslEditor(
-            hsl = adjustments.hsl,
-            onHslChange = { updated -> onAdjustmentsChange(adjustments.copy(hsl = updated)) },
-            onBeginEditInteraction = onBeginEditInteraction,
-            onEndEditInteraction = onEndEditInteraction
-        )
     }
 }
 
@@ -448,7 +471,8 @@ internal fun ColorGradingEditor(
         val midWheelSize = if (isWide) 240.dp else minOf(maxWidth, 220.dp)
         val sideWheelSize = minOf((maxWidth / 2) - 10.dp, if (isWide) 220.dp else 170.dp)
 
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        // INCREASED VERTICAL SPACING TO 20.dp TO SEPARATE WHEELS FROM SLIDERS
+        Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
             if (showMidtones) {
                 ColorWheelControl(
                     label = "Midtones",
@@ -485,28 +509,31 @@ internal fun ColorGradingEditor(
                 )
             }
 
-            AdjustmentSlider(
-                label = "Blending",
-                value = colorGrading.blending,
-                range = 0f..100f,
-                step = 1f,
-                defaultValue = 50f,
-                formatter = formatterInt,
-                onValueChange = { onColorGradingChange(colorGrading.copy(blending = it)) },
-                onInteractionStart = onBeginEditInteraction,
-                onInteractionEnd = onEndEditInteraction
-            )
-            AdjustmentSlider(
-                label = "Balance",
-                value = colorGrading.balance,
-                range = -100f..100f,
-                step = 1f,
-                defaultValue = 0f,
-                formatter = formatterInt,
-                onValueChange = { onColorGradingChange(colorGrading.copy(balance = it)) },
-                onInteractionStart = onBeginEditInteraction,
-                onInteractionEnd = onEndEditInteraction
-            )
+            // The sliders below will now have 20.dp margin from the wheels above
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                AdjustmentSlider(
+                    label = "Blending",
+                    value = colorGrading.blending,
+                    range = 0f..100f,
+                    step = 1f,
+                    defaultValue = 50f,
+                    formatter = formatterInt,
+                    onValueChange = { onColorGradingChange(colorGrading.copy(blending = it)) },
+                    onInteractionStart = onBeginEditInteraction,
+                    onInteractionEnd = onEndEditInteraction
+                )
+                AdjustmentSlider(
+                    label = "Balance",
+                    value = colorGrading.balance,
+                    range = -100f..100f,
+                    step = 1f,
+                    defaultValue = 0f,
+                    formatter = formatterInt,
+                    onValueChange = { onColorGradingChange(colorGrading.copy(balance = it)) },
+                    onInteractionStart = onBeginEditInteraction,
+                    onInteractionEnd = onEndEditInteraction
+                )
+            }
         }
     }
 }

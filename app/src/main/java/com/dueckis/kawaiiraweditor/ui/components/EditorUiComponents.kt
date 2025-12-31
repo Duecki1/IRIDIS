@@ -14,8 +14,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -31,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import kotlin.ranges.ClosedFloatingPointRange
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ToneMapperSection(
     toneMapper: String,
@@ -45,67 +50,28 @@ internal fun ToneMapperSection(
             .fillMaxWidth()
             .padding(vertical = 8.dp)
     ) {
-        Text(
-            text = "Tone Mapper",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(bottom = 8.dp),
-            color = MaterialTheme.colorScheme.onSurface
-        )
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = MaterialTheme.shapes.extraLarge,
-            color = MaterialTheme.colorScheme.surfaceContainerHighest,
-            tonalElevation = 0.dp
+        // Updated to use SingleChoiceSegmentedButtonRow
+        SingleChoiceSegmentedButtonRow(
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
-                modifier = Modifier.padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            // Index 0: Basic
+            SegmentedButton(
+                selected = toneMapper == "basic",
+                onClick = { onToneMapperChange("basic") },
+                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
             ) {
-                FilledTonalButton(
-                    onClick = { onToneMapperChange("basic") },
-                    modifier = Modifier.weight(1f),
-                    colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
-                        containerColor =
-                            if (toneMapper == "basic") MaterialTheme.colorScheme.secondaryContainer
-                            else MaterialTheme.colorScheme.surfaceContainerHighest,
-                        contentColor =
-                            if (toneMapper == "basic") MaterialTheme.colorScheme.onSecondaryContainer
-                            else MaterialTheme.colorScheme.onSurface
-                    ),
-                    shape = MaterialTheme.shapes.large
-                ) {
-                    Text("Basic")
-                }
-                FilledTonalButton(
-                    onClick = { onToneMapperChange("agx") },
-                    modifier = Modifier.weight(1f),
-                    colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
-                        containerColor =
-                            if (toneMapper == "agx") MaterialTheme.colorScheme.secondaryContainer
-                            else MaterialTheme.colorScheme.surfaceContainerHighest,
-                        contentColor =
-                            if (toneMapper == "agx") MaterialTheme.colorScheme.onSecondaryContainer
-                            else MaterialTheme.colorScheme.onSurface
-                    ),
-                    shape = MaterialTheme.shapes.large
-                ) {
-                    Text("AgX")
-                }
+                Text("Basic")
+            }
+
+            // Index 1: AgX
+            SegmentedButton(
+                selected = toneMapper == "agx",
+                onClick = { onToneMapperChange("agx") },
+                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+            ) {
+                Text("AgX")
             }
         }
-
-        AdjustmentSlider(
-            label = "Exposure",
-            value = exposure,
-            range = -5f..5f,
-            step = 0.01f,
-            defaultValue = 0f,
-            formatter = { value -> String.format(java.util.Locale.US, "%.2f", value) },
-            onValueChange = onExposureChange,
-            onInteractionStart = onInteractionStart,
-            onInteractionEnd = onInteractionEnd
-        )
     }
 }
 
