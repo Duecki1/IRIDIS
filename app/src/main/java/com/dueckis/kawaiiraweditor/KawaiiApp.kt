@@ -85,6 +85,7 @@ fun KawaiiApp(
     var lowQualityPreviewEnabled by remember { mutableStateOf(appPreferences.isLowQualityPreviewEnabled()) }
     var automaticTaggingEnabled by remember { mutableStateOf(appPreferences.isAutomaticTaggingEnabled()) }
     var environmentMaskingEnabled by remember { mutableStateOf(appPreferences.isEnvironmentMaskingEnabled()) }
+    var openEditorOnImportEnabled by remember { mutableStateOf(appPreferences.isOpenEditorOnImportEnabled()) }
 
     BackHandler(enabled = currentScreen == Screen.Settings) {
         currentScreen = Screen.Gallery
@@ -304,6 +305,7 @@ fun KawaiiApp(
                     tagger = tagger,
                     lowQualityPreviewEnabled = lowQualityPreviewEnabled,
                     automaticTaggingEnabled = automaticTaggingEnabled,
+                    openEditorOnImportEnabled = openEditorOnImportEnabled,
                     isTaggingInFlight = ::isTaggingInFlight,
                     onTaggingInFlightChange = ::setTaggingInFlight,
                     tagProgressFor = ::tagProgressFor,
@@ -415,6 +417,7 @@ fun KawaiiApp(
                         lowQualityPreviewEnabled = lowQualityPreviewEnabled,
                         automaticTaggingEnabled = automaticTaggingEnabled,
                         environmentMaskingEnabled = environmentMaskingEnabled,
+                        openEditorOnImportEnabled = openEditorOnImportEnabled,
                         onLowQualityPreviewEnabledChange = { enabled ->
                             lowQualityPreviewEnabled = enabled
                             appPreferences.setLowQualityPreviewEnabled(enabled)
@@ -426,6 +429,10 @@ fun KawaiiApp(
                         onEnvironmentMaskingEnabledChange = { enabled ->
                             environmentMaskingEnabled = enabled
                             appPreferences.setEnvironmentMaskingEnabled(enabled)
+                        },
+                        onOpenEditorOnImportEnabledChange = { enabled ->
+                            openEditorOnImportEnabled = enabled
+                            appPreferences.setOpenEditorOnImportEnabled(enabled)
                         },
                         onBackClick = { currentScreen = Screen.Gallery }
                     )

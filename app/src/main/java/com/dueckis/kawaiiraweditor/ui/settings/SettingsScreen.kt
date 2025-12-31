@@ -37,9 +37,11 @@ internal fun SettingsScreen(
     lowQualityPreviewEnabled: Boolean,
     automaticTaggingEnabled: Boolean,
     environmentMaskingEnabled: Boolean,
+    openEditorOnImportEnabled: Boolean,
     onLowQualityPreviewEnabledChange: (Boolean) -> Unit,
     onAutomaticTaggingEnabledChange: (Boolean) -> Unit,
     onEnvironmentMaskingEnabledChange: (Boolean) -> Unit,
+    onOpenEditorOnImportEnabledChange: (Boolean) -> Unit,
     onBackClick: () -> Unit
 ) {
     var showInfoDialog by remember { mutableStateOf(false) }
@@ -120,6 +122,22 @@ internal fun SettingsScreen(
                     )
                 },
                 modifier = Modifier.clickable { onEnvironmentMaskingEnabledChange(!environmentMaskingEnabled) }
+            )
+            ListItem(
+                headlineContent = { Text("Open editor after import") },
+                supportingContent = {
+                    Text(
+                        "Automatically open the imported RAW in the editor right away.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    ) },
+                trailingContent = {
+                    Switch(
+                        checked = openEditorOnImportEnabled,
+                        onCheckedChange = onOpenEditorOnImportEnabledChange
+                    )
+                },
+                modifier = Modifier.clickable { onOpenEditorOnImportEnabledChange(!openEditorOnImportEnabled) }
             )
         }
     }

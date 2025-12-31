@@ -135,6 +135,7 @@ internal fun GalleryScreen(
     tagger: ClipAutoTagger,
     lowQualityPreviewEnabled: Boolean,
     automaticTaggingEnabled: Boolean,
+    openEditorOnImportEnabled: Boolean,
     isTaggingInFlight: (String) -> Boolean,
     onTaggingInFlightChange: (String, Boolean) -> Unit,
     tagProgressFor: (String) -> Float?,
@@ -170,7 +171,7 @@ internal fun GalleryScreen(
     }
 
     // --- 1. REUSABLE IMPORT LOGIC ---
-    suspend fun importUri(uri: Uri) {
+    suspend fun importUri(uri: Uri, openAfterImport: Boolean) {
         val bytes = withContext(Dispatchers.IO) {
             context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
         }
@@ -187,7 +188,9 @@ internal fun GalleryScreen(
                 rawMetadata = emptyMap()
             )
             onAddClick(item)
-
+            if (openAfterImport) {
+                onOpenItem(item)
+            }
             // Start background processing (thumbnails, tagging, metadata)
             coroutineScope.launch {
                 val previewBytes = withContext(Dispatchers.Default) {
@@ -282,10 +285,12 @@ internal fun GalleryScreen(
         }
 
         if (urisToImport.isNotEmpty()) {
+            var opened = false
             urisToImport.forEach { uri ->
-                importUri(uri)
+                val openThis = openEditorOnImportEnabled && !opened
+                importUri(uri, openAfterImport = openThis)
+                if (openThis) opened = true
             }
-            // Clear the action so we don't re-import on rotation
             intent.action = null
             intent.data = null
         }
@@ -323,7 +328,7 @@ internal fun GalleryScreen(
     val pickRaw = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         coroutineScope.launch {
-            importUri(uri)
+            importUri(uri, openAfterImport = openEditorOnImportEnabled)
         }
     }
 
