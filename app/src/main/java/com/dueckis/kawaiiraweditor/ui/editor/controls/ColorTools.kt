@@ -1,5 +1,6 @@
 package com.dueckis.kawaiiraweditor.ui.editor.controls
 
+import android.annotation.SuppressLint
 import android.graphics.Color as AndroidColor
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -66,6 +67,7 @@ import com.dueckis.kawaiiraweditor.ui.components.AdjustmentSlider
 import com.dueckis.kawaiiraweditor.ui.components.ColorWheelControl
 import com.dueckis.kawaiiraweditor.ui.components.GradientAdjustmentSlider
 import com.dueckis.kawaiiraweditor.ui.components.PanelSectionCard
+import com.dueckis.kawaiiraweditor.ui.components.PanelTwoTitleSectionCard
 import kotlin.math.roundToInt
 
 private enum class CurveChannel(val label: String) {
@@ -345,6 +347,7 @@ internal fun CurvesEditor(
     }
 }
 
+@SuppressLint("UnusedBoxWithConstraintsScope")
 @Composable
 internal fun ColorTabControls(
     adjustments: AdjustmentState,
@@ -399,7 +402,6 @@ internal fun ColorTabControls(
                     ) {
                         Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                             ColorWheelControl(
-                                label = "Midtones",
                                 wheelSize = wheelSize,
                                 modifier = Modifier.fillMaxWidth(),
                                 value = adjustments.colorGrading.midtones,
@@ -415,7 +417,7 @@ internal fun ColorTabControls(
                 }
             }
 
-            PanelSectionCard(title = "Color Grading", subtitle = "Shadows / Highlights") {
+            PanelTwoTitleSectionCard(title = "Shadows", subtitle = "Highlights") {
                 ColorGradingEditor(
                     colorGrading = adjustments.colorGrading,
                     onColorGradingChange = { updated -> onAdjustmentsChange(adjustments.copy(colorGrading = updated)) },
@@ -456,6 +458,7 @@ internal fun ColorTabControls(
     }
 }
 
+@SuppressLint("UnusedBoxWithConstraintsScope")
 @Composable
 internal fun ColorGradingEditor(
     colorGrading: ColorGradingState,
@@ -475,7 +478,7 @@ internal fun ColorGradingEditor(
         Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
             if (showMidtones) {
                 ColorWheelControl(
-                    label = "Midtones",
+
                     wheelSize = midWheelSize,
                     modifier = Modifier.fillMaxWidth(),
                     value = colorGrading.midtones,
@@ -488,7 +491,7 @@ internal fun ColorGradingEditor(
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 ColorWheelControl(
-                    label = "Shadows",
+                    isHeaderCentered = true,
                     wheelSize = sideWheelSize,
                     modifier = Modifier.weight(1f),
                     value = colorGrading.shadows,
@@ -498,7 +501,7 @@ internal fun ColorGradingEditor(
                     onEndEditInteraction = onEndEditInteraction
                 )
                 ColorWheelControl(
-                    label = "Highlights",
+                    isHeaderCentered = true,
                     wheelSize = sideWheelSize,
                     modifier = Modifier.weight(1f),
                     value = colorGrading.highlights,

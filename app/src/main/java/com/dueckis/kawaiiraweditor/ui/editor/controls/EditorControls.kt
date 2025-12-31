@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -385,7 +386,7 @@ private fun ExpressiveSectionContainer(
             .fillMaxWidth()
             .padding(vertical = 6.dp),
         shape = RoundedCornerShape(24.dp), // Expressive Large Shape
-        color = MaterialTheme.colorScheme.surfaceContainer, // Dynamic color safe
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         tonalElevation = 2.dp
     ) {
         Column(
@@ -539,7 +540,6 @@ private fun MaskingUI(
 
     // --- Masks Carousel ---
     LazyRow(
-        contentPadding = PaddingValues(horizontal = 24.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         itemsIndexed(masks, key = { _, m -> m.id }) { index, mask ->
@@ -622,7 +622,7 @@ private fun MaskingUI(
 
                 // Sub-mask Toolbar (Add/Subtract + Chips)
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Add/Subtract Button
@@ -736,7 +736,7 @@ private fun MaskingUI(
                     Spacer(Modifier.height(16.dp))
 
                     Surface(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(24.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
                         tonalElevation = 4.dp
@@ -852,21 +852,7 @@ private fun MaskingUI(
                             else -> {
                                 ExpressiveSectionContainer(title = "Local Adjustments") {
                                     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                                        // Exposure first
-                                        AdjustmentSlider(
-                                            label = "Exposure",
-                                            value = selectedMask.adjustments.exposure,
-                                            range = -5f..5f,
-                                            step = 0.01f,
-                                            defaultValue = 0f,
-                                            formatter = { value -> String.format(Locale.US, "%.2f", value) },
-                                            onValueChange = { snapped ->
-                                                val updated = masks.map { m -> if (m.id != selectedMask.id) m else m.copy(adjustments = selectedMask.adjustments.copy(exposure = snapped)) }
-                                                onMasksChange(updated)
-                                            },
-                                            onInteractionStart = onBeginEditInteraction,
-                                            onInteractionEnd = onEndEditInteraction
-                                        )
+
 
                                         adjustmentSections.forEach { (_, controls) ->
                                             controls.forEach { control ->

@@ -8,7 +8,9 @@ import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -36,11 +38,11 @@ import kotlin.math.sqrt
 
 @Composable
 internal fun ColorWheelControl(
-    label: String,
     wheelSize: Dp,
     modifier: Modifier = Modifier,
     value: HueSatLumState,
     defaultValue: HueSatLumState,
+    isHeaderCentered: Boolean? = null, // Added parameter
     onValueChange: (HueSatLumState) -> Unit,
     onBeginEditInteraction: () -> Unit,
     onEndEditInteraction: () -> Unit
@@ -51,8 +53,11 @@ internal fun ColorWheelControl(
     val handleHitRadiusPx = with(LocalDensity.current) { 28.dp.toPx() }
 
     Column(modifier = modifier) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(text = label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+        // Inner Column handles the alignment of the header text and Reset button
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = if (isHeaderCentered == true) Alignment.CenterHorizontally else Alignment.Start
+        ) {
             Text(
                 text = "H ${value.hue.roundToInt()}  S ${value.saturation.roundToInt()}  L ${value.luminance.roundToInt()}",
                 style = MaterialTheme.typography.labelMedium,
@@ -180,7 +185,7 @@ internal fun ColorWheelControl(
                 drawCircle(color = Color.White, radius = 14f, center = Offset(px, py))
             }
         }
-
+        Spacer(modifier = Modifier.height(24.dp))
         AdjustmentSlider(
             label = "Luminance",
             value = value.luminance,
@@ -192,4 +197,3 @@ internal fun ColorWheelControl(
         )
     }
 }
-

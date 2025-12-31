@@ -25,6 +25,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -45,8 +46,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Redo
-import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.automirrored.rounded.Undo
+import androidx.compose.material.icons.automirrored.rounded.Redo
 import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
@@ -65,6 +66,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -82,6 +84,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
@@ -1885,7 +1888,7 @@ internal fun EditorScreen(
                                 onClick = ::undo,
                                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
                             ) {
-                                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo", tint = Color.White)
+                                Icon(Icons.AutoMirrored.Rounded.Undo, contentDescription = "Undo", tint = Color.White)
                             }
                             Spacer(modifier = Modifier.width(8.dp))
                             IconButton(
@@ -1893,7 +1896,7 @@ internal fun EditorScreen(
                                 onClick = ::redo,
                                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
                             ) {
-                                Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo", tint = Color.White)
+                                Icon(Icons.AutoMirrored.Rounded.Redo, contentDescription = "Redo", tint = Color.White)
                             }
                             Spacer(modifier = Modifier.width(8.dp))
 
@@ -2047,37 +2050,61 @@ internal fun EditorScreen(
                                         )
 
                                         // Overlay Controls - Bottom Left (Undo/Redo)
-                                        Row(
+                                        Surface(
                                             modifier = Modifier
                                                 .align(Alignment.BottomStart)
                                                 .padding(16.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(1.dp)
+                                            shape = CircleShape, // Fully rounded pill shape
+                                            color = Color(0xFF1C1B1F).copy(alpha = 0.8f), // Dark semi-transparent background
+                                            contentColor = Color.White
                                         ) {
-                                            // Undo Button (Left half of pill)
-                                            IconButton(
-                                                onClick = ::undo,
-                                                enabled = canUndo,
-                                                modifier = Modifier
-                                                    .background(
-                                                        Color.Black.copy(alpha = 0.6f),
-                                                        RoundedCornerShape(topStart = 50.dp, bottomStart = 50.dp, topEnd = 0.dp, bottomEnd = 0.dp)
-                                                    ),
-                                                colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White, disabledContentColor = Color.White.copy(alpha = 0.38f))
+                                            Row(
+                                                modifier = Modifier.height(IntrinsicSize.Min), // Essential for the divider to fill height
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.Center
                                             ) {
-                                                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo")
-                                            }
-                                            // Redo Button (Right half of pill)
-                                            IconButton(
-                                                onClick = ::redo,
-                                                enabled = canRedo,
-                                                modifier = Modifier
-                                                    .background(
-                                                        Color.Black.copy(alpha = 0.6f),
-                                                        RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp, topEnd = 50.dp, bottomEnd = 50.dp)
+                                                // Undo Button
+                                                IconButton(
+                                                    onClick = ::undo,
+                                                    enabled = canUndo,
+                                                    colors = IconButtonDefaults.iconButtonColors(
+                                                        contentColor = Color.White,
+                                                        disabledContentColor = Color.White.copy(alpha = 0.38f)
                                                     ),
-                                                colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White, disabledContentColor = Color.White.copy(alpha = 0.38f))
-                                            ) {
-                                                Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo")
+                                                    modifier = Modifier.size(48.dp) // Standard expressive touch target
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.AutoMirrored.Rounded.Undo, // Rounded variant looks smoother
+                                                        contentDescription = "Undo",
+                                                        modifier = Modifier.size(20.dp) // Slightly smaller icon for the "refined" look
+                                                    )
+                                                }
+
+                                                // The thin separator line
+                                                VerticalDivider(
+                                                    thickness = 1.dp,
+                                                    color = Color.White.copy(alpha = 0.15f),
+                                                    modifier = Modifier
+                                                        .padding(vertical = 12.dp) // Add padding so lines don't touch edges
+                                                        .fillMaxHeight()
+                                                )
+
+                                                // Redo Button
+                                                IconButton(
+                                                    onClick = ::redo,
+                                                    enabled = canRedo,
+                                                    colors = IconButtonDefaults.iconButtonColors(
+                                                        contentColor = Color.White,
+                                                        disabledContentColor = Color.White.copy(alpha = 0.38f)
+                                                    ),
+                                                    modifier = Modifier.size(48.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.AutoMirrored.Rounded.Redo,
+                                                        contentDescription = "Redo",
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                }
                                             }
                                         }
 
@@ -2097,14 +2124,24 @@ internal fun EditorScreen(
                                                 }
                                             }
 
-                                            IconButton(
-                                                onClick = { /* handled by interactionSource */ },
+                                            Surface(
+                                                onClick = { /* handled by interactionSource if needed, or keep empty for press-hold */ },
                                                 interactionSource = interactionSource,
-                                                modifier = Modifier
-                                                    .background(Color.Black.copy(alpha = 0.6f), CircleShape),
-                                                colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
+                                                shape = RoundedCornerShape(24.dp), // "Squircle" expressive shape
+                                                color = Color(0xFF1C1B1F).copy(alpha = 0.8f),
+                                                contentColor = Color.White,
+                                                modifier = Modifier.size(56.dp) // Slightly larger floating action size
                                             ) {
-                                                Icon(Icons.Filled.CompareArrows, contentDescription = "Compare")
+                                                Box(contentAlignment = Alignment.Center) {
+                                                    Icon(
+                                                        // Use a diagonal arrow icon if available, or fallback to CompareArrows
+                                                        imageVector = Icons.Default.CompareArrows, // Or Icons.Rounded.Swaps
+                                                        contentDescription = "Compare",
+                                                        modifier = Modifier
+                                                            .size(26.dp)
+                                                            .rotate(45f) // Rotate to match the diagonal look in the picture
+                                                    )
+                                                }
                                             }
                                         }
                                     }

@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import kotlin.ranges.ClosedFloatingPointRange
@@ -297,6 +298,75 @@ internal fun PanelSectionCard(
                 }
                 trailing?.invoke()
             }
+            content()
+        }
+    }
+}
+
+@Composable
+internal fun PanelTwoTitleSectionCard(
+    title: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    trailing: (@Composable (() -> Unit))? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+        shape = MaterialTheme.shapes.large
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // Header Box allows Trailing to float over the centered content
+            Box(modifier = Modifier.fillMaxWidth()) {
+
+                // Title/Subtitle Row divided into two equal halves
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Left Half: Title
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.titleMedium, // Same font
+                            color = MaterialTheme.colorScheme.onSurface,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    // Right Half: Subtitle
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        subtitle?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.titleMedium, // Same font as title
+                                color = MaterialTheme.colorScheme.onSurface,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+
+                // Trailing icon pinned to the far right
+                if (trailing != null) {
+                    Box(
+                        modifier = Modifier.align(Alignment.CenterEnd)
+                    ) {
+                        trailing()
+                    }
+                }
+            }
+
             content()
         }
     }
