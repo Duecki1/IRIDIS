@@ -4,7 +4,6 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
-
 kotlin {
     iosX64()
     iosArm64()
@@ -13,10 +12,16 @@ kotlin {
     targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget>().configureEach {
         binaries.framework {
             baseName = "KawaiiShared"
+            isStatic = true // Recommended for Compose Multiplatform
         }
     }
 
     sourceSets {
+        all {
+            languageSettings.optIn("kotlinx.cinterop.ExperimentalForeignApi")
+            languageSettings.optIn("androidx.compose.material3.ExperimentalMaterial3Api")
+            languageSettings.optIn("androidx.compose.ui.ExperimentalComposeUiApi")
+        }
         val commonMain by getting {
             dependencies {
                 implementation(compose.runtime)

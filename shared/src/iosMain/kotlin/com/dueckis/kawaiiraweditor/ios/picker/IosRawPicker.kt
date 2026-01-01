@@ -9,14 +9,13 @@ import platform.darwin.NSObject
 data class PickedFile(val name: String, val bytes: ByteArray)
 
 class IosRawPicker(
-    private val presenter: UIViewController,
     private val onPicked: (List<PickedFile>) -> Unit
 ) {
-    // Keep delegate strongly referenced, or iOS will drop callbacks :3
     private val delegate = object : NSObject(), UIDocumentPickerDelegateProtocol, UINavigationControllerDelegateProtocol {
         override fun documentPicker(controller: UIDocumentPickerViewController, didPickDocumentsAtURLs: List<*>) {
             val urls = didPickDocumentsAtURLs.filterIsInstance<NSURL>()
             val files = urls.mapNotNull { url ->
+                // "startAccessing..." is required for picking files outside the sandbox
                 val secured = url.startAccessingSecurityScopedResource()
                 try {
                     val data = NSData.dataWithContentsOfURL(url) ?: return@mapNotNull null
@@ -35,13 +34,18 @@ class IosRawPicker(
     }
 
     fun present() {
-        // Old-but-solid API: accept any “public.item” from Files/iCloud/etc.
         val picker = UIDocumentPickerViewController(
             documentTypes = listOf("public.item"),
-            inMode = UIDocumentPickerModeImport
+            // FIX: Added 'UIDocumentPickerMode.' prefix
+            inMode = UIDocumentPickerMode.UIDocumentPickerModeImport
         )
         picker.allowsMultipleSelection = true
         picker.delegate = delegate
-        presenter.presentViewController(picker, animated = true, completion = null)
+
+        // FIX: Find the root controller dynamically instead of passing it in
+        val window = UIApplication.sharedApplication.keyWindow
+        val rootController = window?.rootViewController
+
+        rootController?.presentViewController(picker, animated = true, completion = null)
     }
 }

@@ -34,10 +34,9 @@ fun MainViewController(): UIViewController = ComposeUIViewController {
 
     LaunchedEffect(Unit) { refresh() }
 
-    // Presenter is the ComposeUIViewController itself (this works fine for modal pickers)
-    val presenter = remember { this@ComposeUIViewController }
-    val picker = remember(presenter) {
-        IosRawPicker(presenter = presenter, onPicked = { files ->
+    // FIX: Removed 'presenter' argument. The picker now handles it internally.
+    val picker = remember {
+        IosRawPicker(onPicked = { files ->
             if (files.isEmpty()) return@IosRawPicker
             scope.launch {
                 withContext(Dispatchers.Default) {
