@@ -18,20 +18,17 @@ jobs:
           java-version: '17'
           distribution: 'zulu'
 
-      # REQUIRED because you have a 'rust' folder.
-      # Ensures the runner can compile Rust code for iOS architectures.
       - name: Setup Rust targets
         run: |
           rustup target add aarch64-apple-ios x86_64-apple-ios
 
       # 1. Build the Kotlin Framework
-      # Targeting ':shared' based on your folder structure. 
-      # If this fails with "project not found", try changing it to ':app:iosArm64Binaries'
+      # Generates 'KawaiiShared.framework'
       - name: Build Kotlin Framework
         run: ./gradlew :shared:iosArm64Binaries
 
       # 2. Generate Xcode Project
-      # Creates iosApp.xcodeproj from your project.yml
+      # Creates KawaiiRawEditor.xcodeproj
       - name: Generate Xcode Project
         run: |
           brew install xcodegen
@@ -39,13 +36,13 @@ jobs:
           xcodegen generate
 
       # 3. Build Unsigned .app
-      # Forces Xcode to build without checking for a developer account
+      # FIX: Changed -scheme to KawaiiRawEditor (was iosApp)
       - name: Build Unsigned .app
         run: |
           cd iosApp
           xcodebuild \
             -project KawaiiRawEditor.xcodeproj \
-            -scheme iosApp \
+            -scheme KawaiiRawEditor \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -55,16 +52,15 @@ jobs:
             clean build
 
       # 4. Package into IPA
-      # Manually zips the .app bundle into an installable .ipa format
+      # FIX: The app bundle is named KawaiiRawEditor.app
       - name: Package into IPA
         run: |
           cd iosApp/build/Release-iphoneos
           mkdir Payload
-          cp -r iosApp.app Payload/
+          cp -r KawaiiRawEditor.app Payload/
           zip -r iosApp-unsigned.ipa Payload
 
       # 5. Upload Artifact
-      # Makes the file available for download in the GitHub Actions tab
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
