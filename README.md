@@ -54,7 +54,7 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Widget showing all edits
 - Tab for cropping and rotating the image (Buggy with masks)
 - Tag system for mask names
-- 
+  
 ## Planned/Issues:
 
 - Clarity and such slider need to actually work
@@ -67,6 +67,7 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Mask preview needs improvement
 - Subject masks should be stored
 - Save calculated AI Masks
+- Tablet UI design
   
 ## Info
 Downloading the app will automatically install a Subject selection ML Model.
