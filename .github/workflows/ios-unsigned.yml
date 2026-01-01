@@ -28,9 +28,9 @@ jobs:
         run: |
           rustup target add aarch64-apple-ios x86_64-apple-ios
 
-      # 1. Build the Kotlin Framework (Debug)
-      - name: Build Kotlin Framework (Debug)
-        run: ./gradlew :shared:linkDebugFrameworkIosArm64 --parallel
+      # 1. Build the Kotlin XCFramework (Debug)
+      - name: Build Kotlin XCFramework (Debug)
+        run: ./gradlew :shared:assembleKawaiiSharedDebugXCFramework --parallel
 
       # 2. Generate Xcode Project
       - name: Generate Xcode Project
