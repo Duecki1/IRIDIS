@@ -1,0 +1,58 @@
+name: Build iOS App (Unsigned)
+
+on:
+  push:
+    branches: [ "main", "IOSTest" ]
+  workflow_dispatch:
+
+jobs:
+  build-unsigned-ios:
+    runs-on: macos-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'zulu'
+
+      # 1. Build the Kotlin Framework
+      # We skip the 'embedAndSign' task and just ensure the framework is ready
+      - name: Build Kotlin Framework
+        run: ./gradlew :composeApp:iosArm64Binaries
+
+      # 2. Build the iOS App without Signing
+      # We use 'clean build' instead of archive to get the raw .app bundle
+      # We explicitly disable signing requirements
+      - name: Build Unsigned .app
+        run: |
+          cd iosApp
+          xcodebuild \
+            -project iosApp.xcodeproj \
+            -scheme iosApp \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build
+
+      # 3. Package into .ipa
+      # Since we can't use 'exportArchive' (which requires signing), we manually zip it.
+      # The structure MUST be Payload/YourApp.app
+      - name: Package into IPA
+        run: |
+          cd iosApp/build/Release-iphoneos
+          mkdir Payload
+          cp -r iosApp.app Payload/
+          zip -r iosApp-unsigned.ipa Payload
+
+      # 4. Upload the IPA to GitHub
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-app-unsigned
+          path: iosApp/build/Release-iphoneos/iosApp-unsigned.ipa
