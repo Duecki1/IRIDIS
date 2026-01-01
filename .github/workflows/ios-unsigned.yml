@@ -18,14 +18,28 @@ jobs:
           java-version: '17'
           distribution: 'zulu'
 
-      # 1. Build the Kotlin Framework
-      # We skip the 'embedAndSign' task and just ensure the framework is ready
-      - name: Build Kotlin Framework
-        run: ./gradlew :composeApp:iosArm64Binaries
+      # REQUIRED because you have a 'rust' folder.
+      # Ensures the runner can compile Rust code for iOS architectures.
+      - name: Setup Rust targets
+        run: |
+          rustup target add aarch64-apple-ios x86_64-apple-ios
 
-      # 2. Build the iOS App without Signing
-      # We use 'clean build' instead of archive to get the raw .app bundle
-      # We explicitly disable signing requirements
+      # 1. Build the Kotlin Framework
+      # Targeting ':shared' based on your folder structure. 
+      # If this fails with "project not found", try changing it to ':app:iosArm64Binaries'
+      - name: Build Kotlin Framework
+        run: ./gradlew :shared:iosArm64Binaries
+
+      # 2. Generate Xcode Project
+      # Creates iosApp.xcodeproj from your project.yml
+      - name: Generate Xcode Project
+        run: |
+          brew install xcodegen
+          cd iosApp
+          xcodegen generate
+
+      # 3. Build Unsigned .app
+      # Forces Xcode to build without checking for a developer account
       - name: Build Unsigned .app
         run: |
           cd iosApp
@@ -40,9 +54,8 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             clean build
 
-      # 3. Package into .ipa
-      # Since we can't use 'exportArchive' (which requires signing), we manually zip it.
-      # The structure MUST be Payload/YourApp.app
+      # 4. Package into IPA
+      # Manually zips the .app bundle into an installable .ipa format
       - name: Package into IPA
         run: |
           cd iosApp/build/Release-iphoneos
@@ -50,7 +63,8 @@ jobs:
           cp -r iosApp.app Payload/
           zip -r iosApp-unsigned.ipa Payload
 
-      # 4. Upload the IPA to GitHub
+      # 5. Upload Artifact
+      # Makes the file available for download in the GitHub Actions tab
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
