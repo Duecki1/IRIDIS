@@ -18,8 +18,7 @@ jobs:
           java-version: '17'
           distribution: 'zulu'
 
-      # OPTIMIZATION 1: Cache Gradle and Kotlin Native Compiler
-      # This prevents downloading the huge compiler and libraries on every run.
+      # Cache Gradle to speed up future builds
       - name: Setup Gradle Cache
         uses: gradle/actions/setup-gradle@v3
         with:
@@ -29,8 +28,7 @@ jobs:
         run: |
           rustup target add aarch64-apple-ios x86_64-apple-ios
 
-      # OPTIMIZATION 2: Build DEBUG Framework only
-      # 'linkDebug...' is much faster than 'iosArm64Binaries' (which builds Release too).
+      # 1. Build the Kotlin Framework (Debug)
       - name: Build Kotlin Framework (Debug)
         run: ./gradlew :shared:linkDebugFrameworkIosArm64 --parallel
 
@@ -42,8 +40,7 @@ jobs:
           xcodegen generate
 
       # 3. Build Unsigned .app (Debug)
-      # OPTIMIZATION 3: Changed -configuration to Debug
-      # This skips the heavy LLVM optimizations.
+      # FIX: Added SYMROOT=$(PWD)/build to force output to the correct folder
       - name: Build Unsigned .app
         run: |
           cd iosApp
@@ -53,12 +50,14 @@ jobs:
             -configuration Debug \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
+            SYMROOT=$(PWD)/build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             clean build
 
       # 4. Package into IPA
+      # Now this folder is guaranteed to exist
       - name: Package into IPA
         run: |
           cd iosApp/build/Debug-iphoneos
