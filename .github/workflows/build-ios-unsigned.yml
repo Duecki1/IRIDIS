@@ -2,100 +2,42 @@ name: Build iOS (Unsigned/AdHoc)
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "IOSTest"]
   pull_request:
     branches: ["main"]
-
-concurrency:
-  group: ios-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: macos-latest
 
     env:
-      # ---- adjust these to your iOS folder + scheme ----
       IOS_DIR: iosApp
-      XCODE_SCHEME: KawaiiRawEditor
-      XCODE_CONFIGURATION: Debug
-      # If you use a workspace (Pods/SwiftPM integration etc), set WORKSPACE to your .xcworkspace name
-      XCODE_WORKSPACE: ""
-      # Otherwise set PROJECT to your .xcodeproj name
-      XCODE_PROJECT: KawaiiRawEditor.xcodeproj
-
-      # output
+      SCHEME: KawaiiRawEditor
+      CONFIG: Debug
+      PROJECT: KawaiiRawEditor.xcodeproj
       ARCHIVE_PATH: build/ios/KawaiiRawEditor.xcarchive
-      ARTIFACT_DIR: build_artifacts
+      OUT_DIR: build_artifacts
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # Java for Gradle / Kotlin Multiplatform builds
-      - name: Setup Java
+      - name: Setup Java (for Gradle/KMP)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Gradle cache
-        uses: gradle/actions/setup-gradle@v4
+      # Optional: only if your iOS app depends on a KMP :shared framework being built first
+      - name: Build KMP iOS framework (optional)
+        run: ./gradlew :shared:linkDebugFrameworkIosArm64 || true
 
-      # Cache Kotlin/Native (helps a lot for KMP iOS)
-      - name: Cache Kotlin/Native
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.konan
-            ~/Library/Caches/org.jetbrains.kotlin.native
-          key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts', '**/gradle.properties', 'gradle/libs.versions.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-konan-
-
-      - name: Show tool versions
+      - name: Archive iOS app (unsigned)
         run: |
           set -euo pipefail
-          java -version
-          ./gradlew --version
-          xcodebuild -version
-
-      # Optional: build KMP iOS frameworks (only runs if you have a :shared module)
-      - name: Build KMP iOS frameworks (optional)
-        if: ${{ hashFiles('shared/build.gradle.kts') != '' }}
-        run: |
-          set -euo pipefail
-          ./gradlew :shared:linkDebugFrameworkIosArm64 :shared:linkDebugFrameworkIosSimulatorArm64
-
-      # Decide workspace vs project automatically (workspace wins if it exists)
-      - name: Resolve Xcode container
-        id: xcode
-        run: |
-          set -euo pipefail
-          if [ -n "${XCODE_WORKSPACE}" ] && [ -d "${IOS_DIR}/${XCODE_WORKSPACE}" ]; then
-            echo "container=-workspace" >> $GITHUB_OUTPUT
-            echo "path=${IOS_DIR}/${XCODE_WORKSPACE}" >> $GITHUB_OUTPUT
-          elif [ -d "${IOS_DIR}/${XCODE_PROJECT}" ]; then
-            echo "container=-project" >> $GITHUB_OUTPUT
-            echo "path=${IOS_DIR}/${XCODE_PROJECT}" >> $GITHUB_OUTPUT
-          else
-            echo "No Xcode project/workspace found in ${IOS_DIR}."
-            echo "Expected either:"
-            echo "  - ${IOS_DIR}/${XCODE_WORKSPACE} (directory), or"
-            echo "  - ${IOS_DIR}/${XCODE_PROJECT} (directory)"
-            exit 1
-          fi
-
-      - name: Build iOS archive (unsigned)
-        run: |
-          set -euo pipefail
-          rm -rf "${ARCHIVE_PATH}"
-          mkdir -p "$(dirname "${ARCHIVE_PATH}")"
-
           xcodebuild \
-            ${{ steps.xcode.outputs.container }} "${{ steps.xcode.outputs.path }}" \
-            -scheme "${XCODE_SCHEME}" \
-            -configuration "${XCODE_CONFIGURATION}" \
+            -project "${IOS_DIR}/${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration "${CONFIG}" \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -archivePath "${ARCHIVE_PATH}" \
@@ -105,40 +47,19 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM=""
 
-      # Create an .ipa by zipping the .app into Payload/
-      - name: Package unsigned IPA
+      - name: Package IPA (unsigned)
         run: |
           set -euo pipefail
-          rm -rf "${ARTIFACT_DIR}"
-          mkdir -p "${ARTIFACT_DIR}/Payload"
+          rm -rf "${OUT_DIR}"
+          mkdir -p "${OUT_DIR}/Payload"
 
-          APP_PATH="${ARCHIVE_PATH}/Products/Applications/${XCODE_SCHEME}.app"
-          if [ ! -d "${APP_PATH}" ]; then
-            echo "Expected app not found at: ${APP_PATH}"
-            echo "Available apps:"
-            ls -la "${ARCHIVE_PATH}/Products/Applications" || true
-            exit 1
-          fi
+          APP_PATH="${ARCHIVE_PATH}/Products/Applications/${SCHEME}.app"
+          cp -R "${APP_PATH}" "${OUT_DIR}/Payload/"
+          (cd "${OUT_DIR}" && /usr/bin/zip -r "${SCHEME}-unsigned.ipa" Payload)
 
-          cp -R "${APP_PATH}" "${ARTIFACT_DIR}/Payload/"
-          (cd "${ARTIFACT_DIR}" && /usr/bin/zip -r "${XCODE_SCHEME}-unsigned.ipa" Payload)
-
-      - name: Upload IPA artifact
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ios-app-unsigned
           path: build_artifacts/*.ipa
           if-no-files-found: error
-
-      # Optional: Upload dSYMs (nice for symbolication later)
-      - name: Upload dSYMs (optional)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-dsyms
-          path: build/ios/**/*.dSYM
-          if-no-files-found: ignore
-
-      # ---- AdHoc signing (optional) ----
-      # If you want *real* AdHoc installable IPAs, you’ll need cert + provisioning as secrets.
-      # I can wire this in cleanly once you tell me the Xcode bundle id + team id + provisioning profile name :3
