@@ -652,10 +652,16 @@ private data class BrushEvent(
     val points: List<MaskPoint>
 )
 
+internal enum class MaskOverlayMode {
+    Composite,
+    Result,
+}
+
 internal fun buildMaskOverlayBitmap(
     mask: MaskState,
     targetWidth: Int,
     targetHeight: Int,
+    overlayMode: MaskOverlayMode,
     highlightSubMaskId: String? = null
 ): Bitmap {
     val width = targetWidth.coerceAtLeast(1)
@@ -671,69 +677,119 @@ internal fun buildMaskOverlayBitmap(
         return if (value <= 1.5f) (value * baseDim).coerceAtLeast(0f) else value
     }
 
-    fun applyPixel(mode: SubMaskMode, current: Int, intensity: Int): Int {
-        return when (mode) {
-            SubMaskMode.Additive -> {
-                val c = current / 255f
-                val i = intensity / 255f
-                ((1f - (1f - c) * (1f - i)).coerceIn(0f, 1f) * 255f).roundToInt()
-            }
-            SubMaskMode.Subtractive -> {
-                val currentF = current / 255f
-                val intensityF = intensity / 255f
-                ((currentF * (1f - intensityF)).coerceIn(0f, 1f) * 255f).roundToInt()
-            }
-        }
+    fun screenBlend(current: Int, intensity: Int): Int {
+        val c = current.coerceIn(0, 255)
+        val i = intensity.coerceIn(0, 255)
+        val invC = 255 - c
+        val invI = 255 - i
+        return 255 - ((invC * invI + 127) / 255)
     }
 
-    fun circleIntensity(dist: Float, radius: Float, feather: Float): Int {
-        if (radius <= 0.5f) return 0
-        val featherClamped = feather.coerceIn(0f, 1f)
-        if (featherClamped <= 0.0001f) {
-            return if (dist <= radius) 255 else 0
-        }
-        val inner = radius * (1f - featherClamped)
-        if (dist <= inner) return 255
-        if (dist >= radius) return 0
-        val t = (dist - inner) / (radius - inner).coerceAtLeast(0.001f)
-        return ((1f - t).coerceIn(0f, 1f) * 255f).roundToInt()
+    fun subtractBlend(current: Int, intensity: Int): Int {
+        val c = current.coerceIn(0, 255)
+        val i = intensity.coerceIn(0, 255)
+        val invI = 255 - i
+        return ((c * invI + 127) / 255).coerceIn(0, 255)
     }
 
-    val additive = IntArray(width * height) { 0 }
-    val subtractive = IntArray(width * height) { 0 }
-    val selection = IntArray(width * height) { 0 }
+    fun alphaFor(intensity: Int): Int = (intensity.coerceIn(0, 255) * 170 / 255).coerceIn(0, 255)
 
-    fun plot(mode: SubMaskMode, idx: Int, intensity: Int) {
-        if (intensity <= 0) return
-        val target = if (mode == SubMaskMode.Subtractive) subtractive else additive
-        if (intensity > target[idx]) target[idx] = intensity
+    fun argb(alpha: Int, r: Int, g: Int, b: Int): Int {
+        val a = alpha.coerceIn(0, 255)
+        return (a shl 24) or (r.coerceIn(0, 255) shl 16) or (g.coerceIn(0, 255) shl 8) or b.coerceIn(0, 255)
     }
 
-    fun applyToSelection(mode: SubMaskMode, idx: Int, intensity: Int) {
-        if (intensity <= 0) return
-        selection[idx] = applyPixel(mode, selection[idx], intensity)
+    fun over(dst: Int, src: Int): Int {
+        val sa = (src ushr 24) and 0xFF
+        if (sa == 0) return dst
+        val da = (dst ushr 24) and 0xFF
+
+        val sr = (src ushr 16) and 0xFF
+        val sg = (src ushr 8) and 0xFF
+        val sb = src and 0xFF
+
+        val dr = (dst ushr 16) and 0xFF
+        val dg = (dst ushr 8) and 0xFF
+        val db = dst and 0xFF
+
+        val invSa = 255 - sa
+        val outA = (sa + (da * invSa + 127) / 255).coerceIn(0, 255)
+        val outR = (sr + (dr * invSa + 127) / 255).coerceIn(0, 255)
+        val outG = (sg + (dg * invSa + 127) / 255).coerceIn(0, 255)
+        val outB = (sb + (db * invSa + 127) / 255).coerceIn(0, 255)
+        return (outA shl 24) or (outR shl 16) or (outG shl 8) or outB
     }
 
-    fun plotAndApply(mode: SubMaskMode, idx: Int, intensity: Int) {
-        plot(mode, idx, intensity)
-        applyToSelection(mode, idx, intensity)
-    }
+    fun applyFeatheredCircleScreen(target: IntArray, cx: Float, cy: Float, radius: Float, feather: Float) {
+        if (radius <= 0.5f) return
+        val featherAmount = feather.coerceIn(0f, 1f)
+        val innerRadius = radius * (1f - featherAmount)
+        val outerRadius = radius
+        val outerSq = outerRadius * outerRadius
 
-    fun applyCircle(mode: SubMaskMode, cx: Float, cy: Float, radius: Float, feather: Float) {
-        val x0 = (cx - radius - 1f).toInt().coerceAtLeast(0)
-        val y0 = (cy - radius - 1f).toInt().coerceAtLeast(0)
-        val x1 = (cx + radius + 1f).toInt().coerceAtMost(width - 1)
-        val y1 = (cy + radius + 1f).toInt().coerceAtMost(height - 1)
+        val x0 = kotlin.math.floor(cx - outerRadius).toInt().coerceAtLeast(0)
+        val y0 = kotlin.math.floor(cy - outerRadius).toInt().coerceAtLeast(0)
+        val x1 = kotlin.math.ceil(cx + outerRadius).toInt().coerceAtMost(width - 1)
+        val y1 = kotlin.math.ceil(cy + outerRadius).toInt().coerceAtMost(height - 1)
+
         for (y in y0..y1) {
-            val dy = y + 0.5f - cy
             val row = y * width
+            val dy = y.toFloat() - cy
             for (x in x0..x1) {
-                val dx = x + 0.5f - cx
-                val dist = kotlin.math.sqrt(dx * dx + dy * dy)
-                val intensity = circleIntensity(dist, radius, feather)
+                val dx = x.toFloat() - cx
+                val distSq = dx * dx + dy * dy
+                if (distSq > outerSq) continue
+                val dist = kotlin.math.sqrt(distSq)
+                val intensityF =
+                    if (dist <= innerRadius) {
+                        1f
+                    } else if (outerRadius > innerRadius) {
+                        1f - ((dist - innerRadius) / (outerRadius - innerRadius)).coerceIn(0f, 1f)
+                    } else {
+                        0f
+                    }
+                if (intensityF <= 0f) continue
+                val intensity = (intensityF * 255f).roundToInt().coerceIn(0, 255)
                 if (intensity == 0) continue
                 val idx = row + x
-                plotAndApply(mode, idx, intensity)
+                target[idx] = screenBlend(target[idx], intensity)
+            }
+        }
+    }
+
+    fun applyFeatheredCircleSub(target: IntArray, cx: Float, cy: Float, radius: Float, feather: Float) {
+        if (radius <= 0.5f) return
+        val featherAmount = feather.coerceIn(0f, 1f)
+        val innerRadius = radius * (1f - featherAmount)
+        val outerRadius = radius
+        val outerSq = outerRadius * outerRadius
+
+        val x0 = kotlin.math.floor(cx - outerRadius).toInt().coerceAtLeast(0)
+        val y0 = kotlin.math.floor(cy - outerRadius).toInt().coerceAtLeast(0)
+        val x1 = kotlin.math.ceil(cx + outerRadius).toInt().coerceAtMost(width - 1)
+        val y1 = kotlin.math.ceil(cy + outerRadius).toInt().coerceAtMost(height - 1)
+
+        for (y in y0..y1) {
+            val row = y * width
+            val dy = y.toFloat() - cy
+            for (x in x0..x1) {
+                val dx = x.toFloat() - cx
+                val distSq = dx * dx + dy * dy
+                if (distSq > outerSq) continue
+                val dist = kotlin.math.sqrt(distSq)
+                val intensityF =
+                    if (dist <= innerRadius) {
+                        1f
+                    } else if (outerRadius > innerRadius) {
+                        1f - ((dist - innerRadius) / (outerRadius - innerRadius)).coerceIn(0f, 1f)
+                    } else {
+                        0f
+                    }
+                if (intensityF <= 0f) continue
+                val intensity = (intensityF * 255f).roundToInt().coerceIn(0, 255)
+                if (intensity == 0) continue
+                val idx = row + x
+                target[idx] = subtractBlend(target[idx], intensity)
             }
         }
     }
@@ -810,209 +866,361 @@ internal fun buildMaskOverlayBitmap(
         return dst
     }
 
-    mask.subMasks.forEach { sub ->
-        if (!sub.visible) return@forEach
-        if (highlightSubMaskId != null && sub.id != highlightSubMaskId) return@forEach
-        when (sub.type) {
-            SubMaskType.Brush.id -> {
-                val events =
-                    sub.lines.mapNotNull { line ->
-                        if (line.points.isEmpty()) return@mapNotNull null
-                        val effectiveMode = if (line.tool == "eraser") SubMaskMode.Subtractive else sub.mode
-                        BrushEvent(
-                            order = line.order,
-                            mode = effectiveMode,
-                            brushSize = line.brushSize,
-                            feather = line.feather,
-                            points = line.points
-                        )
-                    }.sortedBy { it.order }
+    fun brushEvents(sub: SubMaskState): List<BrushEvent> {
+        return sub.lines.mapNotNull { line ->
+            if (line.points.isEmpty()) return@mapNotNull null
+            val effectiveMode = if (line.tool == "eraser") SubMaskMode.Subtractive else sub.mode
+            BrushEvent(
+                order = line.order,
+                mode = effectiveMode,
+                brushSize = line.brushSize,
+                feather = line.feather,
+                points = line.points
+            )
+        }.sortedBy { it.order }
+    }
 
-                events.forEach { event ->
-                    if (event.points.isEmpty()) return@forEach
-                    val feather = event.feather.coerceIn(0f, 1f)
-                    if (event.points.size == 1) {
-                        val (x, y) = denormPoint(event.points[0])
-                        val radius = brushRadiusPx(event.brushSize, event.points[0].pressure)
-                        applyCircle(event.mode, x, y, radius, feather)
-                        return@forEach
+    fun applyBrushStamps(event: BrushEvent, applyStamp: (cx: Float, cy: Float, radius: Float, feather: Float) -> Unit) {
+        if (event.points.isEmpty()) return
+        val feather = event.feather.coerceIn(0f, 1f)
+        if (event.points.size == 1) {
+            val (x, y) = denormPoint(event.points[0])
+            val radius = brushRadiusPx(event.brushSize, event.points[0].pressure)
+            applyStamp(x, y, radius, feather)
+            return
+        }
+
+        event.points.windowed(2, 1, false).forEach { (p0, p1) ->
+            val (x0, y0) = denormPoint(p0)
+            val (x1, y1) = denormPoint(p1)
+            val dx = x1 - x0
+            val dy = y1 - y0
+            val dist = kotlin.math.sqrt(dx * dx + dy * dy).coerceAtLeast(0.001f)
+            val r0 = brushRadiusPx(event.brushSize, p0.pressure)
+            val r1 = brushRadiusPx(event.brushSize, p1.pressure)
+            val step = (maxOf(r0, r1) * 0.5f).coerceAtLeast(0.75f)
+            val steps = kotlin.math.ceil(dist / step).toInt().coerceAtLeast(1)
+            for (i in 0..steps) {
+                val t = i.toFloat() / steps.toFloat()
+                val radius = r0 + (r1 - r0) * t
+                applyStamp(x0 + dx * t, y0 + dy * t, radius, feather)
+            }
+        }
+    }
+
+    fun applyRadialMask(apply: (idx: Int, intensity: Int) -> Unit, sub: SubMaskState) {
+        val cx = denorm(sub.radial.centerX, width)
+        val cy = denorm(sub.radial.centerY, height)
+        val rx = lenPx(sub.radial.radiusX).coerceAtLeast(0.01f)
+        val ry = lenPx(sub.radial.radiusY).coerceAtLeast(0.01f)
+        val feather = sub.radial.feather.coerceIn(0f, 1f)
+        val innerBound = (1f - feather).coerceIn(0f, 1f)
+        val rotation = sub.radial.rotation * (Math.PI.toFloat() / 180f)
+        val cosRot = kotlin.math.cos(rotation)
+        val sinRot = kotlin.math.sin(rotation)
+
+        for (y in 0 until height) {
+            val row = y * width
+            for (x in 0 until width) {
+                val dx = x.toFloat() - cx
+                val dy = y.toFloat() - cy
+                val rotDx = dx * cosRot + dy * sinRot
+                val rotDy = -dx * sinRot + dy * cosRot
+                val nx = rotDx / rx
+                val ny = rotDy / ry
+                val dist = kotlin.math.sqrt(nx * nx + ny * ny)
+                val intensityF =
+                    if (dist <= innerBound) {
+                        1f
+                    } else {
+                        1f - (dist - innerBound) / (1f - innerBound).coerceAtLeast(0.01f)
                     }
+                val intensity = (intensityF.coerceIn(0f, 1f) * 255f).roundToInt()
+                if (intensity == 0) continue
+                apply(row + x, intensity)
+            }
+        }
+    }
 
-                    event.points.windowed(2, 1, false).forEach { (p0, p1) ->
-                        val (x0, y0) = denormPoint(p0)
-                        val (x1, y1) = denormPoint(p1)
-                        val dx = x1 - x0
-                        val dy = y1 - y0
-                        val dist = kotlin.math.sqrt(dx * dx + dy * dy).coerceAtLeast(0.001f)
-                        val r0 = brushRadiusPx(event.brushSize, p0.pressure)
-                        val r1 = brushRadiusPx(event.brushSize, p1.pressure)
-                        val step = (maxOf(r0, r1) * 0.5f).coerceAtLeast(0.75f)
-                        val steps = (dist / step).roundToInt().coerceAtLeast(1)
-                        for (i in 0..steps) {
-                            val t = i.toFloat() / steps.toFloat()
-                            val radius = r0 + (r1 - r0) * t
-                            applyCircle(event.mode, x0 + dx * t, y0 + dy * t, radius, feather)
+    fun applyLinearMask(apply: (idx: Int, intensity: Int) -> Unit, sub: SubMaskState) {
+        val sx = denorm(sub.linear.startX, width)
+        val sy = denorm(sub.linear.startY, height)
+        val ex = denorm(sub.linear.endX, width)
+        val ey = denorm(sub.linear.endY, height)
+        val rangePx = lenPx(sub.linear.range).coerceAtLeast(0.01f)
+        val vx = ex - sx
+        val vy = ey - sy
+        val len = kotlin.math.sqrt(vx * vx + vy * vy)
+        if (len <= 0.01f) return
+        val invLen = 1f / len
+        val nx = -vy * invLen
+        val ny = vx * invLen
+
+        for (y in 0 until height) {
+            val row = y * width
+            for (x in 0 until width) {
+                val px = x.toFloat() - sx
+                val py = y.toFloat() - sy
+                val distPerp = px * nx + py * ny
+                val t = distPerp / rangePx
+                val intensityF = (0.5f - t * 0.5f).coerceIn(0f, 1f)
+                val intensity = (intensityF * 255f).roundToInt()
+                if (intensity == 0) continue
+                apply(row + x, intensity)
+            }
+        }
+    }
+
+    fun applyAiMask(apply: (idx: Int, intensity: Int) -> Unit, dataUrl: String?, softness: Float) {
+        val url = dataUrl ?: return
+        val decoded = decodeMaskDataUrlToBitmap(url) ?: return
+        val scaled =
+            if (decoded.width != width || decoded.height != height) {
+                Bitmap.createScaledBitmap(decoded, width, height, true)
+            } else {
+                decoded
+            }
+        val pixels = IntArray(width * height)
+        scaled.getPixels(pixels, 0, width, 0, 0, width, height)
+        val maskU8 = IntArray(width * height) { i -> (pixels[i] shr 16) and 0xFF }
+        val radius = (softness.coerceIn(0f, 1f) * 10f).roundToInt()
+        val softened = if (radius >= 1) boxBlurU8(maskU8, radius) else maskU8
+        for (i in softened.indices) {
+            val v = softened[i]
+            if (v == 0) continue
+            apply(i, v)
+        }
+    }
+
+    val highlightSubMask =
+        highlightSubMaskId?.let { id -> mask.subMasks.firstOrNull { it.id == id && it.visible } }
+
+    if (highlightSubMask != null) {
+        val layer = IntArray(width * height)
+        when (highlightSubMask.type) {
+            SubMaskType.Brush.id -> {
+                val events = brushEvents(highlightSubMask)
+                if (highlightSubMask.mode == SubMaskMode.Additive) {
+                    events.forEach { event ->
+                        applyBrushStamps(event) { cx, cy, radius, feather ->
+                            if (event.mode == SubMaskMode.Additive) {
+                                applyFeatheredCircleScreen(layer, cx, cy, radius, feather)
+                            } else {
+                                applyFeatheredCircleSub(layer, cx, cy, radius, feather)
+                            }
+                        }
+                    }
+                } else {
+                    events.forEach { event ->
+                        applyBrushStamps(event) { cx, cy, radius, feather ->
+                            applyFeatheredCircleScreen(layer, cx, cy, radius, feather)
                         }
                     }
                 }
             }
 
-            SubMaskType.Radial.id -> {
-                val cx = denorm(sub.radial.centerX, width)
-                val cy = denorm(sub.radial.centerY, height)
-                val rx = lenPx(sub.radial.radiusX).coerceAtLeast(0.01f)
-                val ry = lenPx(sub.radial.radiusY).coerceAtLeast(0.01f)
-                val feather = sub.radial.feather.coerceIn(0f, 1f)
-                val innerBound = (1f - feather).coerceIn(0f, 1f)
-                val rotation = sub.radial.rotation * (Math.PI.toFloat() / 180f)
-                val cosRot = kotlin.math.cos(rotation)
-                val sinRot = kotlin.math.sin(rotation)
+            SubMaskType.Radial.id ->
+                applyRadialMask({ idx, intensity -> layer[idx] = maxOf(layer[idx], intensity) }, highlightSubMask)
 
-                for (y in 0 until height) {
-                    val row = y * width
-                    for (x in 0 until width) {
-                        val dx = x + 0.5f - cx
-                        val dy = y + 0.5f - cy
-                        val rotDx = dx * cosRot + dy * sinRot
-                        val rotDy = -dx * sinRot + dy * cosRot
-                        val nx = rotDx / rx
-                        val ny = rotDy / ry
-                        val dist = kotlin.math.sqrt(nx * nx + ny * ny)
-                        val intensityF =
-                            if (dist <= innerBound) {
-                                1f
-                            } else {
-                                1f - (dist - innerBound) / (1f - innerBound).coerceAtLeast(0.01f)
+            SubMaskType.Linear.id ->
+                applyLinearMask({ idx, intensity -> layer[idx] = maxOf(layer[idx], intensity) }, highlightSubMask)
+
+            SubMaskType.AiSubject.id ->
+                applyAiMask({ idx, intensity -> layer[idx] = maxOf(layer[idx], intensity) }, highlightSubMask.aiSubject.maskDataBase64, highlightSubMask.aiSubject.softness)
+
+            SubMaskType.AiEnvironment.id ->
+                applyAiMask({ idx, intensity -> layer[idx] = maxOf(layer[idx], intensity) }, highlightSubMask.aiEnvironment.maskDataBase64, highlightSubMask.aiEnvironment.softness)
+        }
+
+        val overlayPixels = IntArray(width * height)
+        val (r, g, b) =
+            if (highlightSubMask.mode == SubMaskMode.Additive) {
+                Triple(255, 0, 0)
+            } else {
+                Triple(0, 120, 255)
+            }
+        for (i in overlayPixels.indices) {
+            val v = layer[i]
+            if (v == 0) continue
+            overlayPixels[i] = argb(alphaFor(v), r, g, b)
+        }
+        return Bitmap.createBitmap(overlayPixels, width, height, Bitmap.Config.ARGB_8888)
+    }
+
+    return when (overlayMode) {
+        MaskOverlayMode.Composite -> {
+            val addLayer = IntArray(width * height)
+            val subLayer = IntArray(width * height)
+
+            mask.subMasks.forEach { sub ->
+                if (!sub.visible) return@forEach
+                when (sub.type) {
+                    SubMaskType.Brush.id -> {
+                        val events = brushEvents(sub)
+                        events.forEach { event ->
+                            applyBrushStamps(event) { cx, cy, radius, feather ->
+                                if (event.mode == SubMaskMode.Additive) {
+                                    applyFeatheredCircleScreen(addLayer, cx, cy, radius, feather)
+                                } else {
+                                    applyFeatheredCircleScreen(subLayer, cx, cy, radius, feather)
+                                }
                             }
-                        val intensity = (intensityF.coerceIn(0f, 1f) * 255f).roundToInt()
-                        if (intensity == 0) continue
-                        val idx = row + x
-                        plotAndApply(sub.mode, idx, intensity)
+                        }
                     }
-                }
-            }
 
-            SubMaskType.Linear.id -> {
-                val sx = denorm(sub.linear.startX, width)
-                val sy = denorm(sub.linear.startY, height)
-                val ex = denorm(sub.linear.endX, width)
-                val ey = denorm(sub.linear.endY, height)
-                val rangePx = lenPx(sub.linear.range).coerceAtLeast(0.01f)
-                val vx = ex - sx
-                val vy = ey - sy
-                val len = kotlin.math.sqrt(vx * vx + vy * vy)
-                if (len <= 0.01f) return@forEach
-                val invLen = 1f / len
-                val nx = -vy * invLen
-                val ny = vx * invLen
-
-                for (y in 0 until height) {
-                    val row = y * width
-                    for (x in 0 until width) {
-                        val px = x + 0.5f - sx
-                        val py = y + 0.5f - sy
-                        val distPerp = px * nx + py * ny
-                        val t = distPerp / rangePx
-                        val intensityF = (0.5f - t * 0.5f).coerceIn(0f, 1f)
-                        val intensity = (intensityF * 255f).roundToInt()
-                        if (intensity == 0) continue
-                        val idx = row + x
-                        plotAndApply(sub.mode, idx, intensity)
+                    SubMaskType.Radial.id -> {
+                        applyRadialMask(
+                            apply = { idx, intensity ->
+                                if (sub.mode == SubMaskMode.Additive) {
+                                    addLayer[idx] = maxOf(addLayer[idx], intensity)
+                                } else {
+                                    subLayer[idx] = screenBlend(subLayer[idx], intensity)
+                                }
+                            },
+                            sub = sub
+                        )
                     }
+
+                    SubMaskType.Linear.id -> {
+                        applyLinearMask(
+                            apply = { idx, intensity ->
+                                if (sub.mode == SubMaskMode.Additive) {
+                                    addLayer[idx] = maxOf(addLayer[idx], intensity)
+                                } else {
+                                    subLayer[idx] = screenBlend(subLayer[idx], intensity)
+                                }
+                            },
+                            sub = sub
+                        )
+                    }
+
+                    SubMaskType.AiSubject.id ->
+                        applyAiMask(
+                            apply = { idx, intensity ->
+                                if (sub.mode == SubMaskMode.Additive) {
+                                    addLayer[idx] = maxOf(addLayer[idx], intensity)
+                                } else {
+                                    subLayer[idx] = screenBlend(subLayer[idx], intensity)
+                                }
+                            },
+                            dataUrl = sub.aiSubject.maskDataBase64,
+                            softness = sub.aiSubject.softness
+                        )
+
+                    SubMaskType.AiEnvironment.id ->
+                        applyAiMask(
+                            apply = { idx, intensity ->
+                                if (sub.mode == SubMaskMode.Additive) {
+                                    addLayer[idx] = maxOf(addLayer[idx], intensity)
+                                } else {
+                                    subLayer[idx] = screenBlend(subLayer[idx], intensity)
+                                }
+                            },
+                            dataUrl = sub.aiEnvironment.maskDataBase64,
+                            softness = sub.aiEnvironment.softness
+                        )
                 }
             }
 
-            SubMaskType.AiSubject.id -> {
-                val dataUrl = sub.aiSubject.maskDataBase64 ?: return@forEach
-                val decoded = decodeMaskDataUrlToBitmap(dataUrl) ?: return@forEach
-                val scaled = if (decoded.width != width || decoded.height != height) {
-                    Bitmap.createScaledBitmap(decoded, width, height, true)
-                } else {
-                    decoded
-                }
-                val pixels = IntArray(width * height)
-                scaled.getPixels(pixels, 0, width, 0, 0, width, height)
-                val maskU8 = IntArray(width * height) { i -> (pixels[i] shr 16) and 0xFF }
-                val radius = (sub.aiSubject.softness.coerceIn(0f, 1f) * 10f).roundToInt()
-                val softened = if (radius >= 1) boxBlurU8(maskU8, radius) else maskU8
-                for (i in softened.indices) {
-                    val v = softened[i]
-                    if (v == 0) continue
-                    plotAndApply(sub.mode, i, v)
+            val overlayPixels = IntArray(width * height)
+            for (i in overlayPixels.indices) {
+                val add = addLayer[i]
+                val sub = subLayer[i]
+                if (add == 0 && sub == 0) continue
+                var out = 0
+                if (add > 0) out = over(out, argb(alphaFor(add), 255, 0, 0))
+                if (sub > 0) out = over(out, argb(alphaFor(sub), 0, 120, 255))
+                overlayPixels[i] = out
+            }
+            Bitmap.createBitmap(overlayPixels, width, height, Bitmap.Config.ARGB_8888)
+        }
+
+        MaskOverlayMode.Result -> {
+            val resultMask = IntArray(width * height)
+
+            mask.subMasks.forEach { sub ->
+                if (!sub.visible) return@forEach
+                when (sub.type) {
+                    SubMaskType.Brush.id -> {
+                        val events = brushEvents(sub)
+                        events.forEach { event ->
+                            applyBrushStamps(event) { cx, cy, radius, feather ->
+                                if (event.mode == SubMaskMode.Additive) {
+                                    applyFeatheredCircleScreen(resultMask, cx, cy, radius, feather)
+                                } else {
+                                    applyFeatheredCircleSub(resultMask, cx, cy, radius, feather)
+                                }
+                            }
+                        }
+                    }
+
+                    SubMaskType.Radial.id ->
+                        applyRadialMask(
+                            apply = { idx, intensity ->
+                                if (sub.mode == SubMaskMode.Additive) {
+                                    resultMask[idx] = maxOf(resultMask[idx], intensity)
+                                } else {
+                                    resultMask[idx] = subtractBlend(resultMask[idx], intensity)
+                                }
+                            },
+                            sub = sub
+                        )
+
+                    SubMaskType.Linear.id ->
+                        applyLinearMask(
+                            apply = { idx, intensity ->
+                                if (sub.mode == SubMaskMode.Additive) {
+                                    resultMask[idx] = maxOf(resultMask[idx], intensity)
+                                } else {
+                                    resultMask[idx] = subtractBlend(resultMask[idx], intensity)
+                                }
+                            },
+                            sub = sub
+                        )
+
+                    SubMaskType.AiSubject.id ->
+                        applyAiMask(
+                            apply = { idx, intensity ->
+                                if (sub.mode == SubMaskMode.Additive) {
+                                    resultMask[idx] = maxOf(resultMask[idx], intensity)
+                                } else {
+                                    resultMask[idx] = subtractBlend(resultMask[idx], intensity)
+                                }
+                            },
+                            dataUrl = sub.aiSubject.maskDataBase64,
+                            softness = sub.aiSubject.softness
+                        )
+
+                    SubMaskType.AiEnvironment.id ->
+                        applyAiMask(
+                            apply = { idx, intensity ->
+                                if (sub.mode == SubMaskMode.Additive) {
+                                    resultMask[idx] = maxOf(resultMask[idx], intensity)
+                                } else {
+                                    resultMask[idx] = subtractBlend(resultMask[idx], intensity)
+                                }
+                            },
+                            dataUrl = sub.aiEnvironment.maskDataBase64,
+                            softness = sub.aiEnvironment.softness
+                        )
                 }
             }
 
-            SubMaskType.AiEnvironment.id -> {
-                val dataUrl = sub.aiEnvironment.maskDataBase64 ?: return@forEach
-                val decoded = decodeMaskDataUrlToBitmap(dataUrl) ?: return@forEach
-                val scaled = if (decoded.width != width || decoded.height != height) {
-                    Bitmap.createScaledBitmap(decoded, width, height, true)
-                } else {
-                    decoded
-                }
-                val pixels = IntArray(width * height)
-                scaled.getPixels(pixels, 0, width, 0, 0, width, height)
-                val maskU8 = IntArray(width * height) { i -> (pixels[i] shr 16) and 0xFF }
-                val radius = (sub.aiEnvironment.softness.coerceIn(0f, 1f) * 10f).roundToInt()
-                val softened = if (radius >= 1) boxBlurU8(maskU8, radius) else maskU8
-                for (i in softened.indices) {
-                    val v = softened[i]
-                    if (v == 0) continue
-                    plotAndApply(sub.mode, i, v)
+            if (mask.invert) {
+                for (i in resultMask.indices) {
+                    resultMask[i] = 255 - resultMask[i].coerceIn(0, 255)
                 }
             }
+
+            val overlayPixels = IntArray(width * height)
+            for (i in overlayPixels.indices) {
+                val v = resultMask[i]
+                if (v == 0) continue
+                overlayPixels[i] = argb(alphaFor(v), 255, 0, 0)
+            }
+            Bitmap.createBitmap(overlayPixels, width, height, Bitmap.Config.ARGB_8888)
         }
     }
-
-    val overlayPixels = IntArray(width * height)
-    val invertSelection = highlightSubMaskId == null && mask.invert
-    for (i in overlayPixels.indices) {
-        var add = additive[i].coerceIn(0, 255)
-        var sub = subtractive[i].coerceIn(0, 255)
-        var sel = selection[i].coerceIn(0, 255)
-        if (invertSelection) {
-            sel = 255 - sel
-            val tmp = add
-            add = sub
-            sub = tmp
-        }
-        if (add == 0 && sub == 0 && sel == 0) continue
-
-        fun argb(alpha: Int, r: Int, g: Int, b: Int): Int {
-            val a = alpha.coerceIn(0, 255)
-            return (a shl 24) or (r.coerceIn(0, 255) shl 16) or (g.coerceIn(0, 255) shl 8) or b.coerceIn(0, 255)
-        }
-
-        fun over(dst: Int, src: Int): Int {
-            val sa = (src ushr 24) and 0xFF
-            if (sa == 0) return dst
-            val da = (dst ushr 24) and 0xFF
-
-            val sr = (src ushr 16) and 0xFF
-            val sg = (src ushr 8) and 0xFF
-            val sb = src and 0xFF
-
-            val dr = (dst ushr 16) and 0xFF
-            val dg = (dst ushr 8) and 0xFF
-            val db = dst and 0xFF
-
-            val invSa = 255 - sa
-            val outA = (sa + (da * invSa + 127) / 255).coerceIn(0, 255)
-            val outR = (sr + (dr * invSa + 127) / 255).coerceIn(0, 255)
-            val outG = (sg + (dg * invSa + 127) / 255).coerceIn(0, 255)
-            val outB = (sb + (db * invSa + 127) / 255).coerceIn(0, 255)
-            return (outA shl 24) or (outR shl 16) or (outG shl 8) or outB
-        }
-
-        fun alphaFor(intensity: Int): Int = (intensity * 170 / 255).coerceIn(0, 255)
-
-        var out = 0
-        if (sel > 0) out = argb(alphaFor(sel), 255, 155, 0) // selection (also shows invert)
-        if (add > 0) out = over(out, argb(alphaFor(add), 255, 155, 0)) // additive strokes
-        if (sub > 0) out = over(out, argb(alphaFor(sub), 0, 140, 255)) // subtractive strokes
-        overlayPixels[i] = out
-    }
-    return Bitmap.createBitmap(overlayPixels, width, height, Bitmap.Config.ARGB_8888)
 }
 
 internal data class AdjustmentControl(

@@ -3,6 +3,7 @@ package com.dueckis.kawaiiraweditor.ui.editor.controls
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -75,7 +76,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -789,8 +792,11 @@ private fun MaskingUI(
                     val subMaskChipsState = rememberLazyListState()
                     val latestMasks by rememberUpdatedState(masks)
                     val latestOnMasksChange by rememberUpdatedState(onMasksChange)
+                    val haptic = LocalHapticFeedback.current
+                    val latestHaptic by rememberUpdatedState(haptic)
                     var draggingSubMaskId by remember(selectedMask.id) { mutableStateOf<String?>(null) }
                     var draggingSubMaskOffsetX by remember(selectedMask.id) { mutableStateOf(0f) }
+                    var lastHapticReorderIndex by remember(selectedMask.id) { mutableStateOf<Int?>(null) }
 
                     LazyRow(
                         state = subMaskChipsState,
@@ -799,6 +805,8 @@ private fun MaskingUI(
                         itemsIndexed(selectedMask.subMasks, key = { _, s -> s.id }) { idx, sub ->
                             val isSubSelected = sub.id == selectedSubMaskId
                             val isDragging = draggingSubMaskId == sub.id
+                            val dragScale by animateFloatAsState(if (isDragging) 1.06f else 1f, label = "SubMaskDragScale")
+                            val dragAlpha by animateFloatAsState(if (isDragging) 0.9f else 1f, label = "SubMaskDragAlpha")
                             var showSubMenu by remember(sub.id) { mutableStateOf(false) }
 
                             SubMaskItemChip(
@@ -807,23 +815,32 @@ private fun MaskingUI(
                                 modifier =
                                     Modifier
                                         .zIndex(if (isDragging) 1f else 0f)
-                                        .graphicsLayer(translationX = if (isDragging) draggingSubMaskOffsetX else 0f)
+                                        .graphicsLayer(
+                                            translationX = if (isDragging) draggingSubMaskOffsetX else 0f,
+                                            scaleX = dragScale,
+                                            scaleY = dragScale,
+                                            alpha = dragAlpha
+                                        )
                                         .pointerInput(selectedMask.id) {
                                             detectDragGesturesAfterLongPress(
                                                 onDragStart = {
                                                     draggingSubMaskId = sub.id
                                                     draggingSubMaskOffsetX = 0f
+                                                    lastHapticReorderIndex = idx
+                                                    latestHaptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                                 },
                                                 onDragCancel = {
                                                     if (draggingSubMaskId == sub.id) {
                                                         draggingSubMaskId = null
                                                         draggingSubMaskOffsetX = 0f
+                                                        lastHapticReorderIndex = null
                                                     }
                                                 },
                                                 onDragEnd = {
                                                     if (draggingSubMaskId == sub.id) {
                                                         draggingSubMaskId = null
                                                         draggingSubMaskOffsetX = 0f
+                                                        lastHapticReorderIndex = null
                                                     }
                                                 },
                                                 onDrag = { change, dragAmount ->
@@ -854,6 +871,10 @@ private fun MaskingUI(
 
                                                     val toIndex = targetInfo.index
                                                     if (fromIndex == toIndex) return@detectDragGesturesAfterLongPress
+                                                    if (lastHapticReorderIndex != toIndex) {
+                                                        latestHaptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                        lastHapticReorderIndex = toIndex
+                                                    }
 
                                                     val movedSubMasks =
                                                         currentMask.subMasks.toMutableList().apply {
@@ -1228,6 +1249,26 @@ private fun MaskToolControls(
                     onMasksChange(updated)
                 },
                 valueRange = 0.01f..1.5f
+            )
+
+            Text("Softness", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+            Slider(
+                value = selectedSubMask.radial.feather.coerceIn(0f, 1f),
+                onValueChange = { v ->
+                    val updated =
+                        masks.map { m ->
+                            if (m.id != selectedMask.id) m
+                            else
+                                m.copy(
+                                    subMasks =
+                                        m.subMasks.map { s ->
+                                            if (s.id != selectedSubMask.id) s else s.copy(radial = s.radial.copy(feather = v))
+                                        }
+                                )
+                        }
+                    onMasksChange(updated)
+                },
+                valueRange = 0f..1f
             )
         }
 

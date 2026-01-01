@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.model.CropState
 import com.dueckis.kawaiiraweditor.data.model.MaskHandle
 import com.dueckis.kawaiiraweditor.data.model.MaskPoint
+import com.dueckis.kawaiiraweditor.data.model.MaskOverlayMode
 import com.dueckis.kawaiiraweditor.data.model.MaskState
 import com.dueckis.kawaiiraweditor.data.model.MaskTapMode
 import com.dueckis.kawaiiraweditor.data.model.SubMaskState
@@ -693,7 +694,19 @@ internal fun ImagePreview(
                     val highlightSubMaskId = if (overlayIsFlashing) maskOverlayBlinkSubMaskId else null
                     overlayBitmap =
                         withContext(Dispatchers.Default) {
-                            buildMaskOverlayBitmap(overlayMask, outW, outH, highlightSubMaskId = highlightSubMaskId)
+                            val overlayMode =
+                                if (overlayIsFlashing && maskOverlayBlinkSubMaskId == null) {
+                                    MaskOverlayMode.Result
+                                } else {
+                                    MaskOverlayMode.Composite
+                                }
+                            buildMaskOverlayBitmap(
+                                overlayMask,
+                                outW,
+                                outH,
+                                overlayMode = overlayMode,
+                                highlightSubMaskId = highlightSubMaskId
+                            )
                         }
                 }
 
