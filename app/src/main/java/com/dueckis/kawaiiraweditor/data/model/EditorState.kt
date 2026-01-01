@@ -74,6 +74,37 @@ internal data class CropState(
     }
 }
 
+internal data class MaskTransformState(
+    val rotation: Float = 0f,
+    val flipHorizontal: Boolean = false,
+    val flipVertical: Boolean = false,
+    val orientationSteps: Int = 0,
+    val crop: CropState? = null
+) {
+    fun normalized(): MaskTransformState = copy(crop = crop?.normalized())
+
+    fun toJsonObject(): JSONObject {
+        val normalized = normalized()
+        return JSONObject().apply {
+            put("rotation", normalized.rotation)
+            put("flipHorizontal", normalized.flipHorizontal)
+            put("flipVertical", normalized.flipVertical)
+            put("orientationSteps", normalized.orientationSteps)
+            put("crop", normalized.crop?.toJsonObject() ?: JSONObject.NULL)
+        }
+    }
+
+    fun matches(other: MaskTransformState): Boolean {
+        val a = normalized()
+        val b = other.normalized()
+        return a.rotation == b.rotation &&
+            a.flipHorizontal == b.flipHorizontal &&
+            a.flipVertical == b.flipVertical &&
+            a.orientationSteps == b.orientationSteps &&
+            a.crop == b.crop
+    }
+}
+
 internal data class CurvePointState(
     val x: Float,
     val y: Float
@@ -358,6 +389,27 @@ internal data class AdjustmentState(
     }
 }
 
+internal fun AdjustmentState.toMaskTransformState(): MaskTransformState {
+    return MaskTransformState(
+        rotation = rotation,
+        flipHorizontal = flipHorizontal,
+        flipVertical = flipVertical,
+        orientationSteps = orientationSteps,
+        crop = crop?.normalized()
+    )
+}
+
+internal fun MaskTransformState.toAdjustmentState(): AdjustmentState {
+    val normalized = normalized()
+    return AdjustmentState(
+        rotation = normalized.rotation,
+        flipHorizontal = normalized.flipHorizontal,
+        flipVertical = normalized.flipVertical,
+        orientationSteps = normalized.orientationSteps,
+        crop = normalized.crop
+    )
+}
+
 internal enum class SubMaskMode {
     Additive,
     Subtractive,
@@ -415,7 +467,10 @@ internal data class RadialMaskParametersState(
 
 internal data class AiSubjectMaskParametersState(
     val maskDataBase64: String? = null,
-    val softness: Float = 0.25f
+    val softness: Float = 0.25f,
+    val baseTransform: MaskTransformState? = null,
+    val baseWidthPx: Int? = null,
+    val baseHeightPx: Int? = null
 )
 
 internal enum class AiEnvironmentCategory(val id: String, val label: String) {
@@ -463,7 +518,10 @@ internal enum class AiEnvironmentCategory(val id: String, val label: String) {
 internal data class AiEnvironmentMaskParametersState(
     val category: String = AiEnvironmentCategory.Sky.id,
     val maskDataBase64: String? = null,
-    val softness: Float = 0.25f
+    val softness: Float = 0.25f,
+    val baseTransform: MaskTransformState? = null,
+    val baseWidthPx: Int? = null,
+    val baseHeightPx: Int? = null
 )
 
 internal enum class EditorPanelTab(
@@ -630,12 +688,18 @@ internal fun SubMaskState.toJsonObject(): JSONObject {
                 SubMaskType.AiSubject.id -> JSONObject().apply {
                     aiSubject.maskDataBase64?.let { put("maskDataBase64", it) }
                     put("softness", aiSubject.softness.coerceIn(0f, 1f))
+                    aiSubject.baseTransform?.let { put("baseTransform", it.toJsonObject()) }
+                    aiSubject.baseWidthPx?.takeIf { it > 0 }?.let { put("baseWidthPx", it) }
+                    aiSubject.baseHeightPx?.takeIf { it > 0 }?.let { put("baseHeightPx", it) }
                 }
 
                 SubMaskType.AiEnvironment.id -> JSONObject().apply {
                     put("category", aiEnvironment.category)
                     aiEnvironment.maskDataBase64?.let { put("maskDataBase64", it) }
                     put("softness", aiEnvironment.softness.coerceIn(0f, 1f))
+                    aiEnvironment.baseTransform?.let { put("baseTransform", it.toJsonObject()) }
+                    aiEnvironment.baseWidthPx?.takeIf { it > 0 }?.let { put("baseWidthPx", it) }
+                    aiEnvironment.baseHeightPx?.takeIf { it > 0 }?.let { put("baseHeightPx", it) }
                 }
 
                 else -> JSONObject()

@@ -106,12 +106,15 @@ import com.dueckis.kawaiiraweditor.data.model.MaskHandle
 import com.dueckis.kawaiiraweditor.data.model.MaskPoint
 import com.dueckis.kawaiiraweditor.data.model.MaskState
 import com.dueckis.kawaiiraweditor.data.model.MaskTapMode
+import com.dueckis.kawaiiraweditor.data.model.MaskTransformState
 import com.dueckis.kawaiiraweditor.data.model.RadialMaskParametersState
 import com.dueckis.kawaiiraweditor.data.model.RenderRequest
 import com.dueckis.kawaiiraweditor.data.model.RenderTarget
 import com.dueckis.kawaiiraweditor.data.model.SubMaskMode
 import com.dueckis.kawaiiraweditor.data.model.SubMaskState
 import com.dueckis.kawaiiraweditor.data.model.SubMaskType
+import com.dueckis.kawaiiraweditor.data.model.toAdjustmentState
+import com.dueckis.kawaiiraweditor.data.model.toMaskTransformState
 import com.dueckis.kawaiiraweditor.data.media.decodeToBitmap
 import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
 import com.dueckis.kawaiiraweditor.data.storage.ProjectStorage
@@ -189,14 +192,7 @@ internal fun EditorScreen(
     var adjustments by remember { mutableStateOf(AdjustmentState()) }
     var masks by remember { mutableStateOf<List<MaskState>>(emptyList()) }
     val maskNumbers = remember { mutableStateMapOf<String, Int>() }
-
-    fun masksForRender(source: List<MaskState>): List<MaskState> {
-        if (environmentMaskingEnabled) return source
-        return source.mapNotNull { mask ->
-            val remaining = mask.subMasks.filterNot { it.type == SubMaskType.AiEnvironment.id }
-            if (remaining.isEmpty()) null else mask.copy(subMasks = remaining)
-        }
-    }
+    val currentMaskTransform = adjustments.toMaskTransformState()
 
     fun assignNumber(maskId: String) {
         if (maskId !in maskNumbers) {
@@ -511,86 +507,259 @@ internal fun EditorScreen(
         return encoded
     }
 
-    fun remapMasksForTransform(old: AdjustmentState, next: AdjustmentState, currentMasks: List<MaskState>): List<MaskState> {
-        if (currentMasks.isEmpty()) return currentMasks
-        val oldCrop = normalizedCropOrFull(old.crop)
-        val newCrop = normalizedCropOrFull(next.crop)
-        val oldRotation = old.rotation
-        val newRotation = next.rotation
-        val oldSteps = old.orientationSteps
-        val newSteps = next.orientationSteps
-        val oldFlipH = old.flipHorizontal
-        val newFlipH = next.flipHorizontal
-        val oldFlipV = old.flipVertical
-        val newFlipV = next.flipVertical
-        if (oldCrop == newCrop && oldRotation == newRotation && oldSteps == newSteps && oldFlipH == newFlipH && oldFlipV == newFlipV) {
-            return currentMasks
+    fun estimateBaseDimsFromBitmap(bitmap: Bitmap, transform: MaskTransformState): Pair<Int, Int> {
+        val crop = normalizedCropOrFull(transform.crop)
+        val stepsMod = ((transform.orientationSteps % 4) + 4) % 4
+        val preCropWAfterSteps =
+            (bitmap.width.toFloat() / crop.width.coerceAtLeast(0.0001f)).coerceAtLeast(1f)
+        val preCropHAfterSteps =
+            (bitmap.height.toFloat() / crop.height.coerceAtLeast(0.0001f)).coerceAtLeast(1f)
+        val preCropWAfterStepsPx = preCropWAfterSteps.roundToInt().coerceAtLeast(1)
+        val preCropHAfterStepsPx = preCropHAfterSteps.roundToInt().coerceAtLeast(1)
+        val baseW = if (stepsMod % 2 == 1) preCropHAfterStepsPx else preCropWAfterStepsPx
+        val baseH = if (stepsMod % 2 == 1) preCropWAfterStepsPx else preCropHAfterStepsPx
+        return baseW to baseH
+    }
+
+    fun resolveAiMaskBaseDims(
+        dataUrl: String,
+        baseTransform: MaskTransformState,
+        baseWidthPx: Int?,
+        baseHeightPx: Int?
+    ): Pair<Int, Int>? {
+        if (baseWidthPx != null && baseHeightPx != null) {
+            return baseWidthPx.coerceAtLeast(1) to baseHeightPx.coerceAtLeast(1)
         }
+        val decoded = decodeDataUrlBitmap(dataUrl) ?: return null
+        val crop = normalizedCropOrFull(baseTransform.crop)
+        val stepsMod = ((baseTransform.orientationSteps % 4) + 4) % 4
+        val preCropWAfterSteps =
+            (decoded.width.toFloat() / crop.width.coerceAtLeast(0.0001f)).coerceAtLeast(1f)
+        val preCropHAfterSteps =
+            (decoded.height.toFloat() / crop.height.coerceAtLeast(0.0001f)).coerceAtLeast(1f)
+        decoded.recycle()
+        val preCropWAfterStepsPx = preCropWAfterSteps.roundToInt().coerceAtLeast(1)
+        val preCropHAfterStepsPx = preCropHAfterSteps.roundToInt().coerceAtLeast(1)
+        val baseW = if (stepsMod % 2 == 1) preCropHAfterStepsPx else preCropWAfterStepsPx
+        val baseH = if (stepsMod % 2 == 1) preCropWAfterStepsPx else preCropHAfterStepsPx
+        return baseW to baseH
+    }
 
-        val orientedBitmap = (uncroppedBitmap ?: editedBitmap) ?: return currentMasks
-        val orientedW = orientedBitmap.width.coerceAtLeast(1)
-        val orientedH = orientedBitmap.height.coerceAtLeast(1)
-        val oldStepsMod = ((oldSteps % 4) + 4) % 4
-        val baseW = if (oldStepsMod % 2 == 1) orientedH else orientedW
-        val baseH = if (oldStepsMod % 2 == 1) orientedW else orientedH
-        val baseWf = baseW.toFloat()
-        val baseHf = baseH.toFloat()
+    fun remapAiSubMaskForTransform(
+        sub: SubMaskState,
+        currentTransform: MaskTransformState,
+        currentAdjustments: AdjustmentState
+    ): SubMaskState {
+        return when (sub.type) {
+            SubMaskType.AiSubject.id -> {
+                val dataUrl = sub.aiSubject.maskDataBase64 ?: return sub
+                val baseTransform = sub.aiSubject.baseTransform ?: return sub
+                if (baseTransform.matches(currentTransform)) return sub
+                val baseDims =
+                    resolveAiMaskBaseDims(
+                        dataUrl = dataUrl,
+                        baseTransform = baseTransform,
+                        baseWidthPx = sub.aiSubject.baseWidthPx,
+                        baseHeightPx = sub.aiSubject.baseHeightPx
+                    ) ?: return sub
+                val remapped =
+                    remapMaskDataUrlForTransform(
+                        dataUrl = dataUrl,
+                        baseWidthPx = baseDims.first,
+                        baseHeightPx = baseDims.second,
+                        oldAdjustments = baseTransform.toAdjustmentState(),
+                        newAdjustments = currentAdjustments
+                    )
+                if (remapped == null) sub else sub.copy(aiSubject = sub.aiSubject.copy(maskDataBase64 = remapped))
+            }
 
-        fun remapPoint(p: MaskPoint): MaskPoint {
-            val mapped =
-                remapPointForTransform(
-                    point = p,
-                    oldCrop = oldCrop,
-                    oldRotation = oldRotation,
-                    oldOrientationSteps = oldSteps,
-                    oldFlipH = oldFlipH,
-                    oldFlipV = oldFlipV,
-                    newCrop = newCrop,
-                    newRotation = newRotation,
-                    newOrientationSteps = newSteps,
-                    newFlipH = newFlipH,
-                    newFlipV = newFlipV,
-                    baseWidthPx = baseWf,
-                    baseHeightPx = baseHf
-                )
-            return MaskPoint(x = mapped.x.coerceIn(-1f, 2f), y = mapped.y.coerceIn(-1f, 2f), pressure = p.pressure)
+            SubMaskType.AiEnvironment.id -> {
+                val dataUrl = sub.aiEnvironment.maskDataBase64 ?: return sub
+                val baseTransform = sub.aiEnvironment.baseTransform ?: return sub
+                if (baseTransform.matches(currentTransform)) return sub
+                val baseDims =
+                    resolveAiMaskBaseDims(
+                        dataUrl = dataUrl,
+                        baseTransform = baseTransform,
+                        baseWidthPx = sub.aiEnvironment.baseWidthPx,
+                        baseHeightPx = sub.aiEnvironment.baseHeightPx
+                    ) ?: return sub
+                val remapped =
+                    remapMaskDataUrlForTransform(
+                        dataUrl = dataUrl,
+                        baseWidthPx = baseDims.first,
+                        baseHeightPx = baseDims.second,
+                        oldAdjustments = baseTransform.toAdjustmentState(),
+                        newAdjustments = currentAdjustments
+                    )
+                if (remapped == null) sub else sub.copy(aiEnvironment = sub.aiEnvironment.copy(maskDataBase64 = remapped))
+            }
+
+            else -> sub
         }
+    }
 
-        return currentMasks.map { mask ->
-            mask.copy(
-                subMasks =
-                    mask.subMasks.map { sub ->
-                        when (sub.type) {
-                            SubMaskType.Brush.id ->
-                                sub.copy(
-                                    lines =
-                                        sub.lines.map { line ->
-                                            line.copy(points = line.points.map(::remapPoint))
-                                        }
-                                )
+    fun remapAiMasksForTransform(
+        source: List<MaskState>,
+        currentTransform: MaskTransformState,
+        currentAdjustments: AdjustmentState
+    ): List<MaskState> {
+        return source.map { mask ->
+            val updated =
+                mask.subMasks.map { sub ->
+                    remapAiSubMaskForTransform(sub, currentTransform, currentAdjustments)
+                }
+            if (updated == mask.subMasks) mask else mask.copy(subMasks = updated)
+        }
+    }
 
-                            SubMaskType.Linear.id -> {
-                                val start = remapPoint(MaskPoint(sub.linear.startX, sub.linear.startY))
-                                val end = remapPoint(MaskPoint(sub.linear.endX, sub.linear.endY))
-                                sub.copy(
-                                    linear =
-                                        sub.linear.copy(
-                                            startX = start.x,
-                                            startY = start.y,
-                                            endX = end.x,
-                                            endY = end.y,
-                                        )
-                                )
-                            }
+    fun masksForRender(source: List<MaskState>): List<MaskState> {
+        if (environmentMaskingEnabled) return source
+        return source.mapNotNull { mask ->
+            val remaining = mask.subMasks.filterNot { it.type == SubMaskType.AiEnvironment.id }
+            if (remaining.isEmpty()) null else mask.copy(subMasks = remaining)
+        }
+    }
 
-                            SubMaskType.Radial.id -> {
-                                val center = remapPoint(MaskPoint(sub.radial.centerX, sub.radial.centerY))
-                                sub.copy(radial = sub.radial.copy(centerX = center.x, centerY = center.y))
-                            }
+    fun masksForRenderWithAiRemap(
+        source: List<MaskState>,
+        currentTransform: MaskTransformState,
+        currentAdjustments: AdjustmentState
+    ): List<MaskState> {
+        val filtered = masksForRender(source)
+        return remapAiMasksForTransform(filtered, currentTransform, currentAdjustments)
+    }
+
+    var exportMasks by remember { mutableStateOf<List<MaskState>>(emptyList()) }
+    LaunchedEffect(masks, currentMaskTransform, environmentMaskingEnabled) {
+        exportMasks =
+            withContext(Dispatchers.Default) {
+                masksForRenderWithAiRemap(masks, currentMaskTransform, adjustments)
+            }
+    }
+
+	    fun remapMasksForTransform(old: AdjustmentState, next: AdjustmentState, currentMasks: List<MaskState>): List<MaskState> {
+	        if (currentMasks.isEmpty()) return currentMasks
+	        val oldCrop = normalizedCropOrFull(old.crop)
+	        val newCrop = normalizedCropOrFull(next.crop)
+	        val oldRotation = old.rotation
+	        val newRotation = next.rotation
+	        val oldSteps = old.orientationSteps
+	        val newSteps = next.orientationSteps
+	        val oldFlipH = old.flipHorizontal
+	        val newFlipH = next.flipHorizontal
+	        val oldFlipV = old.flipVertical
+	        val newFlipV = next.flipVertical
+	        if (oldCrop == newCrop && oldRotation == newRotation && oldSteps == newSteps && oldFlipH == newFlipH && oldFlipV == newFlipV) {
+	            return currentMasks
+	        }
+
+	        val useUncroppedReference = isCropMode && uncroppedBitmap != null
+	        val referenceBitmap = if (useUncroppedReference) uncroppedBitmap else editedBitmap
+	        val ref = referenceBitmap ?: return currentMasks
+	        val refW = ref.width.coerceAtLeast(1)
+	        val refH = ref.height.coerceAtLeast(1)
+	        val oldStepsMod = ((oldSteps % 4) + 4) % 4
+
+	        // For correct remapping we need the image dimensions BEFORE crop (but after orientation/flip/rotation).
+	        // In crop mode we have an explicit uncropped render, otherwise estimate from the cropped render + crop rect.
+	        val preCropWAfterSteps =
+	            if (useUncroppedReference) refW.toFloat()
+	            else (refW.toFloat() / oldCrop.width.coerceAtLeast(0.0001f)).coerceAtLeast(1f)
+	        val preCropHAfterSteps =
+	            if (useUncroppedReference) refH.toFloat()
+	            else (refH.toFloat() / oldCrop.height.coerceAtLeast(0.0001f)).coerceAtLeast(1f)
+
+	        val preCropWAfterStepsPx = preCropWAfterSteps.roundToInt().coerceAtLeast(1)
+	        val preCropHAfterStepsPx = preCropHAfterSteps.roundToInt().coerceAtLeast(1)
+
+	        // Base dimensions are the canonical (orientationSteps=0) dimensions.
+	        val baseW = if (oldStepsMod % 2 == 1) preCropHAfterStepsPx else preCropWAfterStepsPx
+	        val baseH = if (oldStepsMod % 2 == 1) preCropWAfterStepsPx else preCropHAfterStepsPx
+	        val baseWf = baseW.toFloat()
+	        val baseHf = baseH.toFloat()
+
+	        // Scale normalized lengths (<= 1.5) so linear/radial masks keep the same pixel size when crop changes.
+	        val oldWf = if (oldStepsMod % 2 == 1) baseHf else baseWf
+	        val oldHf = if (oldStepsMod % 2 == 1) baseWf else baseHf
+	        val newStepsMod = ((newSteps % 4) + 4) % 4
+	        val newWf = if (newStepsMod % 2 == 1) baseHf else baseWf
+	        val newHf = if (newStepsMod % 2 == 1) baseWf else baseHf
+	        val oldBaseDimPx = minOf(oldWf * oldCrop.width, oldHf * oldCrop.height).coerceAtLeast(1f)
+	        val newBaseDimPx = minOf(newWf * newCrop.width, newHf * newCrop.height).coerceAtLeast(1f)
+	        val lenScale = (oldBaseDimPx / newBaseDimPx).coerceAtLeast(0.0001f)
+	        fun scaleLenIfNormalized(v: Float): Float {
+	            if (v > 1.5f) return v
+	            return (v * lenScale).coerceIn(0.0001f, 1.5f)
+	        }
+
+		        fun remapPoint(p: MaskPoint): MaskPoint {
+		            val mapped =
+		                remapPointForTransform(
+		                    point = p,
+	                    oldCrop = oldCrop,
+	                    oldRotation = oldRotation,
+	                    oldOrientationSteps = oldSteps,
+	                    oldFlipH = oldFlipH,
+	                    oldFlipV = oldFlipV,
+	                    newCrop = newCrop,
+	                    newRotation = newRotation,
+	                    newOrientationSteps = newSteps,
+	                    newFlipH = newFlipH,
+	                    newFlipV = newFlipV,
+	                    baseWidthPx = baseWf,
+	                    baseHeightPx = baseHf
+	                )
+		            return MaskPoint(x = mapped.x.coerceIn(-1f, 1.5f), y = mapped.y.coerceIn(-1f, 1.5f), pressure = p.pressure)
+		        }
+
+	        return currentMasks.map { mask ->
+	            mask.copy(
+	                subMasks =
+	                    mask.subMasks.map { sub ->
+		                        when (sub.type) {
+		                            SubMaskType.Brush.id ->
+		                                sub.copy(
+		                                    lines =
+		                                        sub.lines.map { line ->
+		                                            line.copy(
+		                                                brushSize = scaleLenIfNormalized(line.brushSize),
+		                                                points = line.points.map(::remapPoint)
+		                                            )
+		                                        }
+		                                )
+
+	                            SubMaskType.Linear.id -> {
+	                                val start = remapPoint(MaskPoint(sub.linear.startX, sub.linear.startY))
+	                                val end = remapPoint(MaskPoint(sub.linear.endX, sub.linear.endY))
+	                                sub.copy(
+	                                    linear =
+	                                        sub.linear.copy(
+	                                            startX = start.x,
+	                                            startY = start.y,
+	                                            endX = end.x,
+	                                            endY = end.y,
+	                                            range = scaleLenIfNormalized(sub.linear.range),
+	                                        )
+	                                )
+	                            }
+
+	                            SubMaskType.Radial.id -> {
+	                                val center = remapPoint(MaskPoint(sub.radial.centerX, sub.radial.centerY))
+	                                sub.copy(
+	                                    radial =
+	                                        sub.radial.copy(
+	                                            centerX = center.x,
+	                                            centerY = center.y,
+	                                            radiusX = scaleLenIfNormalized(sub.radial.radiusX),
+	                                            radiusY = scaleLenIfNormalized(sub.radial.radiusY),
+	                                        )
+	                                )
+	                            }
 
                             SubMaskType.AiSubject.id -> {
                                 val dataUrl = sub.aiSubject.maskDataBase64
-                                if (dataUrl.isNullOrBlank()) sub
+                                if (dataUrl.isNullOrBlank() || sub.aiSubject.baseTransform != null) sub
                                 else {
                                     val remapped =
                                         remapMaskDataUrlForTransform(
@@ -606,7 +775,7 @@ internal fun EditorScreen(
 
                             SubMaskType.AiEnvironment.id -> {
                                 val dataUrl = sub.aiEnvironment.maskDataBase64
-                                if (dataUrl.isNullOrBlank()) sub
+                                if (dataUrl.isNullOrBlank() || sub.aiEnvironment.baseTransform != null) sub
                                 else {
                                     val remapped =
                                         remapMaskDataUrlForTransform(
@@ -921,6 +1090,26 @@ internal fun EditorScreen(
                     )
                 }
 
+                fun parseMaskTransform(obj: JSONObject?): MaskTransformState? {
+                    if (obj == null) return null
+                    val crop =
+                        obj.optJSONObject("crop")?.let { cropObj ->
+                            CropState(
+                                x = cropObj.optDouble("x", 0.0).toFloat(),
+                                y = cropObj.optDouble("y", 0.0).toFloat(),
+                                width = cropObj.optDouble("width", 1.0).toFloat(),
+                                height = cropObj.optDouble("height", 1.0).toFloat()
+                            ).normalized()
+                        }
+                    return MaskTransformState(
+                        rotation = obj.optDouble("rotation", 0.0).toFloat(),
+                        flipHorizontal = obj.optBoolean("flipHorizontal", false),
+                        flipVertical = obj.optBoolean("flipVertical", false),
+                        orientationSteps = obj.optInt("orientationSteps", 0),
+                        crop = crop
+                    )
+                }
+
                 val parsedCurves = parseCurves(json.optJSONObject("curves"))
                 val parsedColorGrading = parseColorGrading(json.optJSONObject("colorGrading"))
                 val parsedHsl = parseHsl(json.optJSONObject("hsl"))
@@ -1054,7 +1243,10 @@ internal fun EditorScreen(
                                             aiSubject =
                                                 com.dueckis.kawaiiraweditor.data.model.AiSubjectMaskParametersState(
                                                     maskDataBase64 = paramsObj.optString("maskDataBase64").takeIf { it.isNotBlank() },
-                                                    softness = paramsObj.optDouble("softness", 0.25).toFloat().coerceIn(0f, 1f)
+                                                    softness = paramsObj.optDouble("softness", 0.25).toFloat().coerceIn(0f, 1f),
+                                                    baseTransform = parseMaskTransform(paramsObj.optJSONObject("baseTransform")) ?: adjustments.toMaskTransformState(),
+                                                    baseWidthPx = paramsObj.optInt("baseWidthPx", 0).takeIf { it > 0 },
+                                                    baseHeightPx = paramsObj.optInt("baseHeightPx", 0).takeIf { it > 0 }
                                                 )
                                         )
 
@@ -1068,7 +1260,10 @@ internal fun EditorScreen(
                                                 com.dueckis.kawaiiraweditor.data.model.AiEnvironmentMaskParametersState(
                                                     category = paramsObj.optString("category", "sky"),
                                                     maskDataBase64 = paramsObj.optString("maskDataBase64").takeIf { it.isNotBlank() },
-                                                    softness = paramsObj.optDouble("softness", 0.25).toFloat().coerceIn(0f, 1f)
+                                                    softness = paramsObj.optDouble("softness", 0.25).toFloat().coerceIn(0f, 1f),
+                                                    baseTransform = parseMaskTransform(paramsObj.optJSONObject("baseTransform")) ?: adjustments.toMaskTransformState(),
+                                                    baseWidthPx = paramsObj.optInt("baseWidthPx", 0).takeIf { it > 0 },
+                                                    baseHeightPx = paramsObj.optInt("baseHeightPx", 0).takeIf { it > 0 }
                                                 )
                                         )
 
@@ -1190,7 +1385,8 @@ internal fun EditorScreen(
                         toneMapper = adjustments.toneMapper
                     ).toJson(emptyList())
                 } else {
-                    adjustments.toJson(masksForRender(masks))
+                    val currentTransform = adjustments.toMaskTransformState()
+                    adjustments.toJson(masksForRenderWithAiRemap(masks, currentTransform, adjustments))
                 }
             }
         val version = renderVersion.incrementAndGet()
@@ -1236,7 +1432,11 @@ internal fun EditorScreen(
         if (!leavingCropMode) return@LaunchedEffect
         if (isComparingOriginal) return@LaunchedEffect
 
-        val json = withContext(Dispatchers.Default) { adjustments.toJson(masksForRender(masks)) }
+        val json =
+            withContext(Dispatchers.Default) {
+                val currentTransform = adjustments.toMaskTransformState()
+                adjustments.toJson(masksForRenderWithAiRemap(masks, currentTransform, adjustments))
+            }
         val version = renderVersion.incrementAndGet()
         renderRequests.trySend(
             RenderRequest(version = version, adjustmentsJson = json, target = RenderTarget.Edited, rotationDegrees = adjustments.rotation)
@@ -1279,10 +1479,15 @@ internal fun EditorScreen(
         val handle = sessionHandle
         if (handle == 0L) return@LaunchedEffect
 
+        val initialJson =
+            withContext(Dispatchers.Default) {
+                val currentTransform = adjustments.toMaskTransformState()
+                adjustments.toJson(masksForRenderWithAiRemap(masks, currentTransform, adjustments))
+            }
         renderRequests.trySend(
             RenderRequest(
                 version = renderVersion.incrementAndGet(),
-                adjustmentsJson = adjustments.toJson(masksForRender(masks)),
+                adjustmentsJson = initialJson,
                 target = RenderTarget.Edited,
                 rotationDegrees = adjustments.rotation
             )
@@ -1400,8 +1605,28 @@ internal fun EditorScreen(
         }
     }
 
-    val selectedMaskForOverlay = masks.firstOrNull { it.id == selectedMaskId }
-    val selectedSubMaskForEdit = selectedMaskForOverlay?.subMasks?.firstOrNull { it.id == selectedSubMaskId }
+    val selectedMaskForEdit = masks.firstOrNull { it.id == selectedMaskId }
+    val selectedSubMaskForEdit = selectedMaskForEdit?.subMasks?.firstOrNull { it.id == selectedSubMaskId }
+    var selectedMaskForOverlay by remember { mutableStateOf<MaskState?>(null) }
+    LaunchedEffect(selectedMaskId, masks, currentMaskTransform, environmentMaskingEnabled) {
+        val baseMask =
+            selectedMaskForEdit?.let { mask ->
+                if (environmentMaskingEnabled) {
+                    mask
+                } else {
+                    val remaining = mask.subMasks.filterNot { it.type == SubMaskType.AiEnvironment.id }
+                    if (remaining.isEmpty()) null else mask.copy(subMasks = remaining)
+                }
+            }
+        if (baseMask == null) {
+            selectedMaskForOverlay = null
+            return@LaunchedEffect
+        }
+        selectedMaskForOverlay =
+            withContext(Dispatchers.Default) {
+                remapAiMasksForTransform(listOf(baseMask), currentMaskTransform, adjustments).firstOrNull()
+            }
+    }
     val isMaskMode = panelTab == EditorPanelTab.Masks
     val isInteractiveMaskingEnabled =
         isMaskMode && isPaintingMask && selectedMaskId != null && selectedSubMaskId != null &&
@@ -1525,13 +1750,25 @@ internal fun EditorScreen(
             if (dataUrl == null) {
                 statusMessage = "Failed to generate subject mask."
             } else {
+                val baseTransform = adjustments.toMaskTransformState()
+                val (baseW, baseH) = estimateBaseDimsFromBitmap(bmp, baseTransform)
                 masks =
                     masks.map { mask ->
                         if (mask.id != maskId) return@map mask
                         mask.copy(
                             subMasks =
                                 mask.subMasks.map { sub ->
-                                    if (sub.id != subId) sub else sub.copy(aiSubject = sub.aiSubject.copy(maskDataBase64 = dataUrl))
+                                    if (sub.id != subId) sub
+                                    else
+                                        sub.copy(
+                                            aiSubject =
+                                                sub.aiSubject.copy(
+                                                    maskDataBase64 = dataUrl,
+                                                    baseTransform = baseTransform,
+                                                    baseWidthPx = baseW,
+                                                    baseHeightPx = baseH
+                                                )
+                                        )
                                 }
                         )
                     }
@@ -1575,24 +1812,25 @@ internal fun EditorScreen(
                 statusMessage = if (detail.isNullOrBlank()) "Failed to generate environment mask." else "Failed to generate environment mask: $detail"
             } else {
                 val srcBmp = aiEnvironmentSourceBitmap
-                val remapped =
-                    if (srcBmp == null) dataUrl
-                    else {
-                        remapMaskDataUrlForTransform(
-                            dataUrl = dataUrl,
-                            baseWidthPx = srcBmp.width,
-                            baseHeightPx = srcBmp.height,
-                            oldAdjustments = AdjustmentState(),
-                            newAdjustments = adjustments
-                        ) ?: dataUrl
-                    }
+                val baseTransform = MaskTransformState()
+                val baseDims = srcBmp?.let { estimateBaseDimsFromBitmap(it, baseTransform) }
                 masks =
                     masks.map { mask ->
                         if (mask.id != maskId) return@map mask
                         mask.copy(
                             subMasks =
                                 mask.subMasks.map { s ->
-                                    if (s.id != subId) s else s.copy(aiEnvironment = s.aiEnvironment.copy(maskDataBase64 = remapped))
+                                    if (s.id != subId) s
+                                    else
+                                        s.copy(
+                                            aiEnvironment =
+                                                s.aiEnvironment.copy(
+                                                    maskDataBase64 = dataUrl,
+                                                    baseTransform = baseTransform,
+                                                    baseWidthPx = baseDims?.first,
+                                                    baseHeightPx = baseDims?.second
+                                                )
+                                        )
                                 }
                         )
                     }
@@ -1669,8 +1907,14 @@ internal fun EditorScreen(
                     val maxDim = zoomMaxDimensionForScale(scale)
                     val json =
                         withContext(Dispatchers.Default) {
+                            val currentTransform = adjustments.toMaskTransformState()
                             adjustments.toJsonObject(includeToneMapper = true).apply {
-                                put("masks", JSONArray().apply { masksForRender(masks).forEach { put(it.toJsonObject()) } })
+                                put(
+                                    "masks",
+                                    JSONArray().apply {
+                                        masksForRenderWithAiRemap(masks, currentTransform, adjustments).forEach { put(it.toJsonObject()) }
+                                    }
+                                )
                                 put(
                                     "preview",
                                     JSONObject().apply {
@@ -1693,7 +1937,11 @@ internal fun EditorScreen(
                     )
                 } else if (fullPreviewDirtyByViewport) {
                     fullPreviewDirtyByViewport = false
-                    val json = withContext(Dispatchers.Default) { adjustments.toJson(masksForRender(masks)) }
+                    val json =
+                        withContext(Dispatchers.Default) {
+                            val currentTransform = adjustments.toMaskTransformState()
+                            adjustments.toJson(masksForRenderWithAiRemap(masks, currentTransform, adjustments))
+                        }
                     val version = renderVersion.incrementAndGet()
                     renderRequests.trySend(
                         RenderRequest(version = version, adjustmentsJson = json, target = RenderTarget.Edited, rotationDegrees = adjustments.rotation)
@@ -2047,7 +2295,7 @@ internal fun EditorScreen(
                                                 label = "",
                                                 sessionHandle = sessionHandle,
                                                 adjustments = adjustments,
-                                                masks = masksForRender(masks),
+                                                masks = exportMasks,
                                                 isExporting = isExporting,
                                                 nativeDispatcher = renderDispatcher,
                                                 context = context,
