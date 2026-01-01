@@ -35,3 +35,7 @@ internal fun duplicateMaskState(mask: MaskState, invertDuplicate: Boolean): Mask
         subMasks = mask.subMasks.map(::copySubMask)
     )
 }
+
+internal fun duplicateSubMaskState(subMask: SubMaskState): SubMaskState {
+    return subMask.copy(id = UUID.randomUUID().toString())
+}

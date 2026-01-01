@@ -12,6 +12,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +28,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -67,12 +69,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
 import com.dueckis.kawaiiraweditor.data.model.AiEnvironmentCategory
 import com.dueckis.kawaiiraweditor.data.model.BrushTool
@@ -92,6 +98,7 @@ import com.dueckis.kawaiiraweditor.ui.editor.masking.MaskIcon
 import com.dueckis.kawaiiraweditor.ui.editor.masking.MaskItemCard
 import com.dueckis.kawaiiraweditor.ui.editor.masking.SubMaskItemChip
 import com.dueckis.kawaiiraweditor.ui.editor.masking.duplicateMaskState
+import com.dueckis.kawaiiraweditor.ui.editor.masking.duplicateSubMaskState
 import com.dueckis.kawaiiraweditor.ui.editor.masking.newSubMaskState
 import java.util.Locale
 import java.util.UUID
@@ -530,10 +537,18 @@ private fun MaskingUI(
                             onMaskTapModeChange(MaskTapMode.None)
                             val newMaskId = UUID.randomUUID().toString()
                             val newSubId = UUID.randomUUID().toString()
+                            val subMask = newSubMaskState(newSubId, SubMaskMode.Additive, type)
                             val newMask = MaskState(
                                 id = newMaskId,
-                                name = "Mask ${masks.size + 1}",
-                                subMasks = listOf(newSubMaskState(newSubId, SubMaskMode.Additive, type))
+                                name =
+                                    when (type) {
+                                        SubMaskType.AiEnvironment -> AiEnvironmentCategory.fromId(subMask.aiEnvironment.category).label
+                                        SubMaskType.AiSubject -> "Subject"
+                                        SubMaskType.Brush -> "Brush"
+                                        SubMaskType.Linear -> "Gradient"
+                                        SubMaskType.Radial -> "Radial"
+                                    },
+                                subMasks = listOf(subMask)
                             )
                             assignMaskNumber(newMaskId)
                             onMasksChange(masks + newMask)
@@ -596,8 +611,6 @@ private fun MaskingUI(
                 }
                 )
                 HorizontalDivider()
-
-                HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text("Duplicate") },
                     onClick = {
@@ -607,6 +620,17 @@ private fun MaskingUI(
                         onMasksChange(masks.toMutableList().apply { add(index + 1, dup) }.toList())
                     }
                 )
+                DropdownMenuItem(
+                    text = { Text("Duplicate & Invert") },
+                    onClick = {
+                        showMenu = false
+                        val dup = duplicateMaskState(mask, true)
+                        assignMaskNumber(dup.id)
+                        onMasksChange(masks.toMutableList().apply { add(index + 1, dup) }.toList())
+                    }
+                )
+
+                HorizontalDivider()
 
                 DropdownMenuItem(
                     text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
@@ -670,9 +694,11 @@ private fun MaskingUI(
                 ) {
                     // Add/Subtract Button
                     Box {
-                        var showAddSubMenu by remember { mutableStateOf(false) }
+                        var showAddSubModeMenu by remember { mutableStateOf(false) }
+                        var showAddSubTypeMenu by remember { mutableStateOf(false) }
+                        var pendingSubMaskMode by remember { mutableStateOf<SubMaskMode?>(null) }
                         FilledTonalButton(
-                            onClick = { showAddSubMenu = true },
+                            onClick = { showAddSubModeMenu = true },
                             contentPadding = PaddingValues(horizontal = 12.dp),
                             modifier = Modifier.height(36.dp)
                         ) {
@@ -682,37 +708,77 @@ private fun MaskingUI(
                         }
 
                         DropdownMenu(
-                            expanded = showAddSubMenu,
-                            onDismissRequest = { showAddSubMenu = false },
+                            expanded = showAddSubModeMenu,
+                            onDismissRequest = { showAddSubModeMenu = false },
                             shape = RoundedCornerShape(16.dp),
                             containerColor = MaterialTheme.colorScheme.surfaceContainer
                         ) {
-                            listOf("Add" to SubMaskMode.Additive, "Subtract" to SubMaskMode.Subtractive).forEach { (label, mode) ->
-                                DropdownMenuItem(
-                                    text = { Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary) },
-                                    onClick = {},
-                                    enabled = false
-                                )
-                                availableSubMaskTypes.forEach { type ->
-                                    DropdownMenuItem(
-                                        text = { Text(type.label()) },
-                                        leadingIcon = { MaskIcon(type.id) },
-                                        onClick = {
-                                            showAddSubMenu = false
-                                            onMaskTapModeChange(MaskTapMode.None)
-                                            val newSubId = UUID.randomUUID().toString()
-                                            val updated = masks.map { m ->
-                                                if (m.id != selectedMask.id) m
-                                                else m.copy(subMasks = m.subMasks + newSubMaskState(newSubId, mode, type))
-                                            }
-                                            onMasksChange(updated)
-                                            onSelectedSubMaskIdChange(newSubId)
-                                            onPaintingMaskChange(type == SubMaskType.Brush || type == SubMaskType.AiSubject)
-                                            onRequestMaskOverlayBlink(newSubId)
-                                        }
-                                    )
+                            DropdownMenuItem(
+                                text = { Text("Add", style = MaterialTheme.typography.labelLarge) },
+                                onClick = {
+                                    showAddSubModeMenu = false
+                                    pendingSubMaskMode = SubMaskMode.Additive
+                                    showAddSubTypeMenu = true
                                 }
-                                if (label == "Add") HorizontalDivider()
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Subtract", style = MaterialTheme.typography.labelLarge) },
+                                onClick = {
+                                    showAddSubModeMenu = false
+                                    pendingSubMaskMode = SubMaskMode.Subtractive
+                                    showAddSubTypeMenu = true
+                                }
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = showAddSubTypeMenu,
+                            onDismissRequest = {
+                                showAddSubTypeMenu = false
+                                pendingSubMaskMode = null
+                            },
+                            shape = RoundedCornerShape(16.dp),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer
+                        ) {
+                            val mode = pendingSubMaskMode
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        when (mode) {
+                                            SubMaskMode.Additive -> "Add…"
+                                            SubMaskMode.Subtractive -> "Subtract…"
+                                            null -> "Add…"
+                                        },
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                },
+                                onClick = {},
+                                enabled = false
+                            )
+                            HorizontalDivider()
+
+                            availableSubMaskTypes.forEach { type ->
+                                DropdownMenuItem(
+                                    text = { Text(type.label()) },
+                                    leadingIcon = { MaskIcon(type.id) },
+                                    enabled = mode != null,
+                                    onClick = {
+                                        val selectedMode = mode ?: return@DropdownMenuItem
+                                        showAddSubTypeMenu = false
+                                        pendingSubMaskMode = null
+                                        onMaskTapModeChange(MaskTapMode.None)
+                                        val newSubId = UUID.randomUUID().toString()
+                                        val updated = masks.map { m ->
+                                            if (m.id != selectedMask.id) m
+                                            else m.copy(subMasks = m.subMasks + newSubMaskState(newSubId, selectedMode, type))
+                                        }
+                                        onMasksChange(updated)
+                                        onSelectedSubMaskIdChange(newSubId)
+                                        onPaintingMaskChange(type == SubMaskType.Brush || type == SubMaskType.AiSubject)
+                                        onRequestMaskOverlayBlink(newSubId)
+                                    }
+                                )
                             }
                         }
                     }
@@ -720,14 +786,90 @@ private fun MaskingUI(
                     Spacer(Modifier.width(12.dp))
 
                     // SubMask Chips
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val subMaskChipsState = rememberLazyListState()
+                    val latestMasks by rememberUpdatedState(masks)
+                    val latestOnMasksChange by rememberUpdatedState(onMasksChange)
+                    var draggingSubMaskId by remember(selectedMask.id) { mutableStateOf<String?>(null) }
+                    var draggingSubMaskOffsetX by remember(selectedMask.id) { mutableStateOf(0f) }
+
+                    LazyRow(
+                        state = subMaskChipsState,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         itemsIndexed(selectedMask.subMasks, key = { _, s -> s.id }) { idx, sub ->
                             val isSubSelected = sub.id == selectedSubMaskId
+                            val isDragging = draggingSubMaskId == sub.id
                             var showSubMenu by remember(sub.id) { mutableStateOf(false) }
 
                             SubMaskItemChip(
                                 subMask = sub,
                                 isSelected = isSubSelected,
+                                modifier =
+                                    Modifier
+                                        .zIndex(if (isDragging) 1f else 0f)
+                                        .graphicsLayer(translationX = if (isDragging) draggingSubMaskOffsetX else 0f)
+                                        .pointerInput(selectedMask.id) {
+                                            detectDragGesturesAfterLongPress(
+                                                onDragStart = {
+                                                    draggingSubMaskId = sub.id
+                                                    draggingSubMaskOffsetX = 0f
+                                                },
+                                                onDragCancel = {
+                                                    if (draggingSubMaskId == sub.id) {
+                                                        draggingSubMaskId = null
+                                                        draggingSubMaskOffsetX = 0f
+                                                    }
+                                                },
+                                                onDragEnd = {
+                                                    if (draggingSubMaskId == sub.id) {
+                                                        draggingSubMaskId = null
+                                                        draggingSubMaskOffsetX = 0f
+                                                    }
+                                                },
+                                                onDrag = { change, dragAmount ->
+                                                    change.consume()
+                                                    if (draggingSubMaskId != sub.id) return@detectDragGesturesAfterLongPress
+
+                                                    draggingSubMaskOffsetX += dragAmount.x
+
+                                                    val currentMaskId = selectedMask.id
+                                                    val currentMask =
+                                                        latestMasks.firstOrNull { it.id == currentMaskId }
+                                                            ?: return@detectDragGesturesAfterLongPress
+                                                    val fromIndex = currentMask.subMasks.indexOfFirst { it.id == sub.id }
+                                                    if (fromIndex == -1) return@detectDragGesturesAfterLongPress
+
+                                                    val layoutInfo = subMaskChipsState.layoutInfo
+                                                    val draggedInfo =
+                                                        layoutInfo.visibleItemsInfo.firstOrNull { it.index == fromIndex }
+                                                            ?: return@detectDragGesturesAfterLongPress
+                                                    val draggedCenterX = draggedInfo.offset + draggingSubMaskOffsetX + (draggedInfo.size / 2f)
+
+                                                    val targetInfo =
+                                                        layoutInfo.visibleItemsInfo.firstOrNull { info ->
+                                                            info.index != fromIndex &&
+                                                                draggedCenterX >= info.offset &&
+                                                                draggedCenterX <= (info.offset + info.size)
+                                                        } ?: return@detectDragGesturesAfterLongPress
+
+                                                    val toIndex = targetInfo.index
+                                                    if (fromIndex == toIndex) return@detectDragGesturesAfterLongPress
+
+                                                    val movedSubMasks =
+                                                        currentMask.subMasks.toMutableList().apply {
+                                                            add(toIndex, removeAt(fromIndex))
+                                                        }.toList()
+
+                                                    latestOnMasksChange(
+                                                        latestMasks.map { m ->
+                                                            if (m.id != currentMaskId) m else m.copy(subMasks = movedSubMasks)
+                                                        }
+                                                    )
+
+                                                    draggingSubMaskOffsetX += (draggedInfo.offset - targetInfo.offset).toFloat()
+                                                }
+                                            )
+                                        },
                                 onClick = {
                                     onSelectedSubMaskIdChange(sub.id)
                                     onPaintingMaskChange(sub.type == SubMaskType.Brush.id || sub.type == SubMaskType.AiSubject.id)
@@ -742,6 +884,22 @@ private fun MaskingUI(
                                 onDismissRequest = { showSubMenu = false },
                                 containerColor = MaterialTheme.colorScheme.surfaceContainer
                             ) {
+                                DropdownMenuItem(
+                                    text = { Text("Duplicate") },
+                                    onClick = {
+                                        showSubMenu = false
+                                        onMaskTapModeChange(MaskTapMode.None)
+                                        val dup = duplicateSubMaskState(sub)
+                                        val updated = masks.map { m ->
+                                            if (m.id != selectedMask.id) m
+                                            else m.copy(subMasks = m.subMasks.toMutableList().apply { add(idx + 1, dup) }.toList())
+                                        }
+                                        onMasksChange(updated)
+                                        onSelectedSubMaskIdChange(dup.id)
+                                        onPaintingMaskChange(dup.type == SubMaskType.Brush.id || dup.type == SubMaskType.AiSubject.id)
+                                        onRequestMaskOverlayBlink(dup.id)
+                                    }
+                                )
                                 DropdownMenuItem(
                                     text = { Text(if (sub.mode == SubMaskMode.Additive) "Change to Subtract" else "Change to Add") },
                                     onClick = {
@@ -1118,9 +1276,33 @@ private fun MaskToolControls(
                         detectedAiEnvironmentCategories?.forEach { cat ->
                             DropdownMenuItem(
                                 text = { Text(cat.label, color = MaterialTheme.colorScheme.onSurface) },
-                                onClick = {
-                                    expanded = false
-                                    val updated = masks.map { m -> if(m.id!=selectedMask.id) m else m.copy(subMasks = m.subMasks.map { s -> if(s.id!=selectedSubMask.id) s else s.copy(aiEnvironment = s.aiEnvironment.copy(category=cat.id, maskDataBase64=null)) }) }
+	                                onClick = {
+	                                    expanded = false
+	                                    val currentName = selectedMask.name.trim()
+	                                    val previousLabel = selectedCategory.label
+	                                    val isAutoEnvironmentName =
+	                                        Regex(
+	                                            "^${Regex.escape(previousLabel)}(\\s+Copy(\\s*\\d+)?)?$",
+	                                            RegexOption.IGNORE_CASE
+	                                        ).matches(currentName)
+	                                    val shouldAutoRename =
+	                                        currentName.isBlank() ||
+	                                            Regex("^Mask\\s*\\d+$", RegexOption.IGNORE_CASE).matches(currentName) ||
+	                                            currentName.equals("Environment", ignoreCase = true) ||
+	                                            isAutoEnvironmentName
+	                                    val updated =
+	                                        masks.map { m ->
+	                                            if (m.id != selectedMask.id) m
+	                                            else
+	                                                m.copy(
+                                                    name = if (shouldAutoRename) cat.label else m.name,
+                                                    subMasks =
+                                                        m.subMasks.map { s ->
+                                                            if (s.id != selectedSubMask.id) s
+                                                            else s.copy(aiEnvironment = s.aiEnvironment.copy(category = cat.id, maskDataBase64 = null))
+                                                        }
+                                                )
+                                        }
                                     onMasksChange(updated)
                                     onGenerateAiEnvironmentMask?.invoke()
                                 }

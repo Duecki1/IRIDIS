@@ -134,6 +134,7 @@ internal fun MaskItemCard(
 internal fun SubMaskItemChip(
     subMask: SubMaskState,
     isSelected: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onMenuClick: () -> Unit
 ) {
@@ -148,7 +149,7 @@ internal fun SubMaskItemChip(
         contentColor = contentColor,
         shape = RoundedCornerShape(8.dp),
         border = if (isSelected) BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary) else null,
-        modifier = Modifier.height(32.dp)
+        modifier = modifier.height(32.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
