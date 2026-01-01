@@ -30,17 +30,15 @@ targets:
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2" # iPhone & iPad
 
-        # Point Xcode to where Gradle builds the Kotlin framework
-        FRAMEWORK_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../shared/build/bin/iosArm64/debugFramework"
+        # Point Xcode to where Gradle builds the Kotlin XCFramework
+        FRAMEWORK_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../shared/build/XCFrameworks/debug"
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
 
-        # Disable signing enforcement for the project generation
-        CODE_SIGN_IDENTITY: ""
-        CODE_SIGNING_REQUIRED: "NO"
-        CODE_SIGNING_ALLOWED: "NO"
+        # Code signing is required for running on a real device.
+        # Configure your team/provisioning profile in Xcode after generating the project.
 
     dependencies:
-      - framework: ../shared/build/bin/iosArm64/debugFramework/KawaiiShared.framework
+      - framework: ../shared/build/XCFrameworks/debug/KawaiiShared.xcframework
         embed: true
         codeSign: false
 

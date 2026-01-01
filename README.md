@@ -74,6 +74,20 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 ## Info
 Downloading the app will automatically install a Subject selection ML Model.
 
+## iOS (experimental)
+
+This repo contains an iOS app wrapper (`iosApp/`) that embeds a Kotlin/Compose Multiplatform framework built from `shared/`.
+
+Build requirements: macOS + Xcode + `xcodegen`.
+
+1) Build the Kotlin XCFramework:
+`./gradlew :shared:assembleKawaiiSharedDebugXCFramework`
+
+2) Generate the Xcode project:
+`cd iosApp && xcodegen`
+
+3) Open `iosApp/KawaiiRawEditor.xcodeproj` and Run (device or simulator).
+
 ## License
 
 AGPL-3.0 — see `LICENSE`.

@@ -5,6 +5,8 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 kotlin {
+    val xcf = org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFrameworkConfig(project, "KawaiiShared")
+
     iosX64()
     iosArm64()
     iosSimulatorArm64()
@@ -13,6 +15,7 @@ kotlin {
         binaries.framework {
             baseName = "KawaiiShared"
             isStatic = true // Recommended for Compose Multiplatform
+            xcf.add(this)
         }
     }
 
@@ -24,6 +27,7 @@ kotlin {
         }
         val commonMain by getting {
             dependencies {
+                implementation(compose.ui)
                 implementation(compose.runtime)
                 implementation(compose.foundation)
                 implementation(compose.material3)

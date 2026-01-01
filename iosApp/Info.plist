@@ -20,6 +20,12 @@
   <string>$(CURRENT_PROJECT_VERSION)</string>
   <key>LSRequiresIPhoneOS</key>
   <true/>
+  <key>UILaunchScreen</key>
+  <dict/>
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>This app needs access to your photo library to import and edit photos.</string>
+  <key>NSPhotoLibraryAddUsageDescription</key>
+  <string>This app needs permission to save exported images to your photo library.</string>
   <key>UIApplicationSceneManifest</key>
   <dict>
     <key>UIApplicationSupportsMultipleScenes</key>
