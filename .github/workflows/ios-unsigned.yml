@@ -18,32 +18,39 @@ jobs:
           java-version: '17'
           distribution: 'zulu'
 
+      # OPTIMIZATION 1: Cache Gradle and Kotlin Native Compiler
+      # This prevents downloading the huge compiler and libraries on every run.
+      - name: Setup Gradle Cache
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          cache-read-only: false
+
       - name: Setup Rust targets
         run: |
           rustup target add aarch64-apple-ios x86_64-apple-ios
 
-      # 1. Build the Kotlin Framework
-      # Generates 'KawaiiShared.framework'
-      - name: Build Kotlin Framework
-        run: ./gradlew :shared:iosArm64Binaries
+      # OPTIMIZATION 2: Build DEBUG Framework only
+      # 'linkDebug...' is much faster than 'iosArm64Binaries' (which builds Release too).
+      - name: Build Kotlin Framework (Debug)
+        run: ./gradlew :shared:linkDebugFrameworkIosArm64 --parallel
 
       # 2. Generate Xcode Project
-      # Creates KawaiiRawEditor.xcodeproj
       - name: Generate Xcode Project
         run: |
           brew install xcodegen
           cd iosApp
           xcodegen generate
 
-      # 3. Build Unsigned .app
-      # FIX: Changed -scheme to KawaiiRawEditor (was iosApp)
+      # 3. Build Unsigned .app (Debug)
+      # OPTIMIZATION 3: Changed -configuration to Debug
+      # This skips the heavy LLVM optimizations.
       - name: Build Unsigned .app
         run: |
           cd iosApp
           xcodebuild \
             -project KawaiiRawEditor.xcodeproj \
             -scheme KawaiiRawEditor \
-            -configuration Release \
+            -configuration Debug \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
@@ -52,17 +59,16 @@ jobs:
             clean build
 
       # 4. Package into IPA
-      # FIX: The app bundle is named KawaiiRawEditor.app
       - name: Package into IPA
         run: |
-          cd iosApp/build/Release-iphoneos
+          cd iosApp/build/Debug-iphoneos
           mkdir Payload
           cp -r KawaiiRawEditor.app Payload/
-          zip -r iosApp-unsigned.ipa Payload
+          zip -r iosApp-unsigned-debug.ipa Payload
 
       # 5. Upload Artifact
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ios-app-unsigned
-          path: iosApp/build/Release-iphoneos/iosApp-unsigned.ipa
+          name: ios-app-unsigned-debug
+          path: iosApp/build/Debug-iphoneos/iosApp-unsigned-debug.ipa
