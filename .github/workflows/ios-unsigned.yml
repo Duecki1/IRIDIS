@@ -44,7 +44,7 @@ jobs:
         run: |
           cd iosApp
           xcodebuild \
-            -project iosApp.xcodeproj \
+            -project KawaiiRawEditor.xcodeproj \
             -scheme iosApp \
             -configuration Release \
             -sdk iphoneos \
