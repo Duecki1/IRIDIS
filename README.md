@@ -70,6 +70,8 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Tablet UI design
 - add support for immich
 - add ios support
+- ai environment masks should automatically name tags
+- app should only open once
   
 ## Info
 Downloading the app will automatically install a Subject selection ML Model.
