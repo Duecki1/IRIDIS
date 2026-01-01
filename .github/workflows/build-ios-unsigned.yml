@@ -5,21 +5,22 @@ on:
     branches: ["main", "IOSTest"]
   pull_request:
     branches: ["main"]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: macos-latest
 
     env:
-      IOS_DIR: iosApp
       SCHEME: KawaiiRawEditor
       CONFIG: Debug
-      PROJECT: KawaiiRawEditor.xcodeproj
       ARCHIVE_PATH: build/ios/KawaiiRawEditor.xcarchive
       OUT_DIR: build_artifacts
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Java (for Gradle/KMP)
         uses: actions/setup-java@v4
@@ -27,15 +28,47 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # Optional: only if your iOS app depends on a KMP :shared framework being built first
-      - name: Build KMP iOS framework (optional)
-        run: ./gradlew :shared:linkDebugFrameworkIosArm64 || true
+      - name: Setup Java (Gradle/KMP)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build KMP iOS framework
+        run: ./gradlew :shared:linkDebugFrameworkIosArm64
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          set -euo pipefail
+          cd iosApp
+          xcodegen generate
+
+      - name: Commit generated Xcode project
+        if: always()
+        env:
+          TARGET_BRANCH: IOSTest
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # add generated project
+          git add -A iosApp/KawaiiRawEditor.xcodeproj || true
+          git add -A iosApp/Project.yml || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Add generated Xcode project from xcodegen"
+            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:${TARGET_BRANCH}
+          fi
 
       - name: Archive iOS app (unsigned)
         run: |
           set -euo pipefail
           xcodebuild \
-            -project "${IOS_DIR}/${PROJECT}" \
+            -project iosApp/KawaiiRawEditor.xcodeproj \
             -scheme "${SCHEME}" \
             -configuration "${CONFIG}" \
             -sdk iphoneos \

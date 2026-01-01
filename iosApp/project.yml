@@ -1,0 +1,37 @@
+name: KawaiiRawEditor
+
+options:
+  deploymentTarget:
+    iOS: "16.0"
+
+targets:
+  KawaiiRawEditor:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: KawaiiRawEditor
+        CFBundleShortVersionString: "0.0.1"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dueckis.kawaiiraweditor
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        # Kotlin/Native framework output from Gradle step:
+        FRAMEWORK_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../shared/build/bin/iosArm64/debugFramework"
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+    dependencies:
+      - framework: ../shared/build/bin/iosArm64/debugFramework/KawaiiShared.framework
+        embed: true
+        codeSign: false
+
+schemes:
+  KawaiiRawEditor:
+    build:
+      targets:
+        KawaiiRawEditor: all
