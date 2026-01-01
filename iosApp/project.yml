@@ -3,12 +3,14 @@ name: KawaiiRawEditor
 options:
   deploymentTarget:
     iOS: "16.0"
+  bundleIdPrefix: com.dueckis
 
 targets:
   KawaiiRawEditor:
     type: application
     platform: iOS
     sources:
+      # This tells Xcode to look for Swift files in a folder named 'Sources'
       - Sources
     info:
       path: Info.plist
@@ -16,15 +18,27 @@ targets:
         CFBundleDisplayName: KawaiiRawEditor
         CFBundleShortVersionString: "0.0.1"
         CFBundleVersion: "1"
+        # Fixes black screen crash on launch
         UILaunchScreen: {}
+        # Required for picking files
+        NSPhotoLibraryUsageDescription: "This app needs gallery access to edit photos."
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.dueckis.kawaiiraweditor
         SWIFT_VERSION: "5.0"
-        TARGETED_DEVICE_FAMILY: "1,2"
-        # Kotlin/Native framework output from Gradle step:
+        TARGETED_DEVICE_FAMILY: "1,2" # iPhone & iPad
+
+        # Point Xcode to where Gradle builds the Kotlin framework
         FRAMEWORK_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../shared/build/bin/iosArm64/debugFramework"
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+
+        # Disable signing enforcement for the project generation
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
+
     dependencies:
       - framework: ../shared/build/bin/iosArm64/debugFramework/KawaiiShared.framework
         embed: true
