@@ -52,7 +52,7 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Choose export file format and resolution 
 - Button to switch between unedited and edited preview
 - Widget showing all edits
-- Tab for cropping and rotating the image (Buggy with masks)
+- Tab for cropping and rotating the image
 - Tag system for mask names
   
 ## Planned/Issues:
@@ -61,16 +61,11 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Highlight recovery needs to be better for the highlight slider. (use the exposure slider for now)
 - Use a more intuitive rating system
 - Rename files
-- Be able to reorder subtract and add masks
-- UI needs to be improved for masking. (And more)
-- Fix overlapping Add and subtract submasks generate hard cut
-- Mask preview needs improvement
 - Subject masks should be stored
 - Save calculated AI Masks
 - Tablet UI design
 - add support for immich
-- add ios support
-- ai environment masks should automatically name tags
+- add ios support (maybe)
 - app should only open once
   
 ## Info
