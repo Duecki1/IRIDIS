@@ -68,6 +68,7 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Subject masks should be stored
 - Save calculated AI Masks
 - Tablet UI design
+- add support for immich
   
 ## Info
 Downloading the app will automatically install a Subject selection ML Model.
