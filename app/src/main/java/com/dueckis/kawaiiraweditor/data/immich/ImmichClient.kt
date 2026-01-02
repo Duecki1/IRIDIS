@@ -310,14 +310,16 @@ internal suspend fun uploadImmichAsset(
 
             val closing = "$boundaryPrefix--$lineBreak".toByteArray(Charsets.UTF_8)
 
+            val metadataJson = """[{"key":"mobile-app","value":{}}]"""
             val parts =
                 listOf(
                     fieldPart("deviceId", "kawaiiraweditor-android"),
                     fieldPart("deviceAssetId", UUID.randomUUID().toString()),
                     fieldPart("fileCreatedAt", nowIso),
                     fieldPart("fileModifiedAt", nowIso),
+                    fieldPart("isFavorite", "false"),
                     fieldPart("filename", safeFileName),
-                    fieldPart("metadata", "[]"),
+                    fieldPart("metadata", metadataJson),
                     fileHeaderPart("assetData", safeFileName, mimeType)
                 )
 
