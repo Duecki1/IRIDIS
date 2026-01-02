@@ -9,40 +9,34 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.os.Build
 import android.util.Base64
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
-import com.dueckis.kawaiiraweditor.data.model.MaskState
-import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
-import com.dueckis.kawaiiraweditor.data.preferences.AppPreferences
 import com.dueckis.kawaiiraweditor.data.immich.ImmichAuthMode
 import com.dueckis.kawaiiraweditor.data.immich.ImmichConfig
-import com.dueckis.kawaiiraweditor.data.immich.addImmichAssetsToAlbum
 import com.dueckis.kawaiiraweditor.data.immich.ImmichUploadResult
+import com.dueckis.kawaiiraweditor.data.immich.addImmichAssetsToAlbum
 import com.dueckis.kawaiiraweditor.data.immich.uploadImmichAsset
 import com.dueckis.kawaiiraweditor.data.media.ExportImageFormat
 import com.dueckis.kawaiiraweditor.data.media.decodeToBitmap
 import com.dueckis.kawaiiraweditor.data.media.saveBitmapToPictures
 import com.dueckis.kawaiiraweditor.data.media.saveJpegToPictures
+import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
+import com.dueckis.kawaiiraweditor.data.model.MaskState
+import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
+import com.dueckis.kawaiiraweditor.data.preferences.AppPreferences
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -51,59 +45,6 @@ import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-
-private enum class ExportDestination {
-    Local,
-    Immich
-}
-
-@Composable
-private fun ExportDestinationDialog(
-    immichEnabled: Boolean,
-    immichAuthMode: ImmichAuthMode?,
-    onDismissRequest: () -> Unit,
-    onSelectDestination: (ExportDestination) -> Unit
-) {
-    val immichHint =
-        when (immichAuthMode) {
-            ImmichAuthMode.Login -> "Sign in to Immich in settings."
-            ImmichAuthMode.ApiKey -> "Add your Immich API key in settings."
-            null -> "Configure Immich in settings."
-        }
-
-    AlertDialog(
-        onDismissRequest = onDismissRequest,
-        title = { Text("Save to") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(
-                    onClick = { onSelectDestination(ExportDestination.Local) },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Local device")
-                }
-                OutlinedButton(
-                    onClick = { onSelectDestination(ExportDestination.Immich) },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = immichEnabled
-                ) {
-                    Text("Immich")
-                }
-                if (!immichEnabled) {
-                    Text(
-                        text = immichHint,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismissRequest) { Text("Cancel") }
-        }
-    )
-}
 
 private fun encodeExportBytes(
     fullBytes: ByteArray,
@@ -125,7 +66,6 @@ private fun encodeExportBytes(
     bitmap.recycle()
     val encoded = if (ok) output.toByteArray() else return null
     if (encoded.isEmpty()) return null
-    // Quick sanity check for common formats.
     val valid =
         when (options.format) {
             ExportImageFormat.Jpeg -> encoded.size >= 2 && encoded[0] == 0xFF.toByte() && encoded[1] == 0xD8.toByte()
@@ -170,6 +110,19 @@ private fun buildExportFileName(
         "${base}_EDIT_$stamp.${format.extension}"
     }
 }
+
+private fun buildImmichUploadErrorMessage(result: ImmichUploadResult): String {
+    val status = result.statusCode?.let { "HTTP $it" }
+    val base = result.errorMessage?.takeIf { it.isNotBlank() } ?: "Immich upload failed."
+    val body = result.responseBody?.takeIf { it.isNotBlank() }?.take(400)
+    return when {
+        status != null && body != null -> "$base ($status)\n$body"
+        status != null -> "$base ($status)"
+        body != null -> "$base\n$body"
+        else -> base
+    }
+}
+
 @Composable
 internal fun ExportButton(
     modifier: Modifier = Modifier,
@@ -266,8 +219,7 @@ internal fun ExportButton(
                                     bitmap,
                                     options.format,
                                     options.quality
-                                )
-                                    .also { bitmap.recycle() }
+                                ).also { bitmap.recycle() }
                             }
                         }
 
@@ -277,6 +229,7 @@ internal fun ExportButton(
                             onExportComplete(false, "Export failed: could not save image.")
                         }
                     }
+
                     ExportDestination.Immich -> {
                         val config = immichConfig
                         if (config == null) {
@@ -284,7 +237,6 @@ internal fun ExportButton(
                             return@launch
                         }
                         val exportBytes = withContext(Dispatchers.Default) {
-                            // Always re-encode for Immich to maximize compatibility with server-side decoders.
                             encodeExportBytes(fullBytes, options, allowPassthroughJpeg = false)
                         }
                         if (exportBytes == null) {
@@ -311,7 +263,6 @@ internal fun ExportButton(
                                 }
                             }
 
-                            // Upload XMP sidecar (Immich-supported) with our edits embedded.
                             val xmpFileName = "$fileName.xmp"
                             val xmpBytes = buildXmpSidecarForIridis(currentJson)
                             val xmpUpload =
@@ -367,9 +318,8 @@ internal fun ExportButton(
     if (showExportDialog) {
         ExportOptionsDialog(
             initial = lastOptions,
-            isLoading = isExporting, // This should trigger a LoadingIndicator inside your Dialog UI
+            isLoading = isExporting,
             onDismissRequest = {
-                // Prevent dismissing if an export is currently in progress
                 if (!isExporting) {
                     showExportDialog = false
                 }
@@ -401,16 +351,5 @@ internal fun ExportButton(
                 startExport(destination, options, immichConfig)
             }
         )
-    }
-}
-private fun buildImmichUploadErrorMessage(result: ImmichUploadResult): String {
-    val status = result.statusCode?.let { "HTTP $it" }
-    val base = result.errorMessage?.takeIf { it.isNotBlank() } ?: "Immich upload failed."
-    val body = result.responseBody?.takeIf { it.isNotBlank() }?.take(400)
-    return when {
-        status != null && body != null -> "$base ($status)\n$body"
-        status != null -> "$base ($status)"
-        body != null -> "$base\n$body"
-        else -> base
     }
 }

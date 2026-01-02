@@ -98,7 +98,6 @@ internal class AppPreferences(context: Context) {
         if (raw.equals("immich", ignoreCase = true)) return ImmichWorkMode.Immich
         if (raw.equals("local", ignoreCase = true)) return ImmichWorkMode.Local
 
-        // Back-compat with the older toggle (if present).
         val legacy = prefs.getBoolean(KEY_IMMICH_AUTO_UPLOAD_EDITS_ENABLED_LEGACY, false)
         return if (legacy) ImmichWorkMode.Immich else ImmichWorkMode.Local
     }
@@ -132,7 +131,6 @@ internal class AppPreferences(context: Context) {
         prefs.edit().putString(KEY_MASK_RENAME_TAGS, JSONArray(normalized).toString()).apply()
     }
 
-    /** Call this once at startup (or before showing settings) */
     fun ensureDefaultMaskRenameTagsSeeded() {
         if (!prefs.contains(KEY_MASK_RENAME_TAGS)) {
             setMaskRenameTags(DEFAULT_MASK_RENAME_TAGS)

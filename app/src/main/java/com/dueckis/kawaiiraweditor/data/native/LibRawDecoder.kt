@@ -24,11 +24,6 @@ object LibRawDecoder {
     external fun lowdecodeFromSession(handle: Long, adjustmentsJson: String): ByteArray?
     external fun decodeFullResFromSession(handle: Long, adjustmentsJson: String): ByteArray?
 
-    /**
-     * Optimized export function.
-     * @param maxDimension 0 for full resolution, otherwise resizes natively before extensive processing.
-     * @param lowRamMode if true, uses faster/lower-memory demosaicing.
-     */
     external fun exportFromSession(
         handle: Long,
         adjustmentsJson: String,

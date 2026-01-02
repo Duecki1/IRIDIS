@@ -5,14 +5,11 @@
 
 package com.dueckis.kawaiiraweditor.ui.gallery
 
-import android.Manifest
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.os.Build
 import android.os.Parcelable
 import android.os.SystemClock
 import android.widget.Toast
@@ -110,7 +107,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import com.dueckis.kawaiiraweditor.data.decoding.decodePreviewBytesForTagging
 import com.dueckis.kawaiiraweditor.data.immich.ImmichAlbum
 import com.dueckis.kawaiiraweditor.data.immich.ImmichAsset
@@ -126,6 +122,7 @@ import com.dueckis.kawaiiraweditor.data.media.parseRawMetadataForSearch
 import com.dueckis.kawaiiraweditor.data.media.saveJpegToPictures
 import com.dueckis.kawaiiraweditor.data.model.GalleryItem
 import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
+import com.dueckis.kawaiiraweditor.data.permissions.maybeRequestPostNotificationsPermission
 import com.dueckis.kawaiiraweditor.data.storage.ProjectStorage
 import com.dueckis.kawaiiraweditor.domain.ai.ClipAutoTagger
 import kotlinx.coroutines.Dispatchers
@@ -140,22 +137,6 @@ import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.exp
 import kotlin.math.min
-
-private enum class GallerySource {
-    Local,
-    Immich
-}
-
-private enum class GallerySortField(val label: String) {
-    Name("Name"),
-    Date("Date"),
-    Changed("Changed")
-}
-
-private enum class GallerySortOrder(val label: String) {
-    Asc("Asc"),
-    Desc("Desc")
-}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -193,17 +174,12 @@ internal fun GalleryScreen(
     val notificationPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
-    fun maybeRequestNotificationPermission() {
-        if (Build.VERSION.SDK_INT < 33) return
-        val granted =
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-                    PackageManager.PERMISSION_GRANTED
-        if (!granted) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    fun requestNotificationPermissionIfNeeded() {
+        maybeRequestPostNotificationsPermission(context) { permission ->
+            notificationPermissionLauncher.launch(permission)
         }
     }
 
-    // --- 1. REUSABLE IMPORT LOGIC ---
     suspend fun importBytes(
         name: String,
         bytes: ByteArray,
@@ -237,7 +213,6 @@ internal fun GalleryScreen(
         if (openAfterImport) {
             onOpenItem(item)
         }
-        // Start background processing (thumbnails, tagging, metadata)
         coroutineScope.launch {
             val previewBytes = withContext(Dispatchers.Default) {
                 runCatching { decodePreviewBytesForTagging(bytes, lowQualityPreviewEnabled) }.getOrNull()
@@ -261,7 +236,7 @@ internal fun GalleryScreen(
             if (thumbnail != previewBitmap) previewBitmap.recycle()
 
             if (automaticTaggingEnabled) {
-                maybeRequestNotificationPermission()
+                requestNotificationPermissionIfNeeded()
                 onTaggingInFlightChange(projectId, true)
                 try {
                     val tags = withContext(Dispatchers.Default) {
@@ -309,7 +284,6 @@ internal fun GalleryScreen(
         }
     }
 
-    // --- 2. HANDLE INTENTS (Open With / Share) ---
     val activity = context as? Activity
     val intent = activity?.intent
 
@@ -320,18 +294,15 @@ internal fun GalleryScreen(
         val type = intent.type
         val urisToImport = mutableListOf<Uri>()
 
-        // Case A: "Open with" (Single file via Data)
         if (Intent.ACTION_VIEW == action && intent.data != null) {
             urisToImport.add(intent.data!!)
         }
-        // Case B: "Share" (Single image)
         else if (Intent.ACTION_SEND == action && type?.startsWith("image/") == true) {
             @Suppress("DEPRECATION")
             (intent.getParcelableExtra<Parcelable>(Intent.EXTRA_STREAM) as? Uri)?.let {
                 urisToImport.add(it)
             }
         }
-        // Case C: "Share Multiple"
         else if (Intent.ACTION_SEND_MULTIPLE == action && type?.startsWith("image/") == true) {
             @Suppress("DEPRECATION")
             intent.getParcelableArrayListExtra<Parcelable>(Intent.EXTRA_STREAM)?.let { list ->
@@ -350,7 +321,6 @@ internal fun GalleryScreen(
             intent.data = null
         }
     }
-
 
     val columns = when {
         screenWidthDp >= 900 -> 5
@@ -515,7 +485,6 @@ internal fun GalleryScreen(
         }
     }
 
-    // --- 3. UPDATED FILE PICKER TO USE SHARED LOGIC ---
     val pickRaw = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         coroutineScope.launch {
@@ -855,9 +824,9 @@ internal fun GalleryScreen(
     LaunchedEffect(searchActive) {
         if (!searchActive) {
             if (isExecutingSearch) {
-                isExecutingSearch = false // Reset flag, but don't clear text
+                isExecutingSearch = false
             } else {
-                queryText = "" // User cancelled, so clear text
+                queryText = ""
             }
             focusManager.clearFocus()
         }
@@ -1435,7 +1404,6 @@ internal fun GalleryScreen(
                 }
             }
 
-            // Multi-selection Floating Toolbar
             AnimatedVisibility(
                 visible = selectedIds.isNotEmpty() && gallerySource == GallerySource.Local,
                 enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),

@@ -749,8 +749,6 @@ internal fun EditorScreen(
 	        val refH = ref.height.coerceAtLeast(1)
 	        val oldStepsMod = ((oldSteps % 4) + 4) % 4
 
-	        // For correct remapping we need the image dimensions BEFORE crop (but after orientation/flip/rotation).
-	        // In crop mode we have an explicit uncropped render, otherwise estimate from the cropped render + crop rect.
 	        val preCropWAfterSteps =
 	            if (useUncroppedReference) refW.toFloat()
 	            else (refW.toFloat() / oldCrop.width.coerceAtLeast(0.0001f)).coerceAtLeast(1f)
@@ -761,13 +759,11 @@ internal fun EditorScreen(
 	        val preCropWAfterStepsPx = preCropWAfterSteps.roundToInt().coerceAtLeast(1)
 	        val preCropHAfterStepsPx = preCropHAfterSteps.roundToInt().coerceAtLeast(1)
 
-	        // Base dimensions are the canonical (orientationSteps=0) dimensions.
 	        val baseW = if (oldStepsMod % 2 == 1) preCropHAfterStepsPx else preCropWAfterStepsPx
 	        val baseH = if (oldStepsMod % 2 == 1) preCropWAfterStepsPx else preCropHAfterStepsPx
 	        val baseWf = baseW.toFloat()
 	        val baseHf = baseH.toFloat()
 
-	        // Scale normalized lengths (<= 1.5) so linear/radial masks keep the same pixel size when crop changes.
 	        val oldWf = if (oldStepsMod % 2 == 1) baseHf else baseWf
 	        val oldHf = if (oldStepsMod % 2 == 1) baseWf else baseHf
 	        val newStepsMod = ((newSteps % 4) + 4) % 4
@@ -1001,7 +997,6 @@ internal fun EditorScreen(
     val renderDispatcher = remember { Executors.newSingleThreadExecutor().asCoroutineDispatcher() }
     DisposableEffect(renderDispatcher) { onDispose { renderDispatcher.close() } }
 
-    // Helper to request a one-off "original / no-adjustments" preview without changing global compare state
     suspend fun requestIdentityPreview(): Bitmap? {
         val handle = sessionHandle
         if (handle == 0L) return null
@@ -1015,8 +1010,6 @@ internal fun EditorScreen(
                 toneMapper = adjustments.toneMapper
             ).toJson(emptyList())
         }
-        // Try to get a quick low-quality preview directly to avoid depending on the shared
-        // render loop timing. If that fails, fall back to queuing a request and waiting briefly.
         val bmp = withContext(renderDispatcher) {
             runCatching { LibRawDecoder.lowdecodeFromSession(handle, json) }.getOrNull()
                 ?.decodeToBitmap()
@@ -1024,7 +1017,6 @@ internal fun EditorScreen(
         }
         if (bmp != null) return bmp
 
-        // Fallback: enqueue into the render loop and wait a bit for originalBitmap to update.
         val version = renderVersion.incrementAndGet()
         val stampBefore = lastOriginalPreviewStamp.get()
         renderRequests.trySend(
@@ -1439,7 +1431,6 @@ internal fun EditorScreen(
                     selectedSubMaskId = parsedMasks.first().subMasks.firstOrNull()?.id
                 }
             } catch (_: Exception) {
-                // Keep defaults.
             }
         }
 
@@ -2083,9 +2074,7 @@ internal fun EditorScreen(
 
             Box(modifier = Modifier.fillMaxSize()) {
 
-                    // PHONE LAYOUT
                     Column(modifier = Modifier.fillMaxSize()) {
-                        // TOP BAR
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2130,12 +2119,10 @@ internal fun EditorScreen(
                             }
                         }
 
-                        // MAIN CONTENT AREA (Preview + Controls + Overlay FAB)
                         Box(modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)) {
                             Column(modifier = Modifier.fillMaxSize()) {
-                                // 1. Preview Area
                                 Box(modifier = Modifier
                                     .weight(1f)) {
                                     Box {
@@ -2199,21 +2186,19 @@ internal fun EditorScreen(
                                             }
                                         )
 
-                                        // Overlay Controls - Bottom Left (Undo/Redo)
                                         Surface(
                                             modifier = Modifier
                                                 .align(Alignment.BottomStart)
                                                 .padding(16.dp),
-                                            shape = CircleShape, // Fully rounded pill shape
-                                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f), // Dark semi-transparent background
+                                            shape = CircleShape,
+                                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
                                             contentColor = Color.White
                                         ) {
                                             Row(
-                                                modifier = Modifier.height(IntrinsicSize.Min), // Essential for the divider to fill height
+                                                modifier = Modifier.height(IntrinsicSize.Min),
                                                 verticalAlignment = Alignment.CenterVertically,
                                                 horizontalArrangement = Arrangement.Center
                                             ) {
-                                                // Undo Button
                                                 IconButton(
                                                     onClick = ::undo,
                                                     enabled = canUndo,
@@ -2221,25 +2206,23 @@ internal fun EditorScreen(
                                                         contentColor = MaterialTheme.colorScheme.onSurface,
                                                         disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                                                     ),
-                                                    modifier = Modifier.size(48.dp) // Standard expressive touch target
+                                                    modifier = Modifier.size(48.dp)
                                                 ) {
                                                     Icon(
-                                                        imageVector = Icons.AutoMirrored.Rounded.Undo, // Rounded variant looks smoother
+                                                        imageVector = Icons.AutoMirrored.Rounded.Undo,
                                                         contentDescription = "Undo",
-                                                        modifier = Modifier.size(20.dp) // Slightly smaller icon for the "refined" look
+                                                        modifier = Modifier.size(20.dp)
                                                     )
                                                 }
 
-                                                // The thin separator line
                                                 VerticalDivider(
                                                     thickness = 1.dp,
                                                     color = Color.White.copy(alpha = 0.15f),
                                                     modifier = Modifier
-                                                        .padding(vertical = 12.dp) // Add padding so lines don't touch edges
+                                                        .padding(vertical = 12.dp)
                                                         .fillMaxHeight()
                                                 )
 
-                                                // Redo Button
                                                 IconButton(
                                                     onClick = ::redo,
                                                     enabled = canRedo,
@@ -2258,7 +2241,6 @@ internal fun EditorScreen(
                                             }
                                         }
 
-                                        // Overlay Controls - Bottom Right (Compare)
                                         Box(
                                             modifier = Modifier
                                                 .align(Alignment.BottomEnd)
@@ -2275,21 +2257,20 @@ internal fun EditorScreen(
                                             }
 
                                             Surface(
-                                                onClick = { /* handled by interactionSource if needed, or keep empty for press-hold */ },
+                                                onClick = { },
                                                 interactionSource = interactionSource,
-                                                shape = RoundedCornerShape(24.dp), // "Squircle" expressive shape
+                                                shape = RoundedCornerShape(24.dp),
                                                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
                                                 contentColor = MaterialTheme.colorScheme.onSurface,
-                                                modifier = Modifier.size(56.dp) // Slightly larger floating action size
+                                                modifier = Modifier.size(56.dp)
                                             ) {
                                                 Box(contentAlignment = Alignment.Center) {
                                                     Icon(
-                                                        // Use a diagonal arrow icon if available, or fallback to CompareArrows
-                                                        imageVector = Icons.Default.CompareArrows, // Or Icons.Rounded.Swaps
+                                                        imageVector = Icons.Default.CompareArrows,
                                                         contentDescription = "Compare",
                                                         modifier = Modifier
                                                             .size(26.dp)
-                                                            .rotate(45f) // Rotate to match the diagonal look in the picture
+                                                            .rotate(45f)
                                                     )
                                                 }
                                             }
@@ -2297,7 +2278,6 @@ internal fun EditorScreen(
                                     }
                                 }
 
-                                // 2. Controls Sheet (Sits at bottom of Column)
                                 Surface(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -2379,17 +2359,12 @@ internal fun EditorScreen(
                                                 onDetectAiEnvironmentCategories = onDetectAiEnvironmentCategories,
                                                 maskRenameTags = maskRenameTags
                                             )
-                                            // Extra spacing at bottom so content isn't hidden by FAB
                                             Spacer(modifier = Modifier.height(100.dp))
                                         }
                                     }
                                 }
                             }
 
-                            // 3. Floating App Bar (Overlay)
-
-
-                            // Positioned directly over content via Box alignment
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.BottomCenter)
@@ -2404,18 +2379,15 @@ internal fun EditorScreen(
                                         toolbarContentColor = MaterialTheme.colorScheme.onSurface
                                     ),
                                     floatingActionButton = {
-                                        // The Container for the FAB
                                         Box {
-                                            // The Visual FAB - using StandardFloatingActionButton for shape/elevation
                                             FloatingToolbarDefaults.StandardFloatingActionButton(
-                                                onClick = { /* No-op, intercepted by ExportButton below */ },
+                                                onClick = { },
                                                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                                                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                                             ) {
                                                 Icon(Icons.Filled.Download, "Export")
                                             }
 
-                                            // The Logic (Invisible Overlay)
                                             ExportButton(
                                                 label = "",
                                                 sessionHandle = sessionHandle,
@@ -2447,9 +2419,7 @@ internal fun EditorScreen(
                                             )
                                         }
                                     },
-                                    // Use customColors directly to keep the Dark Grey Pill background
                                     content = {
-                                        // Navigation Icons
                                         EditorPanelTab.entries.forEach { tab ->
                                             val selected = panelTab == tab
                                             IconButton(onClick = { onSelectPanelTab(tab) }) {

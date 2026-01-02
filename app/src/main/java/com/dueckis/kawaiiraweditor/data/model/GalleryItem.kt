@@ -16,9 +16,3 @@ internal data class GalleryItem(
     val editsUpdatedAtMs: Long = 0L,
     val immichSidecarUpdatedAtMs: Long = 0L
 )
-
-internal enum class Screen {
-    Gallery,
-    Settings,
-    Editor
-}

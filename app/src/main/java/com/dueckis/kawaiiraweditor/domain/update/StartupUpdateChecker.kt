@@ -12,12 +12,6 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 
-internal data class StartupUpdateInfo(
-    val currentVersionName: String,
-    val latestVersionName: String,
-    val releasePageUrl: String
-)
-
 internal fun getInstalledVersionName(context: Context): String {
     return runCatching {
         val pm = context.packageManager

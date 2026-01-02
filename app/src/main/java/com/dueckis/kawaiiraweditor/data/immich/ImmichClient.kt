@@ -17,86 +17,6 @@ import java.util.Locale
 import java.util.TimeZone
 import java.util.UUID
 
-internal enum class ImmichAuthMode {
-    Login,
-    ApiKey
-}
-
-internal const val IMMICH_OAUTH_APP_REDIRECT_URI = "kawaiiraweditor://oauth/immich"
-
-internal fun buildImmichMobileRedirectUri(serverUrl: String): String {
-    val base = ImmichConfig(serverUrl, ImmichAuthMode.Login).apiBaseUrl()
-    if (base.isBlank()) return ""
-    return "$base/oauth/mobile-redirect"
-}
-
-internal data class ImmichConfig(
-    val serverUrl: String,
-    val authMode: ImmichAuthMode,
-    val apiKey: String = "",
-    val accessToken: String = ""
-) {
-    fun apiBaseUrl(): String {
-        val trimmed = serverUrl.trim().removeSuffix("/")
-        if (trimmed.isBlank()) return ""
-        return if (trimmed.endsWith("/api")) trimmed else "$trimmed/api"
-    }
-}
-
-internal data class ImmichAsset(
-    val id: String,
-    val fileName: String,
-    val createdAt: String? = null,
-    val updatedAt: String? = null,
-    val type: String = "IMAGE"
-)
-
-internal data class ImmichAssetInfo(
-    val id: String,
-    val originalFileName: String,
-    val description: String? = null,
-    val updatedAt: String? = null
-)
-
-internal data class ImmichAlbum(
-    val id: String,
-    val name: String,
-    val assetCount: Int,
-    val thumbnailAssetId: String? = null,
-    val createdAt: String? = null,
-    val updatedAt: String? = null,
-    val lastModifiedAssetTimestamp: String? = null
-)
-
-internal data class ImmichLoginResult(
-    val accessToken: String?,
-    val userEmail: String? = null,
-    val name: String? = null,
-    val errorMessage: String? = null,
-    val statusCode: Int? = null
-)
-
-internal data class ImmichOAuthStartResult(
-    val authorizationUrl: String?,
-    val state: String? = null,
-    val codeVerifier: String? = null,
-    val errorMessage: String? = null,
-    val statusCode: Int? = null
-)
-
-internal data class ImmichUploadResult(
-    val assetId: String?,
-    val errorMessage: String? = null,
-    val statusCode: Int? = null,
-    val responseBody: String? = null
-)
-
-internal data class ImmichAssetPage(
-    val items: List<ImmichAsset>,
-    val count: Int,
-    val total: Int
-)
-
 internal suspend fun searchImmichAssets(
     config: ImmichConfig,
     page: Int,
@@ -407,7 +327,6 @@ internal suspend fun uploadImmichAsset(
                     fileFooterPart().size.toLong() +
                     closing.size.toLong()
 
-            // Avoid chunked transfer encoding; some servers/proxies can mishandle it and corrupt uploads.
             connection.setFixedLengthStreamingMode(totalLength)
             connection.setRequestProperty("Content-Length", totalLength.toString())
 

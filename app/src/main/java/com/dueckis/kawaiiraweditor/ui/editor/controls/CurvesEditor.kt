@@ -1,29 +1,20 @@
 package com.dueckis.kawaiiraweditor.ui.editor.controls
 
-import android.annotation.SuppressLint
-import android.graphics.Color as AndroidColor
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -46,36 +37,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
-import com.dueckis.kawaiiraweditor.data.model.ColorGradingState
 import com.dueckis.kawaiiraweditor.data.model.CurvePointState
 import com.dueckis.kawaiiraweditor.data.model.CurvesState
-import com.dueckis.kawaiiraweditor.data.model.HslState
-import com.dueckis.kawaiiraweditor.data.model.HueSatLumState
 import com.dueckis.kawaiiraweditor.data.model.defaultCurvePoints
 import com.dueckis.kawaiiraweditor.domain.CurvesMath
 import com.dueckis.kawaiiraweditor.domain.HistogramData
-import com.dueckis.kawaiiraweditor.ui.components.AdjustmentSlider
-import com.dueckis.kawaiiraweditor.ui.components.ColorWheelControl
-import com.dueckis.kawaiiraweditor.ui.components.GradientAdjustmentSlider
-import com.dueckis.kawaiiraweditor.ui.components.PanelSectionCard
-import com.dueckis.kawaiiraweditor.ui.components.PanelTwoTitleSectionCard
-import kotlin.math.roundToInt
-
-private enum class CurveChannel(val label: String) {
-    Luma("L"),
-    Red("R"),
-    Green("G"),
-    Blue("B"),
-}
+import kotlin.math.sqrt
 
 private fun CurvesState.pointsFor(channel: CurveChannel): List<CurvePointState> {
     return when (channel) {
@@ -228,7 +202,7 @@ internal fun CurvesEditor(
                                         best = index
                                     }
                                 }
-                                return if (best != null && kotlin.math.sqrt(bestDist) <= pointHitRadiusPx) best else null
+                                return if (best != null && sqrt(bestDist) <= pointHitRadiusPx) best else null
                             }
 
                             fun movePoint(
@@ -344,346 +318,5 @@ internal fun CurvesEditor(
                 }
             }
         }
-    }
-}
-
-@SuppressLint("UnusedBoxWithConstraintsScope")
-@Composable
-internal fun ColorTabControls(
-    adjustments: AdjustmentState,
-    histogramData: HistogramData?,
-    onAdjustmentsChange: (AdjustmentState) -> Unit,
-    onBeginEditInteraction: () -> Unit,
-    onEndEditInteraction: () -> Unit
-) {
-    val isPhoneLayout = LocalConfiguration.current.screenWidthDp < 600
-
-    // WRAP EVERYTHING IN A COLUMN TO PROVIDE MARGINS BETWEEN PANELS
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        if (isPhoneLayout) {
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                val totalWidth = maxWidth
-                val spacing = 12.dp
-                val cardInternalPadding = 24.dp
-                val columnWidth = (totalWidth - spacing) / 2
-                val wheelSize = minOf(columnWidth - cardInternalPadding, 170.dp)
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(IntrinsicSize.Max),
-                    horizontalArrangement = Arrangement.spacedBy(spacing),
-                    verticalAlignment = Alignment.Top
-                ) {
-                    PanelSectionCard(
-                        title = "Curves",
-                        subtitle = "Tap to add points • Drag to adjust",
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                    ) {
-                        CurvesEditor(
-                            adjustments = adjustments,
-                            histogramData = histogramData,
-                            onAdjustmentsChange = onAdjustmentsChange,
-                            onBeginEditInteraction = onBeginEditInteraction,
-                            onEndEditInteraction = onEndEditInteraction
-                        )
-                    }
-
-                    PanelSectionCard(
-                        title = "Midtones",
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                    ) {
-                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            ColorWheelControl(
-                                wheelSize = wheelSize,
-                                modifier = Modifier.fillMaxWidth(),
-                                value = adjustments.colorGrading.midtones,
-                                defaultValue = HueSatLumState(),
-                                onValueChange = { updated ->
-                                    onAdjustmentsChange(adjustments.copy(colorGrading = adjustments.colorGrading.copy(midtones = updated)))
-                                },
-                                onBeginEditInteraction = onBeginEditInteraction,
-                                onEndEditInteraction = onEndEditInteraction
-                            )
-                        }
-                    }
-                }
-            }
-
-            PanelTwoTitleSectionCard(title = "Shadows", subtitle = "Highlights") {
-                ColorGradingEditor(
-                    colorGrading = adjustments.colorGrading,
-                    onColorGradingChange = { updated -> onAdjustmentsChange(adjustments.copy(colorGrading = updated)) },
-                    onBeginEditInteraction = onBeginEditInteraction,
-                    onEndEditInteraction = onEndEditInteraction,
-                    showMidtones = false
-                )
-            }
-        } else {
-            PanelSectionCard(title = "Curves", subtitle = "Tap to add points • Drag to adjust") {
-                CurvesEditor(
-                    adjustments = adjustments,
-                    histogramData = histogramData,
-                    onAdjustmentsChange = onAdjustmentsChange,
-                    onBeginEditInteraction = onBeginEditInteraction,
-                    onEndEditInteraction = onEndEditInteraction
-                )
-            }
-
-            PanelSectionCard(title = "Color Grading", subtitle = "Shadows / Midtones / Highlights") {
-                ColorGradingEditor(
-                    colorGrading = adjustments.colorGrading,
-                    onColorGradingChange = { updated -> onAdjustmentsChange(adjustments.copy(colorGrading = updated)) },
-                    onBeginEditInteraction = onBeginEditInteraction,
-                    onEndEditInteraction = onEndEditInteraction
-                )
-            }
-        }
-
-        PanelSectionCard(title = "Color Mixer", subtitle = "Hue / Saturation / Luminance") {
-            HslEditor(
-                hsl = adjustments.hsl,
-                onHslChange = { updated -> onAdjustmentsChange(adjustments.copy(hsl = updated)) },
-                onBeginEditInteraction = onBeginEditInteraction,
-                onEndEditInteraction = onEndEditInteraction
-            )
-        }
-    }
-}
-
-@SuppressLint("UnusedBoxWithConstraintsScope")
-@Composable
-internal fun ColorGradingEditor(
-    colorGrading: ColorGradingState,
-    onColorGradingChange: (ColorGradingState) -> Unit,
-    onBeginEditInteraction: () -> Unit,
-    onEndEditInteraction: () -> Unit,
-    showMidtones: Boolean = true
-) {
-    val formatterInt: (Float) -> String = { it.roundToInt().toString() }
-    val isWide = LocalConfiguration.current.screenWidthDp >= 600
-
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val midWheelSize = if (isWide) 240.dp else minOf(maxWidth, 220.dp)
-        val sideWheelSize = minOf((maxWidth / 2) - 10.dp, if (isWide) 220.dp else 170.dp)
-
-        // INCREASED VERTICAL SPACING TO 20.dp TO SEPARATE WHEELS FROM SLIDERS
-        Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            if (showMidtones) {
-                ColorWheelControl(
-
-                    wheelSize = midWheelSize,
-                    modifier = Modifier.fillMaxWidth(),
-                    value = colorGrading.midtones,
-                    defaultValue = HueSatLumState(),
-                    onValueChange = { onColorGradingChange(colorGrading.copy(midtones = it)) },
-                    onBeginEditInteraction = onBeginEditInteraction,
-                    onEndEditInteraction = onEndEditInteraction
-                )
-            }
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                ColorWheelControl(
-                    isHeaderCentered = true,
-                    wheelSize = sideWheelSize,
-                    modifier = Modifier.weight(1f),
-                    value = colorGrading.shadows,
-                    defaultValue = HueSatLumState(),
-                    onValueChange = { onColorGradingChange(colorGrading.copy(shadows = it)) },
-                    onBeginEditInteraction = onBeginEditInteraction,
-                    onEndEditInteraction = onEndEditInteraction
-                )
-                ColorWheelControl(
-                    isHeaderCentered = true,
-                    wheelSize = sideWheelSize,
-                    modifier = Modifier.weight(1f),
-                    value = colorGrading.highlights,
-                    defaultValue = HueSatLumState(),
-                    onValueChange = { onColorGradingChange(colorGrading.copy(highlights = it)) },
-                    onBeginEditInteraction = onBeginEditInteraction,
-                    onEndEditInteraction = onEndEditInteraction
-                )
-            }
-
-            // The sliders below will now have 20.dp margin from the wheels above
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                AdjustmentSlider(
-                    label = "Blending",
-                    value = colorGrading.blending,
-                    range = 0f..100f,
-                    step = 1f,
-                    defaultValue = 50f,
-                    formatter = formatterInt,
-                    onValueChange = { onColorGradingChange(colorGrading.copy(blending = it)) },
-                    onInteractionStart = onBeginEditInteraction,
-                    onInteractionEnd = onEndEditInteraction
-                )
-                AdjustmentSlider(
-                    label = "Balance",
-                    value = colorGrading.balance,
-                    range = -100f..100f,
-                    step = 1f,
-                    defaultValue = 0f,
-                    formatter = formatterInt,
-                    onValueChange = { onColorGradingChange(colorGrading.copy(balance = it)) },
-                    onInteractionStart = onBeginEditInteraction,
-                    onInteractionEnd = onEndEditInteraction
-                )
-            }
-        }
-    }
-}
-
-private enum class HslChannel(val label: String, val swatch: Color) {
-    Reds("Reds", Color(0xFFF87171)),
-    Oranges("Oranges", Color(0xFFFB923C)),
-    Yellows("Yellows", Color(0xFFFACC15)),
-    Greens("Greens", Color(0xFF4ADE80)),
-    Aquas("Aquas", Color(0xFF2DD4BF)),
-    Blues("Blues", Color(0xFF60A5FA)),
-    Purples("Purples", Color(0xFFA78BFA)),
-    Magentas("Magentas", Color(0xFFF472B6)),
-}
-
-private fun HslState.valueFor(channel: HslChannel): HueSatLumState {
-    return when (channel) {
-        HslChannel.Reds -> reds
-        HslChannel.Oranges -> oranges
-        HslChannel.Yellows -> yellows
-        HslChannel.Greens -> greens
-        HslChannel.Aquas -> aquas
-        HslChannel.Blues -> blues
-        HslChannel.Purples -> purples
-        HslChannel.Magentas -> magentas
-    }
-}
-
-private fun HslState.withValue(channel: HslChannel, value: HueSatLumState): HslState {
-    return when (channel) {
-        HslChannel.Reds -> copy(reds = value)
-        HslChannel.Oranges -> copy(oranges = value)
-        HslChannel.Yellows -> copy(yellows = value)
-        HslChannel.Greens -> copy(greens = value)
-        HslChannel.Aquas -> copy(aquas = value)
-        HslChannel.Blues -> copy(blues = value)
-        HslChannel.Purples -> copy(purples = value)
-        HslChannel.Magentas -> copy(magentas = value)
-    }
-}
-
-private fun hslChannelHueDegrees(channel: HslChannel): Float {
-    val hsv = FloatArray(3)
-    val r = (channel.swatch.red * 255f).roundToInt().coerceIn(0, 255)
-    val g = (channel.swatch.green * 255f).roundToInt().coerceIn(0, 255)
-    val b = (channel.swatch.blue * 255f).roundToInt().coerceIn(0, 255)
-    AndroidColor.RGBToHSV(r, g, b, hsv)
-    return hsv[0]
-}
-
-private fun hslHueTrackBrush(channel: HslChannel): Brush {
-    val channels = HslChannel.entries
-    val idx = channels.indexOf(channel)
-    val prev = channels[(idx - 1 + channels.size) % channels.size]
-    val next = channels[(idx + 1) % channels.size]
-    val v = 0.95f
-    return Brush.horizontalGradient(
-        listOf(
-            Color.hsv(hslChannelHueDegrees(prev), 1f, v),
-            Color.hsv(hslChannelHueDegrees(channel), 1f, v),
-            Color.hsv(hslChannelHueDegrees(next), 1f, v)
-        )
-    )
-}
-
-private fun hslSaturationTrackBrush(channel: HslChannel): Brush {
-    val hue = hslChannelHueDegrees(channel)
-    val v = 0.85f
-    return Brush.horizontalGradient(listOf(Color.hsv(hue, 0f, v), Color.hsv(hue, 1f, v)))
-}
-
-private fun hslLuminanceTrackBrush(channel: HslChannel): Brush {
-    val hue = hslChannelHueDegrees(channel)
-    return Brush.horizontalGradient(
-        listOf(Color.hsv(hue, 0.9f, 0.12f), Color.hsv(hue, 0.9f, 0.85f), Color.hsv(hue, 0.05f, 1f))
-    )
-}
-
-@Composable
-internal fun HslEditor(
-    hsl: HslState,
-    onHslChange: (HslState) -> Unit,
-    onBeginEditInteraction: () -> Unit,
-    onEndEditInteraction: () -> Unit
-) {
-    var activeChannel by remember { mutableStateOf(HslChannel.Reds) }
-    val current = hsl.valueFor(activeChannel)
-    val formatterInt: (Float) -> String = { it.roundToInt().toString() }
-    val hueBrush = remember(activeChannel) { hslHueTrackBrush(activeChannel) }
-    val saturationBrush = remember(activeChannel) { hslSaturationTrackBrush(activeChannel) }
-    val luminanceBrush = remember(activeChannel) { hslLuminanceTrackBrush(activeChannel) }
-
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(text = activeChannel.label, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
-
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(HslChannel.entries.size) { index ->
-                val channel = HslChannel.entries[index]
-                val isActive = channel == activeChannel
-                val borderColor = if (isActive) MaterialTheme.colorScheme.primary else Color.Transparent
-                Box(
-                    modifier =
-                        Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .background(channel.swatch)
-                            .border(width = 2.dp, color = borderColor, shape = CircleShape)
-                            .clickable { activeChannel = channel }
-                )
-            }
-        }
-
-        GradientAdjustmentSlider(
-            label = "Hue",
-            value = current.hue,
-            range = -100f..100f,
-            step = 1f,
-            defaultValue = 0f,
-            formatter = formatterInt,
-            trackBrush = hueBrush,
-            onValueChange = { onHslChange(hsl.withValue(activeChannel, current.copy(hue = it))) },
-            onInteractionStart = onBeginEditInteraction,
-            onInteractionEnd = onEndEditInteraction
-        )
-        GradientAdjustmentSlider(
-            label = "Saturation",
-            value = current.saturation,
-            range = -100f..100f,
-            step = 1f,
-            defaultValue = 0f,
-            formatter = formatterInt,
-            trackBrush = saturationBrush,
-            onValueChange = { onHslChange(hsl.withValue(activeChannel, current.copy(saturation = it))) },
-            onInteractionStart = onBeginEditInteraction,
-            onInteractionEnd = onEndEditInteraction
-        )
-        GradientAdjustmentSlider(
-            label = "Luminance",
-            value = current.luminance,
-            range = -100f..100f,
-            step = 1f,
-            defaultValue = 0f,
-            formatter = formatterInt,
-            trackBrush = luminanceBrush,
-            onValueChange = { onHslChange(hsl.withValue(activeChannel, current.copy(luminance = it))) },
-            onInteractionStart = onBeginEditInteraction,
-            onInteractionEnd = onEndEditInteraction
-        )
     }
 }

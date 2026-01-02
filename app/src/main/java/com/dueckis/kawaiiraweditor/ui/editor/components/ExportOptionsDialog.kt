@@ -6,17 +6,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -36,18 +30,11 @@ import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.media.ExportImageFormat
 import com.dueckis.kawaiiraweditor.ui.components.doubleTapSliderThumbToReset
 
-internal data class ExportOptions(
-    val format: ExportImageFormat,
-    val quality: Int,
-    val resizeLongEdgePx: Int?,
-    val dontEnlarge: Boolean,
-    val lowRamMode: Boolean = false
-)
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun ExportOptionsDialog(
     initial: ExportOptions,
-    isLoading: Boolean, // Added parameter
+    isLoading: Boolean,
     onDismissRequest: () -> Unit,
     onConfirm: (ExportOptions) -> Unit
 ) {
@@ -62,14 +49,11 @@ internal fun ExportOptionsDialog(
     val isLongEdgeValid = !resizeEnabled || longEdgeValue != null
 
     AlertDialog(
-        // Prevent dismissal via back-press or clicking outside while loading
         onDismissRequest = { if (!isLoading) onDismissRequest() },
         title = { Text("Export") },
         text = {
             Box(contentAlignment = Alignment.Center) {
-                // Main Content
                 Column(
-                    // Slightly fade content when loading to draw focus to the indicator
                     modifier = Modifier.alpha(if (isLoading) 0.5f else 1f),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
@@ -82,7 +66,7 @@ internal fun ExportOptionsDialog(
                         ExportFormatDropdown(
                             value = format,
                             onValueChange = { format = it },
-                            enabled = !isLoading // Disable dropdown
+                            enabled = !isLoading
                         )
                     }
 
@@ -93,20 +77,21 @@ internal fun ExportOptionsDialog(
                                 Text("$quality", style = MaterialTheme.typography.bodyMedium)
                             }
                             Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .doubleTapSliderThumbToReset(
-                                        value = quality.toFloat(),
-                                        valueRange = 1f..100f,
-                                        onReset = { if (!isLoading) quality = 90 }
-                                    )
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .doubleTapSliderThumbToReset(
+                                            value = quality.toFloat(),
+                                            valueRange = 1f..100f,
+                                            onReset = { if (!isLoading) quality = 90 }
+                                        )
                             ) {
                                 Slider(
                                     modifier = Modifier.fillMaxWidth(),
                                     value = quality.toFloat(),
                                     onValueChange = { quality = it.toInt().coerceIn(1, 100) },
                                     valueRange = 1f..100f,
-                                    enabled = !isLoading // Disable slider
+                                    enabled = !isLoading
                                 )
                             }
                         }
@@ -121,7 +106,7 @@ internal fun ExportOptionsDialog(
                         Switch(
                             checked = resizeEnabled,
                             onCheckedChange = { resizeEnabled = it },
-                            enabled = !isLoading // Disable switch
+                            enabled = !isLoading
                         )
                     }
 
@@ -132,7 +117,7 @@ internal fun ExportOptionsDialog(
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text("Long edge (px)") },
                             isError = !isLongEdgeValid,
-                            enabled = !isLoading, // Disable textfield
+                            enabled = !isLoading,
                             supportingText = {
                                 if (!isLongEdgeValid) Text("Enter a number (e.g. 2048)")
                             },
@@ -167,7 +152,6 @@ internal fun ExportOptionsDialog(
                     }
                 }
 
-                // Show Loading Indicator overlaying the content
                 if (isLoading) {
                     androidx.compose.material3.LoadingIndicator()
                 }
@@ -175,7 +159,7 @@ internal fun ExportOptionsDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = isLongEdgeValid && !isLoading, // Disable button
+                enabled = isLongEdgeValid && !isLoading,
                 onClick = {
                     onConfirm(
                         ExportOptions(
@@ -193,42 +177,11 @@ internal fun ExportOptionsDialog(
         },
         dismissButton = {
             TextButton(
-                enabled = !isLoading, // Disable cancel button
+                enabled = !isLoading,
                 onClick = onDismissRequest
             ) {
                 Text("Cancel")
             }
         }
     )
-}
-
-@Composable
-private fun ExportFormatDropdown(
-    value: ExportImageFormat,
-    onValueChange: (ExportImageFormat) -> Unit,
-    enabled: Boolean // Added parameter
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        OutlinedButton(
-            onClick = { expanded = true },
-            modifier = Modifier.height(36.dp),
-            enabled = enabled // Apply enabled state
-        ) {
-            Text(value.label)
-            Spacer(Modifier.width(6.dp))
-            Text(".${value.extension}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        DropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }) {
-            ExportImageFormat.values().forEach { option ->
-                DropdownMenuItem(
-                    text = { Text("${option.label} (.${option.extension})") },
-                    onClick = {
-                        expanded = false
-                        onValueChange(option)
-                    }
-                )
-            }
-        }
-    }
 }

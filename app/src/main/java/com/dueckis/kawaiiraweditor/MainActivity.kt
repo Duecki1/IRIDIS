@@ -37,15 +37,9 @@ class MainActivity : ComponentActivity() {
     private val pendingProjectToOpenState = mutableStateOf<String?>(null)
     private val pendingImmichOAuthRedirectState = mutableStateOf<String?>(null)
 
-    /**
-     * Inspects the intent for Project IDs or OAuth redirects.
-     * IMPORTANT: If an OAuth redirect is found, it extracts the URL and then CLEARS
-     * the intent.data to prevent the UI from trying to open it as a file (which causes a crash).
-     */
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return
 
-        // 1. Handle Project ID (e.g. from Widget)
         intent.getStringExtra("project_id")?.let {
             pendingProjectToOpenState.value = it
             intent.removeExtra("project_id")
@@ -54,32 +48,26 @@ class MainActivity : ComponentActivity() {
         val data = intent.data ?: return
         val scheme = data.scheme?.lowercase() ?: return
 
-        // 2. Ignore standard file/web schemes so the Gallery can handle imports normally
         if (scheme == "http" || scheme == "https" || scheme == "content" || scheme == "file") {
             return
         }
 
-        // 3. Detect OAuth Redirects
         var isOAuth = false
 
-        // Check A: Explicit standard Immich scheme
         if (scheme == "app.immich") {
             isOAuth = true
         }
-        // Check B: Configured custom scheme
         else {
             val expectedScheme = Uri.parse(IMMICH_OAUTH_APP_REDIRECT_URI).scheme?.lowercase()
             if (expectedScheme != null && scheme == expectedScheme) {
                 isOAuth = true
             }
-            // Check C: Heuristics for other callback formats (codes, states)
             else {
                 val hasState = !data.getQueryParameter("state").isNullOrBlank()
                 val hasCode = !data.getQueryParameter("code").isNullOrBlank()
                 val hasError = !data.getQueryParameter("error").isNullOrBlank() ||
                         !data.getQueryParameter("error_description").isNullOrBlank()
 
-                // Fragment check (some providers put params in fragment)
                 val fragment = data.fragment.orEmpty()
                 val fragmentParams = if (fragment.isNotBlank()) {
                     runCatching { Uri.parse("dummy://oauth/?$fragment") }.getOrNull()
@@ -96,15 +84,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // 4. If identified as OAuth, extract URL and consume the data to prevent crash
         if (isOAuth) {
             pendingImmichOAuthRedirectState.value = data.toString()
-            intent.data = null // <--- CRITICAL FIX: Stops GalleryScreen from reading this as a file
+            intent.data = null
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Handle intent immediately before UI setup
         handleIntent(intent)
 
         setTheme(R.style.Theme_KawaiiRawEditor)
@@ -173,7 +159,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onNewIntent(intent: Intent?) {
-        handleIntent(intent) // Process new intent (OAuth callback or Widget click)
+        handleIntent(intent)
         super.onNewIntent(intent)
         intent?.let { setIntent(it) }
     }

@@ -10,11 +10,6 @@ internal object IridisSidecarDescription {
     private const val begin = "[KRWE:BEGIN]"
     private const val end = "[KRWE:END]"
 
-    internal data class Parsed(
-        val sidecar: IridisSidecar,
-        val originalDescription: String
-    )
-
     internal fun upsert(description: String?, editsJson: String, updatedAtMs: Long): String {
         val base = description.orEmpty()
         val stripped = remove(base).trimEnd()
@@ -30,7 +25,7 @@ internal object IridisSidecarDescription {
         return if (stripped.isBlank()) block else stripped + "\n\n" + block
     }
 
-    internal fun parse(description: String?): Parsed? {
+    internal fun parse(description: String?): IridisSidecarDescriptionParsed? {
         val base = description.orEmpty()
         val block = extractBlock(base) ?: return null
         val map =
@@ -57,7 +52,10 @@ internal object IridisSidecarDescription {
                 else -> decodeGzipBase64(editsEncoded) ?: decodeBase64(editsEncoded)
             } ?: return null
         val original = remove(base).trim()
-        return Parsed(sidecar = IridisSidecar(editsJson = editsJson, updatedAtMs = updatedAtMs), originalDescription = original)
+        return IridisSidecarDescriptionParsed(
+            sidecar = IridisSidecar(editsJson = editsJson, updatedAtMs = updatedAtMs),
+            originalDescription = original
+        )
     }
 
     internal fun remove(description: String): String {
@@ -100,4 +98,3 @@ internal object IridisSidecarDescription {
         return runCatching { decoded.toString(Charsets.UTF_8) }.getOrNull()
     }
 }
-

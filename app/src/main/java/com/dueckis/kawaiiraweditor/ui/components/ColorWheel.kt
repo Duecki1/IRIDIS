@@ -42,7 +42,7 @@ internal fun ColorWheelControl(
     modifier: Modifier = Modifier,
     value: HueSatLumState,
     defaultValue: HueSatLumState,
-    isHeaderCentered: Boolean? = null, // Added parameter
+    isHeaderCentered: Boolean? = null,
     onValueChange: (HueSatLumState) -> Unit,
     onBeginEditInteraction: () -> Unit,
     onEndEditInteraction: () -> Unit
@@ -53,7 +53,6 @@ internal fun ColorWheelControl(
     val handleHitRadiusPx = with(LocalDensity.current) { 28.dp.toPx() }
 
     Column(modifier = modifier) {
-        // Inner Column handles the alignment of the header text and Reset button
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = if (isHeaderCentered == true) Alignment.CenterHorizontally else Alignment.Start

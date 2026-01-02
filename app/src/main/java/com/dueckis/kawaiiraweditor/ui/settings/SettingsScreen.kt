@@ -279,7 +279,6 @@ internal fun SettingsScreen(
                 )
             }
 
-            // No Immich "export defaults" here; destination is chosen per-export.
             var showMaskTagsDialog by remember { mutableStateOf(false) }
             var maskTagsDraft by remember { mutableStateOf("") }
 

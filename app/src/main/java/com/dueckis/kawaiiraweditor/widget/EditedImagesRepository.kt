@@ -6,10 +6,6 @@ import java.io.File
 import java.util.Comparator
 
 class EditedImagesRepository(private val context: Context) {
-    /**
-     * Returns absolute paths to thumbnail files stored by ProjectStorage (projectDir/thumbnail.jpg).
-     * Ordered by project modified time (newest first) and limited to `limit` entries.
-     */
     fun getLatestRenderedEditedPaths(limit: Int): List<String> {
         val storage = ProjectStorage(context)
         val projects = storage.getAllProjects()
@@ -29,4 +25,3 @@ class EditedImagesRepository(private val context: Context) {
             .take(limit)
     }
 }
-

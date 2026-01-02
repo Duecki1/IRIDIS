@@ -13,16 +13,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-internal enum class ExportImageFormat(
-    val label: String,
-    val extension: String,
-    val mimeType: String
-) {
-    Jpeg("JPEG", "jpg", "image/jpeg"),
-    Png("PNG", "png", "image/png"),
-    Webp("WebP", "webp", "image/webp")
-}
-
 internal fun displayNameForUri(context: Context, uri: Uri): String {
     return context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
         ?.use { cursor ->

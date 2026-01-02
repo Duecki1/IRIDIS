@@ -5,12 +5,8 @@
 
 package com.dueckis.kawaiiraweditor
 
-import android.Manifest
 import android.annotation.SuppressLint
-import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
-import android.net.Uri
-import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -40,16 +36,20 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.core.content.ContextCompat
 import com.dueckis.kawaiiraweditor.data.decoding.decodePreviewBytesForTagging
 import com.dueckis.kawaiiraweditor.data.immich.ImmichLoginResult
+import com.dueckis.kawaiiraweditor.data.immich.buildImmichCallbackUrl
 import com.dueckis.kawaiiraweditor.data.immich.buildImmichMobileRedirectUri
 import com.dueckis.kawaiiraweditor.data.immich.completeImmichOAuth
 import com.dueckis.kawaiiraweditor.data.immich.loginImmich
+import com.dueckis.kawaiiraweditor.data.immich.parseImmichOAuthParams
 import com.dueckis.kawaiiraweditor.data.immich.startImmichOAuth
+import com.dueckis.kawaiiraweditor.data.model.updateById
+import com.dueckis.kawaiiraweditor.data.model.updateByIds
 import com.dueckis.kawaiiraweditor.data.model.GalleryItem
 import com.dueckis.kawaiiraweditor.data.model.Screen
 import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
+import com.dueckis.kawaiiraweditor.data.permissions.maybeRequestPostNotificationsPermission
 import com.dueckis.kawaiiraweditor.data.preferences.AppPreferences
 import com.dueckis.kawaiiraweditor.data.storage.ProjectStorage
 import com.dueckis.kawaiiraweditor.data.media.decodeToBitmap
@@ -110,13 +110,9 @@ fun KawaiiApp(
     val notificationPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
-    fun maybeRequestNotificationPermission() {
-        if (Build.VERSION.SDK_INT < 33) return
-        val granted =
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-                    PackageManager.PERMISSION_GRANTED
-        if (!granted) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    fun requestNotificationPermissionIfNeeded() {
+        maybeRequestPostNotificationsPermission(context) { permission ->
+            notificationPermissionLauncher.launch(permission)
         }
     }
 
@@ -158,69 +154,6 @@ fun KawaiiApp(
 
     fun isMetadataInFlight(projectId: String): Boolean = metadataBackfillInFlight[projectId] == true
 
-    data class ImmichOAuthParams(
-        val code: String?,
-        val state: String?,
-        val error: String?,
-        val errorDescription: String?
-    )
-
-    fun parseImmichOAuthParams(redirectUrl: String): ImmichOAuthParams {
-        val trimmed = redirectUrl.trim()
-        if (trimmed.isBlank()) return ImmichOAuthParams(null, null, null, null)
-        val parsed = runCatching { Uri.parse(trimmed) }.getOrNull()
-            ?: return ImmichOAuthParams(null, null, null, null)
-
-        val fragmentParams =
-            parsed.fragment?.takeIf { it.isNotBlank() }?.let { fragment ->
-                runCatching { Uri.parse("dummy://oauth/?$fragment") }.getOrNull()
-            }
-
-        fun pickParam(name: String): String? {
-            return parsed.getQueryParameter(name)?.takeIf { it.isNotBlank() }
-                ?: fragmentParams?.getQueryParameter(name)?.takeIf { it.isNotBlank() }
-        }
-        return ImmichOAuthParams(
-            code = pickParam("code"),
-            state = pickParam("state"),
-            error = pickParam("error"),
-            errorDescription = pickParam("error_description")
-        )
-    }
-
-    fun buildImmichCallbackUrl(serverUrl: String, redirectUrl: String): String {
-        // 1. We must use the 'mobile-redirect' endpoint as the base, because that is what
-        //    we registered with the server in startOAuth.
-        val baseUriString = "${serverUrl.trimEnd('/')}/api/oauth/mobile-redirect"
-        val baseBuilder = Uri.parse(baseUriString).buildUpon()
-
-        // 2. We must extract the 'code' and 'state' (and other params) from the
-        //    'app.immich://' URL that the app intercepted.
-        val intercepted = Uri.parse(redirectUrl)
-
-        // Helper to add params from a Uri source
-        fun copyParams(source: Uri) {
-            source.queryParameterNames?.forEach { key ->
-                source.getQueryParameters(key)?.forEach { value ->
-                    baseBuilder.appendQueryParameter(key, value)
-                }
-            }
-        }
-
-        // Copy params from Query (Standard OAuth)
-        copyParams(intercepted)
-
-        // Copy params from Fragment (Some providers use hash routing)
-        if (!intercepted.fragment.isNullOrBlank()) {
-            val fragmentUri = Uri.parse("dummy://?${intercepted.fragment}")
-            copyParams(fragmentUri)
-        }
-
-        // 3. The result is: https://server.com/api/oauth/mobile-redirect?code=XYZ&state=ABC
-        //    This satisfies the server's validation (base matches) AND provides the code.
-        return baseBuilder.build().toString()
-    }
-
     suspend fun computeAndPersistRawMetadata(projectId: String, rawBytes: ByteArray) {
         val json = withContext(metadataDispatcher) {
             val handle = runCatching { LibRawDecoder.createSession(rawBytes) }.getOrDefault(0L)
@@ -234,8 +167,7 @@ fun KawaiiApp(
         val map = parseRawMetadataForSearch(json)
         if (map.isEmpty()) return
         withContext(Dispatchers.IO) { storage.setRawMetadata(projectId, map) }
-        galleryItems =
-            galleryItems.map { item -> if (item.projectId == projectId) item.copy(rawMetadata = map) else item }
+        galleryItems = galleryItems.updateById(projectId) { item -> item.copy(rawMetadata = map) }
     }
 
     LaunchedEffect(Unit) {
@@ -265,8 +197,7 @@ fun KawaiiApp(
                     }
                     if (tags.isEmpty()) continue
                     withContext(Dispatchers.IO) { storage.setTags(projectId, tags) }
-                    galleryItems =
-                        galleryItems.map { item -> if (item.projectId == projectId) item.copy(tags = tags) else item }
+                    galleryItems = galleryItems.updateById(projectId) { item -> item.copy(tags = tags) }
                 } finally {
                     setTaggingInFlight(projectId, false)
                 }
@@ -383,7 +314,7 @@ fun KawaiiApp(
 
         val missingTagIds = projects.filter { it.tags.isNullOrEmpty() }.map { it.id }
         if (missingTagIds.isNotEmpty() && automaticTaggingEnabled) {
-            maybeRequestNotificationPermission()
+            requestNotificationPermissionIfNeeded()
         }
         missingTagIds.forEach { id ->
             if (!isTaggingInFlight(id) && tagBackfillQueued[id] != true) {
@@ -450,10 +381,9 @@ fun KawaiiApp(
                     tagProgressFor = ::tagProgressFor,
                     onTagProgressChange = ::setTagProgress,
                     onMetadataChanged = { projectId, rawMetadata ->
-                        galleryItems =
-                            galleryItems.map { item ->
-                                if (item.projectId == projectId) item.copy(rawMetadata = rawMetadata) else item
-                            }
+                        galleryItems = galleryItems.updateById(projectId) { item ->
+                            item.copy(rawMetadata = rawMetadata)
+                        }
                     },
                     onOpenItem = { item ->
                         if (currentScreen == Screen.Editor) return@GalleryScreen
@@ -472,14 +402,12 @@ fun KawaiiApp(
                         galleryItems = galleryItems + newItem
                     },
                     onThumbnailReady = { projectId, thumbnail ->
-                        galleryItems =
-                            galleryItems.map { item ->
-                                if (item.projectId == projectId) item.copy(thumbnail = thumbnail) else item
-                            }
+                        galleryItems = galleryItems.updateById(projectId) { item ->
+                            item.copy(thumbnail = thumbnail)
+                        }
                     },
                     onTagsChanged = { projectId, tags ->
-                        galleryItems =
-                            galleryItems.map { item -> if (item.projectId == projectId) item.copy(tags = tags) else item }
+                        galleryItems = galleryItems.updateById(projectId) { item -> item.copy(tags = tags) }
                     },
                     onRatingChangeMany = { projectIds, rating ->
                         coroutineScope.launch {
@@ -487,8 +415,8 @@ fun KawaiiApp(
                             withContext(Dispatchers.IO) {
                                 ids.forEach { id -> storage.setRating(id, rating) }
                             }
-                            galleryItems = galleryItems.map { item ->
-                                if (item.projectId !in ids) item else item.copy(rating = rating.coerceIn(0, 5))
+                            galleryItems = galleryItems.updateByIds(ids) { item ->
+                                item.copy(rating = rating.coerceIn(0, 5))
                             }
                         }
                     },
