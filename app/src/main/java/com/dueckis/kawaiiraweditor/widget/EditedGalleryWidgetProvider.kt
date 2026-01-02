@@ -17,15 +17,13 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
     companion object {
         private const val ACTION_AUTO_UPDATE = "com.dueckis.kawaiiraweditor.widget.ACTION_AUTO_UPDATE"
         const val ACTION_WIDGET_CLICK = "com.dueckis.kawaiiraweditor.widget.ACTION_WIDGET_CLICK"
-        // Increased interval to avoid conflicting with the AdapterViewFlipper animation (30s)
-        private const val UPDATE_INTERVAL_MS = 600_000L // 10 minutes
+        private const val UPDATE_INTERVAL_MS = 600_000L
     }
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         for (appWidgetId in appWidgetIds) {
             val views = RemoteViews(context.packageName, R.layout.widget_edited_gallery)
 
-            // Connect StackView to the RemoteViewsService
             val svcIntent = Intent(context, EditedGalleryWidgetService::class.java).apply {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = android.net.Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
@@ -33,20 +31,14 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
             views.setRemoteAdapter(R.id.flipperView, svcIntent)
             views.setEmptyView(R.id.flipperView, R.id.emptyText)
 
-            // Clicking an image should broadcast to this provider first,
-            // which will then advance the view and start the activity.
             val clickIntent = Intent(context, EditedGalleryWidgetProvider::class.java).apply {
                 action = ACTION_WIDGET_CLICK
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
-                // We need to set data to ensure the intent is unique if we have multiple widgets?
-                // Actually for a broadcast to the provider, we just need the action.
-                // The fillInIntent will add the project_id.
             }
-            
-            // PendingIntent for the broadcast
+
             val clickPI = PendingIntent.getBroadcast(
                 context,
-                appWidgetId, // Use appWidgetId as requestCode to distinguish multiple widgets if needed
+                appWidgetId,
                 clickIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             )
@@ -56,7 +48,6 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
             appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.flipperView)
         }
 
-        // Schedule periodic updates to keep content fresh
         scheduleNextUpdate(context)
     }
 
@@ -74,14 +65,12 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
             val appWidgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
             val projectId = intent.getStringExtra("project_id")
 
-            // 1. Advance the flipper to the next view
             if (appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
                 val views = RemoteViews(context.packageName, R.layout.widget_edited_gallery)
                 views.showNext(R.id.flipperView)
                 AppWidgetManager.getInstance(context).partiallyUpdateAppWidget(appWidgetId, views)
             }
 
-            // 2. Open the main activity with the project ID
             if (projectId != null) {
                 val activityIntent = Intent(context, MainActivity::class.java).apply {
                     this.action = Intent.ACTION_VIEW
@@ -102,7 +91,6 @@ class EditedGalleryWidgetProvider : AppWidgetProvider() {
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        // Use set (inexact) instead of setExact to be friendlier to battery, since 10 mins isn't critical
         alarmManager.set(
             AlarmManager.ELAPSED_REALTIME_WAKEUP,
             SystemClock.elapsedRealtime() + UPDATE_INTERVAL_MS,

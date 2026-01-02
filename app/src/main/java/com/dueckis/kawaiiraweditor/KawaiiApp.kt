@@ -5,12 +5,9 @@
 
 package com.dueckis.kawaiiraweditor
 
-import android.Manifest
 import android.annotation.SuppressLint
-import android.content.Context
-import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
-import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,11 +36,20 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.core.content.ContextCompat
 import com.dueckis.kawaiiraweditor.data.decoding.decodePreviewBytesForTagging
+import com.dueckis.kawaiiraweditor.data.immich.ImmichLoginResult
+import com.dueckis.kawaiiraweditor.data.immich.buildImmichCallbackUrl
+import com.dueckis.kawaiiraweditor.data.immich.buildImmichMobileRedirectUri
+import com.dueckis.kawaiiraweditor.data.immich.completeImmichOAuth
+import com.dueckis.kawaiiraweditor.data.immich.loginImmich
+import com.dueckis.kawaiiraweditor.data.immich.parseImmichOAuthParams
+import com.dueckis.kawaiiraweditor.data.immich.startImmichOAuth
+import com.dueckis.kawaiiraweditor.data.model.updateById
+import com.dueckis.kawaiiraweditor.data.model.updateByIds
 import com.dueckis.kawaiiraweditor.data.model.GalleryItem
 import com.dueckis.kawaiiraweditor.data.model.Screen
 import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
+import com.dueckis.kawaiiraweditor.data.permissions.maybeRequestPostNotificationsPermission
 import com.dueckis.kawaiiraweditor.data.preferences.AppPreferences
 import com.dueckis.kawaiiraweditor.data.storage.ProjectStorage
 import com.dueckis.kawaiiraweditor.data.media.decodeToBitmap
@@ -64,7 +70,9 @@ import java.util.concurrent.Executors
 @Composable
 fun KawaiiApp(
     pendingProjectToOpen: String? = null,
-    onProjectOpened: () -> Unit = {}
+    pendingImmichOAuthRedirect: String? = null,
+    onProjectOpened: () -> Unit = {},
+    onImmichOAuthHandled: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val storage = remember { ProjectStorage(context) }
@@ -86,6 +94,14 @@ fun KawaiiApp(
     var automaticTaggingEnabled by remember { mutableStateOf(appPreferences.isAutomaticTaggingEnabled()) }
     var environmentMaskingEnabled by remember { mutableStateOf(appPreferences.isEnvironmentMaskingEnabled()) }
     var openEditorOnImportEnabled by remember { mutableStateOf(appPreferences.isOpenEditorOnImportEnabled()) }
+    var immichServerUrl by remember { mutableStateOf(appPreferences.getImmichServerUrl()) }
+    var immichAuthMode by remember { mutableStateOf(appPreferences.getImmichAuthMode()) }
+    var immichLoginEmail by remember { mutableStateOf(appPreferences.getImmichLoginEmail()) }
+    var immichAccessToken by remember { mutableStateOf(appPreferences.getImmichAccessToken()) }
+    var immichApiKey by remember { mutableStateOf(appPreferences.getImmichApiKey()) }
+    var immichDescriptionSyncEnabled by remember {
+        mutableStateOf(appPreferences.isImmichDescriptionSyncEnabled())
+    }
 
     appPreferences.ensureDefaultMaskRenameTagsSeeded()
     var maskRenameTags by remember { mutableStateOf(appPreferences.getMaskRenameTags()) }
@@ -97,13 +113,9 @@ fun KawaiiApp(
     val notificationPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
-    fun maybeRequestNotificationPermission() {
-        if (Build.VERSION.SDK_INT < 33) return
-        val granted =
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-                PackageManager.PERMISSION_GRANTED
-        if (!granted) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    fun requestNotificationPermissionIfNeeded() {
+        maybeRequestPostNotificationsPermission(context) { permission ->
+            notificationPermissionLauncher.launch(permission)
         }
     }
 
@@ -158,8 +170,7 @@ fun KawaiiApp(
         val map = parseRawMetadataForSearch(json)
         if (map.isEmpty()) return
         withContext(Dispatchers.IO) { storage.setRawMetadata(projectId, map) }
-        galleryItems =
-            galleryItems.map { item -> if (item.projectId == projectId) item.copy(rawMetadata = map) else item }
+        galleryItems = galleryItems.updateById(projectId) { item -> item.copy(rawMetadata = map) }
     }
 
     LaunchedEffect(Unit) {
@@ -189,8 +200,7 @@ fun KawaiiApp(
                     }
                     if (tags.isEmpty()) continue
                     withContext(Dispatchers.IO) { storage.setTags(projectId, tags) }
-                    galleryItems =
-                        galleryItems.map { item -> if (item.projectId == projectId) item.copy(tags = tags) else item }
+                    galleryItems = galleryItems.updateById(projectId) { item -> item.copy(tags = tags) }
                 } finally {
                     setTaggingInFlight(projectId, false)
                 }
@@ -216,8 +226,6 @@ fun KawaiiApp(
         }
     }
 
-    // This LaunchedEffect monitors the pendingProjectToOpen.
-    // When a new project ID is set (e.g., from a widget click), it triggers navigation to the editor.
     LaunchedEffect(pendingProjectToOpen, galleryItems) {
         if (pendingProjectToOpen != null && galleryItems.isNotEmpty()) {
             val target = galleryItems.firstOrNull { it.projectId == pendingProjectToOpen }
@@ -227,6 +235,58 @@ fun KawaiiApp(
                 editorDismissProgress.snapTo(0f)
                 onProjectOpened()
             }
+        }
+    }
+
+    LaunchedEffect(pendingImmichOAuthRedirect) {
+        val redirectUrl = pendingImmichOAuthRedirect?.trim().orEmpty()
+        if (redirectUrl.isBlank()) return@LaunchedEffect
+
+        val server = immichServerUrl.trim()
+        val state = appPreferences.getImmichOAuthState()
+        val verifier = appPreferences.getImmichOAuthVerifier()
+        val params = parseImmichOAuthParams(redirectUrl)
+        var callbackUrl = ""
+        var result: ImmichLoginResult? = null
+        var errorMessage: String? = null
+
+        if (server.isBlank()) {
+            errorMessage = "Immich server URL is missing."
+        } else if (state.isBlank() || verifier.isBlank()) {
+            errorMessage = "Immich login expired. Try again."
+        } else {
+            val callbackState = params.state
+            val callbackError = params.errorDescription ?: params.error
+            val callbackCode = params.code
+            if (!callbackError.isNullOrBlank()) {
+                errorMessage = "Immich login failed: $callbackError"
+            } else if (callbackCode.isNullOrBlank()) {
+                errorMessage = "Immich login failed: missing authorization code."
+            } else if (callbackState != null && callbackState != state) {
+                errorMessage = "Immich login failed: state mismatch."
+            } else {
+                callbackUrl = buildImmichCallbackUrl(server, redirectUrl)
+                result = completeImmichOAuth(server, callbackUrl, state, verifier)
+                val token = result?.accessToken
+                if (!token.isNullOrBlank()) {
+                    immichAccessToken = token
+                    appPreferences.setImmichAccessToken(token)
+                    val email = result?.userEmail
+                    if (!email.isNullOrBlank()) {
+                        immichLoginEmail = email
+                        appPreferences.setImmichLoginEmail(email)
+                    }
+                    Toast.makeText(context, "Logged in to Immich.", Toast.LENGTH_SHORT).show()
+                } else {
+                    errorMessage = result?.errorMessage ?: "Immich login failed."
+                }
+            }
+        }
+
+        appPreferences.clearImmichOAuthPending()
+        onImmichOAuthHandled()
+        if (errorMessage != null) {
+            Toast.makeText(context, errorMessage, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -244,14 +304,20 @@ fun KawaiiApp(
                     thumbnail = thumbnail,
                     rating = metadata.rating,
                     tags = metadata.tags ?: emptyList(),
-                    rawMetadata = metadata.rawMetadata ?: emptyMap()
+                    rawMetadata = metadata.rawMetadata ?: emptyMap(),
+                    createdAt = metadata.createdAt,
+                    modifiedAt = metadata.modifiedAt,
+                    immichAssetId = metadata.immichAssetId,
+                    immichAlbumId = metadata.immichAlbumId,
+                    editsUpdatedAtMs = metadata.editsUpdatedAtMs ?: metadata.modifiedAt,
+                    immichSidecarUpdatedAtMs = metadata.immichSidecarUpdatedAtMs ?: 0L
                 )
             }
         }
 
         val missingTagIds = projects.filter { it.tags.isNullOrEmpty() }.map { it.id }
         if (missingTagIds.isNotEmpty() && automaticTaggingEnabled) {
-            maybeRequestNotificationPermission()
+            requestNotificationPermissionIfNeeded()
         }
         missingTagIds.forEach { id ->
             if (!isTaggingInFlight(id) && tagBackfillQueued[id] != true) {
@@ -303,21 +369,25 @@ fun KawaiiApp(
             val editorTranslationPx = dismissProgress * widthPx
 
             Box(modifier = Modifier.fillMaxSize()) {
-                GalleryScreen(
-                    items = galleryItems,
-                    tagger = tagger,
-                    lowQualityPreviewEnabled = lowQualityPreviewEnabled,
-                    automaticTaggingEnabled = automaticTaggingEnabled,
-                    openEditorOnImportEnabled = openEditorOnImportEnabled,
+                    GalleryScreen(
+                        items = galleryItems,
+                        tagger = tagger,
+                        lowQualityPreviewEnabled = lowQualityPreviewEnabled,
+                        automaticTaggingEnabled = automaticTaggingEnabled,
+                        openEditorOnImportEnabled = openEditorOnImportEnabled,
+                        immichDescriptionSyncEnabled = immichDescriptionSyncEnabled,
+                        immichServerUrl = immichServerUrl,
+                        immichAuthMode = immichAuthMode,
+                        immichAccessToken = immichAccessToken,
+                        immichApiKey = immichApiKey,
                     isTaggingInFlight = ::isTaggingInFlight,
                     onTaggingInFlightChange = ::setTaggingInFlight,
                     tagProgressFor = ::tagProgressFor,
                     onTagProgressChange = ::setTagProgress,
                     onMetadataChanged = { projectId, rawMetadata ->
-                        galleryItems =
-                            galleryItems.map { item ->
-                                if (item.projectId == projectId) item.copy(rawMetadata = rawMetadata) else item
-                            }
+                        galleryItems = galleryItems.updateById(projectId) { item ->
+                            item.copy(rawMetadata = rawMetadata)
+                        }
                     },
                     onOpenItem = { item ->
                         if (currentScreen == Screen.Editor) return@GalleryScreen
@@ -336,14 +406,12 @@ fun KawaiiApp(
                         galleryItems = galleryItems + newItem
                     },
                     onThumbnailReady = { projectId, thumbnail ->
-                        galleryItems =
-                            galleryItems.map { item ->
-                                if (item.projectId == projectId) item.copy(thumbnail = thumbnail) else item
-                            }
+                        galleryItems = galleryItems.updateById(projectId) { item ->
+                            item.copy(thumbnail = thumbnail)
+                        }
                     },
                     onTagsChanged = { projectId, tags ->
-                        galleryItems =
-                            galleryItems.map { item -> if (item.projectId == projectId) item.copy(tags = tags) else item }
+                        galleryItems = galleryItems.updateById(projectId) { item -> item.copy(tags = tags) }
                     },
                     onRatingChangeMany = { projectIds, rating ->
                         coroutineScope.launch {
@@ -351,8 +419,8 @@ fun KawaiiApp(
                             withContext(Dispatchers.IO) {
                                 ids.forEach { id -> storage.setRating(id, rating) }
                             }
-                            galleryItems = galleryItems.map { item ->
-                                if (item.projectId !in ids) item else item.copy(rating = rating.coerceIn(0, 5))
+                            galleryItems = galleryItems.updateByIds(ids) { item ->
+                                item.copy(rating = rating.coerceIn(0, 5))
                             }
                         }
                     },
@@ -394,6 +462,7 @@ fun KawaiiApp(
                             galleryItem = selectedItem,
                             lowQualityPreviewEnabled = lowQualityPreviewEnabled,
                             environmentMaskingEnabled = environmentMaskingEnabled,
+                            immichDescriptionSyncEnabled = immichDescriptionSyncEnabled,
                             maskRenameTags = maskRenameTags,
                             onBackClick = { requestExitEditor(animated = true) },
                             onPredictiveBackProgress = { progress ->
@@ -442,6 +511,54 @@ fun KawaiiApp(
                         onOpenEditorOnImportEnabledChange = { enabled ->
                             openEditorOnImportEnabled = enabled
                             appPreferences.setOpenEditorOnImportEnabled(enabled)
+                        },
+                        immichDescriptionSyncEnabled = immichDescriptionSyncEnabled,
+                        onImmichDescriptionSyncEnabledChange = { enabled ->
+                            immichDescriptionSyncEnabled = enabled
+                            appPreferences.setImmichDescriptionSyncEnabled(enabled)
+                        },
+                        immichServerUrl = immichServerUrl,
+                        immichAuthMode = immichAuthMode,
+                        immichLoginEmail = immichLoginEmail,
+                        immichAccessToken = immichAccessToken,
+                        immichApiKey = immichApiKey,
+                        onImmichServerUrlChange = { url ->
+                            immichServerUrl = url
+                            appPreferences.setImmichServerUrl(url)
+                        },
+                        onImmichAuthModeChange = { mode ->
+                            immichAuthMode = mode
+                            appPreferences.setImmichAuthMode(mode)
+                        },
+                        onImmichLoginEmailChange = { email ->
+                            immichLoginEmail = email
+                            appPreferences.setImmichLoginEmail(email)
+                        },
+                        onImmichAccessTokenChange = { token ->
+                            immichAccessToken = token
+                            appPreferences.setImmichAccessToken(token)
+                        },
+                        onImmichLogin = { serverUrl, email, password ->
+                            loginImmich(serverUrl, email, password)
+                        },
+                        onImmichOAuthStart = { serverUrl ->
+                            appPreferences.clearImmichOAuthPending()
+                            val usedRedirect = if (serverUrl.isNotBlank()) {
+                                "${serverUrl.trimEnd('/')}/api/oauth/mobile-redirect"
+                            } else {
+                                buildImmichMobileRedirectUri(serverUrl)
+                            }
+                            val result = startImmichOAuth(serverUrl, usedRedirect)
+                            val state = result?.state
+                            val verifier = result?.codeVerifier
+                            if (!result?.authorizationUrl.isNullOrBlank() && !state.isNullOrBlank() && !verifier.isNullOrBlank()) {
+                                appPreferences.setImmichOAuthPending(state, verifier)
+                            }
+                            result
+                        },
+                        onImmichApiKeyChange = { key ->
+                            immichApiKey = key
+                            appPreferences.setImmichApiKey(key)
                         },
                         onBackClick = { currentScreen = Screen.Gallery }
                     )

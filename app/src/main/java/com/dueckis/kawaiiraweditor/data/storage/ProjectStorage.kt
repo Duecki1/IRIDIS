@@ -6,73 +6,79 @@ import com.google.gson.reflect.TypeToken
 import java.io.File
 import java.util.UUID
 
-/**
- * Manages persistent storage of RAW files and their adjustments
- * Similar to RapidRAW's .rrdata files
- */
+private const val MAX_EDIT_HISTORY_ENTRIES = 200
+
 class ProjectStorage(private val context: Context) {
     private val gson = Gson()
-    
-    // Directory structure:
-    // app_files/
-    //   projects/
-    //     project-uuid-1/
-    //       image.raw (original RAW file)
-    //       adjustments.json (adjustment data)
-    //     project-uuid-2/
-    //       image.raw
-    //       adjustments.json
-    //   projects.json (list of all projects with metadata)
-    
+
     private val projectsDir = File(context.filesDir, "projects")
     private val projectsIndexFile = File(context.filesDir, "projects.json")
-    
+
+    enum class EditHistorySource {
+        Local,
+        Immich
+    }
+
+    data class EditHistoryEntry(
+        val id: String,
+        val source: EditHistorySource,
+        val updatedAtMs: Long,
+        val editsJson: String,
+        val parentId: String? = null
+    )
+
     init {
         projectsDir.mkdirs()
     }
-    
+
     data class ProjectMetadata(
         val id: String,
         val fileName: String,
         val createdAt: Long,
         val modifiedAt: Long,
+        val editsUpdatedAtMs: Long? = null,
         val rating: Int = 0,
         val tags: List<String>? = null,
-        val rawMetadata: Map<String, String>? = null
+        val rawMetadata: Map<String, String>? = null,
+        val immichAssetId: String? = null,
+        val immichAlbumId: String? = null,
+        val immichSidecarAssetId: String? = null,
+        val immichSidecarUpdatedAtMs: Long? = null
     )
-    
+
     data class ProjectData(
         val metadata: ProjectMetadata,
         val adjustmentsJson: String
     )
-    
-    /**
-     * Import a RAW file and create a new project
-     */
-    fun importRawFile(fileName: String, rawBytes: ByteArray): String {
+
+    fun importRawFile(
+        fileName: String,
+        rawBytes: ByteArray,
+        immichAssetId: String? = null,
+        immichAlbumId: String? = null,
+    ): String {
         val projectId = UUID.randomUUID().toString()
         val projectDir = File(projectsDir, projectId)
         projectDir.mkdirs()
-        
-        // Save the RAW file
+
         val rawFile = File(projectDir, "image.raw")
         rawFile.writeBytes(rawBytes)
-        
-        // Create initial adjustments file with defaults
+
         val adjustmentsFile = File(projectDir, "adjustments.json")
         adjustmentsFile.writeText("{}")
-        
-        // Add to project index
+
         val metadata = ProjectMetadata(
             id = projectId,
             fileName = fileName,
             createdAt = System.currentTimeMillis(),
             modifiedAt = System.currentTimeMillis(),
             tags = emptyList(),
-            rawMetadata = emptyMap()
+            rawMetadata = emptyMap(),
+            immichAssetId = immichAssetId,
+            immichAlbumId = immichAlbumId
         )
         addToProjectIndex(metadata)
-        
+
         return projectId
     }
 
@@ -86,18 +92,12 @@ class ProjectStorage(private val context: Context) {
             saveProjectIndex(projects)
         }
     }
-    
-    /**
-     * Load RAW bytes for a project
-     */
+
     fun loadRawBytes(projectId: String): ByteArray? {
         val rawFile = File(projectsDir, "$projectId/image.raw")
         return if (rawFile.exists()) rawFile.readBytes() else null
     }
-    
-    /**
-     * Load adjustments JSON for a project
-     */
+
     fun loadAdjustments(projectId: String): String {
         val adjustmentsFile = File(projectsDir, "$projectId/adjustments.json")
         return if (adjustmentsFile.exists()) {
@@ -107,23 +107,72 @@ class ProjectStorage(private val context: Context) {
         }
     }
     
-    /**
-     * Save adjustments for a project
-     */
-    fun saveAdjustments(projectId: String, adjustmentsJson: String) {
+    fun saveAdjustments(projectId: String, adjustmentsJson: String, updatedAtMs: Long = System.currentTimeMillis()) {
         val projectDir = File(projectsDir, projectId)
         if (!projectDir.exists()) return
         
         val adjustmentsFile = File(projectDir, "adjustments.json")
+        val existing = runCatching { if (adjustmentsFile.exists()) adjustmentsFile.readText() else null }.getOrNull()
+        if (existing == adjustmentsJson) return
         adjustmentsFile.writeText(adjustmentsJson)
         
-        // Update modified time
-        updateProjectModifiedTime(projectId)
+        updateProjectEditsTime(projectId, updatedAtMs)
+    }
+
+    fun getEditsUpdatedAtMs(projectId: String): Long {
+        val meta = getAllProjects().firstOrNull { it.id == projectId } ?: return 0L
+        return meta.editsUpdatedAtMs ?: meta.modifiedAt
+    }
+
+    fun getImmichSidecarUpdatedAtMs(projectId: String): Long {
+        val meta = getAllProjects().firstOrNull { it.id == projectId } ?: return 0L
+        return meta.immichSidecarUpdatedAtMs ?: 0L
+    }
+
+    fun setImmichSidecarInfo(projectId: String, assetId: String?, updatedAtMs: Long?) {
+        val projects = getAllProjects().toMutableList()
+        val index = projects.indexOfFirst { it.id == projectId }
+        if (index < 0) return
+        val normalizedAssetId = assetId?.trim().takeUnless { it.isNullOrBlank() }
+        val normalizedUpdatedAt = updatedAtMs?.takeIf { it > 0L }
+        val now = System.currentTimeMillis()
+        projects[index] =
+            projects[index].copy(
+                modifiedAt = now,
+                immichSidecarAssetId = normalizedAssetId,
+                immichSidecarUpdatedAtMs = normalizedUpdatedAt
+            )
+        saveProjectIndex(projects)
+    }
+
+    fun loadEditHistory(projectId: String): List<EditHistoryEntry> {
+        val file = editHistoryFile(projectId)
+        if (!file.exists()) return emptyList()
+        return runCatching {
+            val json = file.readText()
+            val type = object : TypeToken<List<EditHistoryEntry>>() {}.type
+            gson.fromJson<List<EditHistoryEntry>>(json, type) ?: emptyList()
+        }.getOrDefault(emptyList())
+    }
+
+    fun appendEditHistory(projectId: String, entry: EditHistoryEntry) {
+        appendEditHistoryEntries(projectId, listOf(entry))
+    }
+
+    fun appendEditHistoryEntries(projectId: String, entries: List<EditHistoryEntry>) {
+        if (entries.isEmpty()) return
+        val projectDir = File(projectsDir, projectId)
+        if (!projectDir.exists()) return
+        val file = editHistoryFile(projectId)
+        val current = loadEditHistory(projectId)
+        val merged =
+            (current + entries)
+                .distinctBy { it.id }
+                .sortedBy { it.updatedAtMs }
+                .takeLast(MAX_EDIT_HISTORY_ENTRIES)
+        file.writeText(gson.toJson(merged))
     }
     
-    /**
-     * Get all projects
-     */
     fun getAllProjects(): List<ProjectMetadata> {
         if (!projectsIndexFile.exists()) return emptyList()
         
@@ -135,10 +184,12 @@ class ProjectStorage(private val context: Context) {
             emptyList()
         }
     }
+
+    fun findProjectByImmichAssetId(assetId: String): ProjectMetadata? {
+        if (assetId.isBlank()) return null
+        return getAllProjects().firstOrNull { it.immichAssetId == assetId }
+    }
     
-    /**
-     * Load complete project data
-     */
     fun loadProject(projectId: String): ProjectData? {
         val projects = getAllProjects()
         val metadata = projects.find { it.id == projectId } ?: return null
@@ -147,15 +198,10 @@ class ProjectStorage(private val context: Context) {
         return ProjectData(metadata, adjustmentsJson)
     }
     
-    /**
-     * Delete a project
-     */
     fun deleteProject(projectId: String) {
-        // Delete project directory
         val projectDir = File(projectsDir, projectId)
         projectDir.deleteRecursively()
-        
-        // Remove from index
+
         val projects = getAllProjects().filter { it.id != projectId }
         saveProjectIndex(projects)
     }
@@ -173,6 +219,19 @@ class ProjectStorage(private val context: Context) {
             projects[index] = projects[index].copy(modifiedAt = System.currentTimeMillis())
             saveProjectIndex(projects)
         }
+    }
+
+    private fun updateProjectEditsTime(projectId: String, editsUpdatedAtMs: Long) {
+        val projects = getAllProjects().toMutableList()
+        val index = projects.indexOfFirst { it.id == projectId }
+        if (index < 0) return
+        val now = System.currentTimeMillis()
+        projects[index] =
+            projects[index].copy(
+                modifiedAt = maxOf(now, editsUpdatedAtMs),
+                editsUpdatedAtMs = editsUpdatedAtMs
+            )
+        saveProjectIndex(projects)
     }
 
     fun setRawMetadata(projectId: String, rawMetadata: Map<String, String>) {
@@ -204,10 +263,11 @@ class ProjectStorage(private val context: Context) {
         val json = gson.toJson(projects)
         projectsIndexFile.writeText(json)
     }
+
+    private fun editHistoryFile(projectId: String): File {
+        return File(projectsDir, "$projectId/edits_history.json")
+    }
     
-    /**
-     * Save thumbnail for a project
-     */
     fun saveThumbnail(projectId: String, thumbnailBytes: ByteArray) {
         val projectDir = File(projectsDir, projectId)
         if (!projectDir.exists()) return
@@ -218,17 +278,11 @@ class ProjectStorage(private val context: Context) {
         updateProjectModifiedTime(projectId)
     }
     
-    /**
-     * Load thumbnail for a project
-     */
     fun loadThumbnail(projectId: String): ByteArray? {
         val thumbnailFile = File(projectsDir, "$projectId/thumbnail.jpg")
         return if (thumbnailFile.exists()) thumbnailFile.readBytes() else null
     }
     
-    /**
-     * Get storage statistics
-     */
     fun getStorageInfo(): StorageInfo {
         val projectCount = getAllProjects().size
         var totalSize = 0L

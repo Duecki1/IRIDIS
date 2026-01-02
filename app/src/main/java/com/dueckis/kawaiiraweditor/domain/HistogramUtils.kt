@@ -5,13 +5,6 @@ import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.roundToInt
 
-data class HistogramData(
-    val red: FloatArray,
-    val green: FloatArray,
-    val blue: FloatArray,
-    val luma: FloatArray
-)
-
 object HistogramUtils {
     fun calculateHistogram(bitmap: Bitmap): HistogramData {
         val w = bitmap.width.coerceAtLeast(1)
@@ -109,4 +102,3 @@ object HistogramUtils {
         }
     }
 }
-

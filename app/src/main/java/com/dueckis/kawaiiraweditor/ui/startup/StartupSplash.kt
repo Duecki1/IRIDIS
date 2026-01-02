@@ -56,33 +56,30 @@ internal fun StartupSplash(
 
     val blades = remember {
         listOf(
-            0f to Color(0xFFFF5252), // Red
-            60f to Color(0xFFFFD740), // Amber
-            120f to Color(0xFF69F0AE), // Green
-            180f to Color(0xFF40C4FF), // Light Blue
-            240f to Color(0xFF536DFE), // Indigo
-            300f to Color(0xFFE040FB)  // Purple
+            0f to Color(0xFFFF5252),
+            60f to Color(0xFFFFD740),
+            120f to Color(0xFF69F0AE),
+            180f to Color(0xFF40C4FF),
+            240f to Color(0xFF536DFE),
+            300f to Color(0xFFE040FB)
         )
     }
 
-    // Animation values
     val bladeTravel = remember { blades.map { Animatable(1f) } }
     val bladeRotations = remember { blades.map { Animatable(0f) } }
     val centerScale = remember { Animatable(0f) }
     val centerRotation = remember { Animatable(0f) }
     val overlayAlpha = remember { Animatable(1f) }
 
-    // Easing curves
     val overshootEasing = remember { CubicBezierEasing(0.3f, 0.0f, 0.0f, 1.3f) }
     val fastOutSlowIn = remember { CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f) }
 
     LaunchedEffect(Unit) {
-        // TIGHTER TIMINGS
-        val bladeStagger = 35L      // Delay between each blade
-        val bladeDur = 500          // Duration of blade travel
-        val centerDur = 450         // Duration of center reveal
-        val holdTime = 250L         // How long to wait before fading out
-        val fadeDur = 250           // Fade out duration
+        val bladeStagger = 35L
+        val bladeDur = 500
+        val centerDur = 450
+        val holdTime = 250L
+        val fadeDur = 250
 
         coroutineScope {
             val jobs = bladeTravel.mapIndexed { idx, anim ->
@@ -90,7 +87,6 @@ internal fun StartupSplash(
                     val startDelay = idx * bladeStagger
                     delay(startDelay)
 
-                    // Launch travel animation
                     launch {
                         anim.animateTo(
                             targetValue = 0f,
@@ -98,7 +94,6 @@ internal fun StartupSplash(
                         )
                     }
 
-                    // Launch rotation animation (simultaneous)
                     launch {
                         bladeRotations[idx].animateTo(
                             targetValue = -15f,
@@ -114,7 +109,6 @@ internal fun StartupSplash(
             jobs.joinAll()
         }
 
-        // Center reveal starts immediately after blades
         coroutineScope {
             launch {
                 centerScale.animateTo(
@@ -124,7 +118,7 @@ internal fun StartupSplash(
             }
             launch {
                 centerRotation.animateTo(
-                    targetValue = 360f, // Reduced to 1 rotation for speed
+                    targetValue = 360f,
                     animationSpec = tween(durationMillis = centerDur, easing = fastOutSlowIn)
                 )
             }
@@ -161,7 +155,6 @@ internal fun StartupSplash(
                 scale(scaleX = canvasScale, scaleY = canvasScale)
                 translate(left = size.width / 2f, top = size.height / 2f)
             }) {
-                // Draw blades
                 blades.forEachIndexed { idx, (initialRotationDeg, bladeColor) ->
                     val dist = bladeTravel[idx].value.coerceIn(0f, 1f) * 200f
                     val currentBladeRotation = bladeRotations[idx].value
@@ -179,7 +172,6 @@ internal fun StartupSplash(
                     }
                 }
 
-                // Draw center hexagon
                 val cScale = centerScale.value.coerceIn(0f, 1f)
                 if (cScale > 0.001f) {
                     rotate(degrees = centerRotation.value, pivot = Offset.Zero) {

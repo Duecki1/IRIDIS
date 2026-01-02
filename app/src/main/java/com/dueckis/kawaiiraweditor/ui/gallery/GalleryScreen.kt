@@ -1,17 +1,16 @@
 @file:OptIn(
+    androidx.compose.material.ExperimentalMaterialApi::class,
     androidx.compose.material3.ExperimentalMaterial3Api::class,
     androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
 )
 
 package com.dueckis.kawaiiraweditor.ui.gallery
 
-import android.Manifest
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
-import android.os.Build
 import android.os.Parcelable
 import android.os.SystemClock
 import android.widget.Toast
@@ -38,6 +37,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -48,6 +48,9 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -77,6 +80,8 @@ import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SearchBarDefaults
 import androidx.compose.material3.Surface
@@ -89,6 +94,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -105,14 +111,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import com.dueckis.kawaiiraweditor.data.decoding.decodePreviewBytesForTagging
+import com.dueckis.kawaiiraweditor.data.immich.ImmichAlbum
+import com.dueckis.kawaiiraweditor.data.immich.ImmichAsset
+import com.dueckis.kawaiiraweditor.data.immich.ImmichAuthMode
+import com.dueckis.kawaiiraweditor.data.immich.ImmichConfig
+import com.dueckis.kawaiiraweditor.data.immich.downloadImmichOriginal
+import com.dueckis.kawaiiraweditor.data.immich.downloadImmichThumbnail
+import com.dueckis.kawaiiraweditor.data.immich.fetchImmichAlbumAssets
+import com.dueckis.kawaiiraweditor.data.immich.fetchImmichAlbums
 import com.dueckis.kawaiiraweditor.data.media.decodeToBitmap
 import com.dueckis.kawaiiraweditor.data.media.displayNameForUri
 import com.dueckis.kawaiiraweditor.data.media.parseRawMetadataForSearch
 import com.dueckis.kawaiiraweditor.data.media.saveJpegToPictures
 import com.dueckis.kawaiiraweditor.data.model.GalleryItem
 import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
+import com.dueckis.kawaiiraweditor.data.permissions.maybeRequestPostNotificationsPermission
 import com.dueckis.kawaiiraweditor.data.storage.ProjectStorage
 import com.dueckis.kawaiiraweditor.domain.ai.ClipAutoTagger
 import kotlinx.coroutines.Dispatchers
@@ -136,6 +150,11 @@ internal fun GalleryScreen(
     lowQualityPreviewEnabled: Boolean,
     automaticTaggingEnabled: Boolean,
     openEditorOnImportEnabled: Boolean,
+    immichDescriptionSyncEnabled: Boolean,
+    immichServerUrl: String,
+    immichAuthMode: ImmichAuthMode,
+    immichAccessToken: String,
+    immichApiKey: String,
     isTaggingInFlight: (String) -> Boolean,
     onTaggingInFlightChange: (String, Boolean) -> Unit,
     tagProgressFor: (String) -> Float?,
@@ -156,105 +175,121 @@ internal fun GalleryScreen(
     val coroutineScope = rememberCoroutineScope()
     val configuration = LocalConfiguration.current
     val screenWidthDp = configuration.screenWidthDp
+    var isPullRefreshing by remember { mutableStateOf(false) }
 
     val notificationPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
-    fun maybeRequestNotificationPermission() {
-        if (Build.VERSION.SDK_INT < 33) return
-        val granted =
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-                    PackageManager.PERMISSION_GRANTED
-        if (!granted) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    fun requestNotificationPermissionIfNeeded() {
+        maybeRequestPostNotificationsPermission(context) { permission ->
+            notificationPermissionLauncher.launch(permission)
         }
     }
 
-    // --- 1. REUSABLE IMPORT LOGIC ---
+    suspend fun importBytes(
+        name: String,
+        bytes: ByteArray,
+        openAfterImport: Boolean,
+        immichAssetId: String? = null,
+        immichAlbumId: String? = null
+    ) {
+        val projectId = withContext(Dispatchers.IO) {
+            storage.importRawFile(
+                name,
+                bytes,
+                immichAssetId = immichAssetId,
+                immichAlbumId = immichAlbumId
+            )
+        }
+        val now = System.currentTimeMillis()
+        val item = GalleryItem(
+            projectId = projectId,
+            fileName = name,
+            thumbnail = null,
+            tags = emptyList(),
+            rawMetadata = emptyMap(),
+            createdAt = now,
+            modifiedAt = now,
+            immichAssetId = immichAssetId,
+            immichAlbumId = immichAlbumId,
+            editsUpdatedAtMs = now,
+            immichSidecarUpdatedAtMs = 0L
+        )
+        onAddClick(item)
+        if (openAfterImport) {
+            onOpenItem(item)
+        }
+        coroutineScope.launch {
+            val previewBytes = withContext(Dispatchers.Default) {
+                runCatching { decodePreviewBytesForTagging(bytes, lowQualityPreviewEnabled) }.getOrNull()
+            }
+            val previewBitmap = previewBytes?.decodeToBitmap() ?: return@launch
+
+            val maxSize = 1024
+            val scale = min(maxSize.toFloat() / previewBitmap.width, maxSize.toFloat() / previewBitmap.height)
+            val scaledWidth = (previewBitmap.width * scale).toInt().coerceAtLeast(1)
+            val scaledHeight = (previewBitmap.height * scale).toInt().coerceAtLeast(1)
+            val thumbnail =
+                if (previewBitmap.width == scaledWidth && previewBitmap.height == scaledHeight) previewBitmap
+                else Bitmap.createScaledBitmap(previewBitmap, scaledWidth, scaledHeight, true)
+
+            withContext(Dispatchers.IO) {
+                val outputStream = ByteArrayOutputStream()
+                thumbnail.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                storage.saveThumbnail(projectId, outputStream.toByteArray())
+            }
+            onThumbnailReady(projectId, thumbnail)
+            if (thumbnail != previewBitmap) previewBitmap.recycle()
+
+            if (automaticTaggingEnabled) {
+                requestNotificationPermissionIfNeeded()
+                onTaggingInFlightChange(projectId, true)
+                try {
+                    val tags = withContext(Dispatchers.Default) {
+                        runCatching {
+                            tagger.generateTags(thumbnail, onProgress = { p -> onTagProgressChange(projectId, p) })
+                        }.getOrDefault(emptyList())
+                    }
+                    withContext(Dispatchers.IO) { storage.setTags(projectId, tags) }
+                    onTagsChanged(projectId, tags)
+                } finally {
+                    onTaggingInFlightChange(projectId, false)
+                }
+            }
+        }
+
+        if (automaticTaggingEnabled) {
+            coroutineScope.launch {
+                val meta = withContext(Dispatchers.Default) {
+                    runCatching {
+                        val handle = LibRawDecoder.createSession(bytes)
+                        if (handle == 0L) return@runCatching emptyMap<String, String>()
+                        try {
+                            val json = LibRawDecoder.getMetadataJsonFromSession(handle)
+                            parseRawMetadataForSearch(json)
+                        } finally {
+                            LibRawDecoder.releaseSession(handle)
+                        }
+                    }.getOrDefault(emptyMap())
+                }
+                if (meta.isNotEmpty()) {
+                    withContext(Dispatchers.IO) { storage.setRawMetadata(projectId, meta) }
+                    onMetadataChanged(projectId, meta)
+                }
+            }
+        }
+    }
+
     suspend fun importUri(uri: Uri, openAfterImport: Boolean) {
         val bytes = withContext(Dispatchers.IO) {
             context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
         }
         if (bytes != null) {
             val name = displayNameForUri(context, uri)
-            val projectId = withContext(Dispatchers.IO) {
-                storage.importRawFile(name, bytes)
-            }
-            val item = GalleryItem(
-                projectId = projectId,
-                fileName = name,
-                thumbnail = null,
-                tags = emptyList(),
-                rawMetadata = emptyMap()
-            )
-            onAddClick(item)
-            if (openAfterImport) {
-                onOpenItem(item)
-            }
-            // Start background processing (thumbnails, tagging, metadata)
-            coroutineScope.launch {
-                val previewBytes = withContext(Dispatchers.Default) {
-                    runCatching { decodePreviewBytesForTagging(bytes, lowQualityPreviewEnabled) }.getOrNull()
-                }
-                val previewBitmap = previewBytes?.decodeToBitmap() ?: return@launch
-
-                val maxSize = 1024
-                val scale = min(maxSize.toFloat() / previewBitmap.width, maxSize.toFloat() / previewBitmap.height)
-                val scaledWidth = (previewBitmap.width * scale).toInt().coerceAtLeast(1)
-                val scaledHeight = (previewBitmap.height * scale).toInt().coerceAtLeast(1)
-                val thumbnail =
-                    if (previewBitmap.width == scaledWidth && previewBitmap.height == scaledHeight) previewBitmap
-                    else Bitmap.createScaledBitmap(previewBitmap, scaledWidth, scaledHeight, true)
-
-                withContext(Dispatchers.IO) {
-                    val outputStream = ByteArrayOutputStream()
-                    thumbnail.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                    storage.saveThumbnail(projectId, outputStream.toByteArray())
-                }
-                onThumbnailReady(projectId, thumbnail)
-                if (thumbnail != previewBitmap) previewBitmap.recycle()
-
-                if (automaticTaggingEnabled) {
-                    maybeRequestNotificationPermission()
-                    onTaggingInFlightChange(projectId, true)
-                    try {
-                        val tags = withContext(Dispatchers.Default) {
-                            runCatching {
-                                tagger.generateTags(thumbnail, onProgress = { p -> onTagProgressChange(projectId, p) })
-                            }.getOrDefault(emptyList())
-                        }
-                        withContext(Dispatchers.IO) { storage.setTags(projectId, tags) }
-                        onTagsChanged(projectId, tags)
-                    } finally {
-                        onTaggingInFlightChange(projectId, false)
-                    }
-                }
-            }
-
-            if (automaticTaggingEnabled) {
-                coroutineScope.launch {
-                    val meta = withContext(Dispatchers.Default) {
-                        runCatching {
-                            val handle = LibRawDecoder.createSession(bytes)
-                            if (handle == 0L) return@runCatching emptyMap<String, String>()
-                            try {
-                                val json = LibRawDecoder.getMetadataJsonFromSession(handle)
-                                parseRawMetadataForSearch(json)
-                            } finally {
-                                LibRawDecoder.releaseSession(handle)
-                            }
-                        }.getOrDefault(emptyMap())
-                    }
-                    if (meta.isNotEmpty()) {
-                        withContext(Dispatchers.IO) { storage.setRawMetadata(projectId, meta) }
-                        onMetadataChanged(projectId, meta)
-                    }
-                }
-            }
+            importBytes(name, bytes, openAfterImport)
         }
     }
 
-    // --- 2. HANDLE INTENTS (Open With / Share) ---
     val activity = context as? Activity
     val intent = activity?.intent
 
@@ -265,18 +300,15 @@ internal fun GalleryScreen(
         val type = intent.type
         val urisToImport = mutableListOf<Uri>()
 
-        // Case A: "Open with" (Single file via Data)
         if (Intent.ACTION_VIEW == action && intent.data != null) {
             urisToImport.add(intent.data!!)
         }
-        // Case B: "Share" (Single image)
         else if (Intent.ACTION_SEND == action && type?.startsWith("image/") == true) {
             @Suppress("DEPRECATION")
             (intent.getParcelableExtra<Parcelable>(Intent.EXTRA_STREAM) as? Uri)?.let {
                 urisToImport.add(it)
             }
         }
-        // Case C: "Share Multiple"
         else if (Intent.ACTION_SEND_MULTIPLE == action && type?.startsWith("image/") == true) {
             @Suppress("DEPRECATION")
             intent.getParcelableArrayListExtra<Parcelable>(Intent.EXTRA_STREAM)?.let { list ->
@@ -296,7 +328,6 @@ internal fun GalleryScreen(
         }
     }
 
-
     val columns = when {
         screenWidthDp >= 900 -> 5
         screenWidthDp >= 600 -> 4
@@ -305,9 +336,60 @@ internal fun GalleryScreen(
     }
 
     val mimeTypes = arrayOf("image/x-sony-arw", "image/*")
+    val immichConfigured = remember(immichServerUrl, immichAuthMode, immichAccessToken, immichApiKey) {
+        when (immichAuthMode) {
+            ImmichAuthMode.Login -> immichServerUrl.isNotBlank() && immichAccessToken.isNotBlank()
+            ImmichAuthMode.ApiKey -> immichServerUrl.isNotBlank() && immichApiKey.isNotBlank()
+        }
+    }
+    val immichConfig =
+        remember(immichServerUrl, immichAuthMode, immichAccessToken, immichApiKey) {
+            ImmichConfig(
+                serverUrl = immichServerUrl,
+                authMode = immichAuthMode,
+                apiKey = immichApiKey,
+                accessToken = immichAccessToken
+            )
+        }
+    var gallerySource by rememberSaveable { mutableStateOf(GallerySource.Local) }
+    var immichAlbums by remember { mutableStateOf<List<ImmichAlbum>>(emptyList()) }
+    var immichSelectedAlbum by remember { mutableStateOf<ImmichAlbum?>(null) }
+    var immichAlbumAssets by remember { mutableStateOf<List<ImmichAsset>>(emptyList()) }
+    var immichLoading by remember { mutableStateOf(false) }
+    var immichError by remember { mutableStateOf<String?>(null) }
+    var immichRefreshTrigger by remember { mutableIntStateOf(0) }
+    val immichDownloadInFlight = remember { mutableStateMapOf<String, Boolean>() }
+    val immichThumbs = remember { mutableStateMapOf<String, Bitmap>() }
+    val immichThumbInFlight = remember { mutableStateMapOf<String, Boolean>() }
+
+    suspend fun loadImmichGallery() {
+        immichError = null
+        if (!immichConfigured) {
+            immichLoading = false
+            return
+        }
+        immichLoading = true
+        if (immichSelectedAlbum == null) {
+            val loaded = fetchImmichAlbums(immichConfig)
+            immichAlbums = loaded ?: emptyList()
+            if (loaded == null) {
+                immichError = "Could not load Immich albums."
+            }
+        } else {
+            immichAlbumAssets = emptyList()
+            val loaded = fetchImmichAlbumAssets(immichConfig, immichSelectedAlbum!!.id)
+            immichAlbumAssets = loaded ?: emptyList()
+            if (loaded == null) {
+                immichError = "Could not load Immich album."
+            }
+        }
+        immichLoading = false
+    }
 
     var queryText by rememberSaveable { mutableStateOf("") }
     val queryLower = remember(queryText) { queryText.trim().lowercase(Locale.US) }
+    var gallerySortField by rememberSaveable { mutableStateOf(GallerySortField.Date) }
+    var gallerySortOrder by rememberSaveable { mutableStateOf(GallerySortOrder.Desc) }
 
     fun matchesQuery(item: GalleryItem): Boolean {
         if (queryLower.isBlank()) return true
@@ -320,11 +402,119 @@ internal fun GalleryScreen(
         return false
     }
 
-    val filteredItems = remember(items, queryLower) {
-        if (queryLower.isBlank()) items else items.filter(::matchesQuery)
+    fun matchesImmichAlbumQuery(album: ImmichAlbum): Boolean {
+        if (queryLower.isBlank()) return true
+        return album.name.lowercase(Locale.US).contains(queryLower)
     }
 
-    // --- 3. UPDATED FILE PICKER TO USE SHARED LOGIC ---
+    fun matchesImmichAssetQuery(asset: ImmichAsset): Boolean {
+        if (queryLower.isBlank()) return true
+        return asset.fileName.lowercase(Locale.US).contains(queryLower)
+    }
+
+    fun parseIsoToEpoch(iso: String?): Long {
+        if (iso.isNullOrBlank()) return 0L
+        val patterns = listOf(
+            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+            "yyyy-MM-dd'T'HH:mm:ss'Z'"
+        )
+        for (pattern in patterns) {
+            val format = java.text.SimpleDateFormat(pattern, Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }
+            val parsed = runCatching { format.parse(iso)?.time ?: 0L }.getOrDefault(0L)
+            if (parsed != 0L) return parsed
+        }
+        return 0L
+    }
+
+    val filteredLocalItems = remember(items, queryLower) {
+        if (queryLower.isBlank()) items else items.filter(::matchesQuery)
+    }
+    val filteredImmichAlbums = remember(immichAlbums, queryLower) {
+        if (queryLower.isBlank()) immichAlbums else immichAlbums.filter(::matchesImmichAlbumQuery)
+    }
+    val filteredImmichAssets = remember(immichAlbumAssets, queryLower) {
+        if (queryLower.isBlank()) immichAlbumAssets else immichAlbumAssets.filter(::matchesImmichAssetQuery)
+    }
+    val sortedLocalItems = remember(filteredLocalItems, gallerySortField, gallerySortOrder) {
+        when (gallerySortField) {
+            GallerySortField.Name -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredLocalItems.sortedBy { it.fileName.lowercase(Locale.US) }
+                } else {
+                    filteredLocalItems.sortedByDescending { it.fileName.lowercase(Locale.US) }
+                }
+            }
+            GallerySortField.Date -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredLocalItems.sortedBy { it.createdAt }
+                } else {
+                    filteredLocalItems.sortedByDescending { it.createdAt }
+                }
+            }
+            GallerySortField.Changed -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredLocalItems.sortedBy { it.modifiedAt }
+                } else {
+                    filteredLocalItems.sortedByDescending { it.modifiedAt }
+                }
+            }
+        }
+    }
+    val sortedImmichAlbums = remember(filteredImmichAlbums, gallerySortField, gallerySortOrder) {
+        when (gallerySortField) {
+            GallerySortField.Name -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredImmichAlbums.sortedBy { it.name.lowercase(Locale.US) }
+                } else {
+                    filteredImmichAlbums.sortedByDescending { it.name.lowercase(Locale.US) }
+                }
+            }
+            GallerySortField.Date -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredImmichAlbums.sortedBy { parseIsoToEpoch(it.createdAt) }
+                } else {
+                    filteredImmichAlbums.sortedByDescending { parseIsoToEpoch(it.createdAt) }
+                }
+            }
+            GallerySortField.Changed -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredImmichAlbums.sortedBy { parseIsoToEpoch(it.lastModifiedAssetTimestamp ?: it.updatedAt) }
+                } else {
+                    filteredImmichAlbums.sortedByDescending {
+                        parseIsoToEpoch(it.lastModifiedAssetTimestamp ?: it.updatedAt)
+                    }
+                }
+            }
+        }
+    }
+    val sortedImmichAssets = remember(filteredImmichAssets, gallerySortField, gallerySortOrder) {
+        when (gallerySortField) {
+            GallerySortField.Name -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredImmichAssets.sortedBy { it.fileName.lowercase(Locale.US) }
+                } else {
+                    filteredImmichAssets.sortedByDescending { it.fileName.lowercase(Locale.US) }
+                }
+            }
+            GallerySortField.Date -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredImmichAssets.sortedBy { parseIsoToEpoch(it.createdAt) }
+                } else {
+                    filteredImmichAssets.sortedByDescending { parseIsoToEpoch(it.createdAt) }
+                }
+            }
+            GallerySortField.Changed -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredImmichAssets.sortedBy { parseIsoToEpoch(it.updatedAt) }
+                } else {
+                    filteredImmichAssets.sortedByDescending { parseIsoToEpoch(it.updatedAt) }
+                }
+            }
+        }
+    }
+
     val pickRaw = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         coroutineScope.launch {
@@ -345,6 +535,12 @@ internal fun GalleryScreen(
         selectedItems.map { it.rating }.distinct().singleOrNull()
     }
 
+    val localItemByImmichAssetId = remember(items) {
+        items.asSequence()
+            .mapNotNull { item -> item.immichAssetId?.let { it to item } }
+            .toMap()
+    }
+
     var showSelectionInfo by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var selectionInfoMetadataJson by remember { mutableStateOf<String?>(null) }
@@ -352,6 +548,19 @@ internal fun GalleryScreen(
     val metadataDispatcher = remember { Executors.newSingleThreadExecutor().asCoroutineDispatcher() }
     DisposableEffect(metadataDispatcher) {
         onDispose { metadataDispatcher.close() }
+    }
+
+    LaunchedEffect(gallerySource) {
+        if (gallerySource != GallerySource.Local) {
+            selectedIds = emptySet()
+            showSelectionInfo = false
+            showDeleteDialog = false
+        }
+        if (gallerySource != GallerySource.Immich) {
+            immichSelectedAlbum = null
+            immichAlbumAssets = emptyList()
+            immichError = null
+        }
     }
 
     fun startBulkExport(projectIds: List<String>) {
@@ -504,11 +713,135 @@ internal fun GalleryScreen(
         }
     }
 
+    suspend fun refreshLocalPreviews() {
+        val projectIds = items.map { it.projectId }
+        for (projectId in projectIds) {
+            val rawBytes = withContext(Dispatchers.IO) { storage.loadRawBytes(projectId) } ?: continue
+            val adjustmentsJson = withContext(Dispatchers.IO) { storage.loadAdjustments(projectId) }
+            val previewBytes = withContext(Dispatchers.Default) {
+                runCatching { LibRawDecoder.decode(rawBytes, adjustmentsJson) }.getOrNull()
+            }
+            val previewBitmap = previewBytes?.decodeToBitmap() ?: continue
+
+            val maxSize = 1024
+            val scale = min(maxSize.toFloat() / previewBitmap.width, maxSize.toFloat() / previewBitmap.height)
+            val scaledWidth = (previewBitmap.width * scale).toInt().coerceAtLeast(1)
+            val scaledHeight = (previewBitmap.height * scale).toInt().coerceAtLeast(1)
+            val thumbnail =
+                if (previewBitmap.width == scaledWidth && previewBitmap.height == scaledHeight) previewBitmap
+                else Bitmap.createScaledBitmap(previewBitmap, scaledWidth, scaledHeight, true)
+
+            withContext(Dispatchers.IO) {
+                val outputStream = ByteArrayOutputStream()
+                thumbnail.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                storage.saveThumbnail(projectId, outputStream.toByteArray())
+            }
+            onThumbnailReady(projectId, thumbnail)
+            if (thumbnail != previewBitmap) thumbnail.recycle()
+            previewBitmap.recycle()
+        }
+        onRequestRefresh()
+    }
+
+    suspend fun ensureImmichThumbnail(assetId: String) {
+        if (!immichConfigured) return
+        if (immichThumbs.containsKey(assetId) || immichThumbInFlight[assetId] == true) return
+        immichThumbInFlight[assetId] = true
+        val bytes = downloadImmichThumbnail(immichConfig, assetId)
+        val bitmap = bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+        if (bitmap != null) immichThumbs[assetId] = bitmap
+        immichThumbInFlight.remove(assetId)
+    }
+
+    fun startImmichImport(asset: ImmichAsset) {
+        if (!immichConfigured) {
+            val message =
+                if (immichAuthMode == ImmichAuthMode.Login) {
+                    "Log in to Immich in settings first."
+                } else {
+                    "Configure Immich API key in settings first."
+                }
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val existing =
+            items.firstOrNull { it.immichAssetId == asset.id }
+                ?: storage.findProjectByImmichAssetId(asset.id)?.let { meta ->
+                    GalleryItem(
+                        projectId = meta.id,
+                        fileName = meta.fileName,
+                        createdAt = meta.createdAt,
+                        modifiedAt = meta.modifiedAt,
+                        rating = meta.rating,
+                        tags = meta.tags ?: emptyList(),
+                        rawMetadata = meta.rawMetadata ?: emptyMap(),
+                        immichAssetId = meta.immichAssetId,
+                        immichAlbumId = meta.immichAlbumId,
+                        editsUpdatedAtMs = meta.editsUpdatedAtMs ?: meta.modifiedAt,
+                        immichSidecarUpdatedAtMs = meta.immichSidecarUpdatedAtMs ?: 0L
+                    )
+                }
+        if (existing != null) {
+            onOpenItem(existing)
+            return
+        }
+        if (immichDownloadInFlight[asset.id] == true) return
+        immichDownloadInFlight[asset.id] = true
+        coroutineScope.launch {
+            try {
+                val bytes = downloadImmichOriginal(immichConfig, asset.id)
+                if (bytes == null) {
+                    Toast.makeText(context, "Immich download failed.", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                importBytes(
+                    asset.fileName,
+                    bytes,
+                    openAfterImport = true,
+                    immichAssetId = asset.id,
+                    immichAlbumId = immichSelectedAlbum?.id
+                )
+            } finally {
+                immichDownloadInFlight.remove(asset.id)
+            }
+        }
+    }
+
     LaunchedEffect(bulkExportStatus) {
         if (bulkExportStatus == null) return@LaunchedEffect
         Toast.makeText(context, bulkExportStatus, Toast.LENGTH_SHORT).show()
         delay(2500)
         bulkExportStatus = null
+    }
+
+    LaunchedEffect(immichServerUrl, immichAuthMode, immichAccessToken, immichApiKey) {
+        immichThumbs.clear()
+        immichThumbInFlight.clear()
+        immichDownloadInFlight.clear()
+        immichAlbums = emptyList()
+        immichAlbumAssets = emptyList()
+        immichSelectedAlbum = null
+        immichError = null
+    }
+
+    LaunchedEffect(immichConfigured) {
+        if (!immichConfigured) {
+            if (gallerySource == GallerySource.Immich) gallerySource = GallerySource.Local
+            immichSelectedAlbum = null
+        }
+    }
+
+    LaunchedEffect(
+        gallerySource,
+        immichSelectedAlbum?.id,
+        immichServerUrl,
+        immichAuthMode,
+        immichAccessToken,
+        immichApiKey,
+        immichRefreshTrigger
+    ) {
+        if (gallerySource != GallerySource.Immich) return@LaunchedEffect
+        loadImmichGallery()
     }
 
     val topTags = remember(items) {
@@ -526,11 +859,39 @@ internal fun GalleryScreen(
     LaunchedEffect(searchActive) {
         if (!searchActive) {
             if (isExecutingSearch) {
-                isExecutingSearch = false // Reset flag, but don't clear text
+                isExecutingSearch = false
             } else {
-                queryText = "" // User cancelled, so clear text
+                queryText = ""
             }
             focusManager.clearFocus()
+        }
+    }
+
+    BackHandler(enabled = gallerySource == GallerySource.Immich && immichSelectedAlbum != null) {
+        immichSelectedAlbum = null
+        immichAlbumAssets = emptyList()
+        immichError = null
+    }
+
+    val pullRefreshState = rememberPullRefreshState(
+        refreshing = isPullRefreshing,
+        onRefresh = {
+            if (isPullRefreshing) return@rememberPullRefreshState
+            if (gallerySource != GallerySource.Immich) return@rememberPullRefreshState
+            coroutineScope.launch {
+                isPullRefreshing = true
+                try {
+                    loadImmichGallery()
+                } finally {
+                    isPullRefreshing = false
+                }
+            }
+        }
+    )
+
+    LaunchedEffect(gallerySource) {
+        if (gallerySource != GallerySource.Immich && isPullRefreshing) {
+            isPullRefreshing = false
         }
     }
 
@@ -550,7 +911,7 @@ internal fun GalleryScreen(
                     ) {
                         DockedSearchBar(
                             modifier = Modifier
-                                .fillMaxWidth()
+                                .weight(1f)
                                 .semantics { traversalIndex = 0f },
                             inputField = {
                                 SearchBarDefaults.InputField(
@@ -576,7 +937,8 @@ internal fun GalleryScreen(
                             expanded = searchActive,
                             onExpandedChange = { searchActive = it }
                         ) {
-                            val showPopularTags = queryText.isBlank() && topTags.isNotEmpty()
+                            val showPopularTags =
+                                queryText.isBlank() && topTags.isNotEmpty() && gallerySource == GallerySource.Local
                             val showSearchResults = queryText.isNotBlank()
 
                             if (showPopularTags) {
@@ -613,44 +975,92 @@ internal fun GalleryScreen(
                                     }
                                 }
                             } else if (showSearchResults) {
-                                val matches = remember(queryLower, items) {
-                                    items.filter(::matchesQuery).take(10)
-                                }
                                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                                    if (matches.isNotEmpty()) {
-                                        matches.forEach { item ->
-                                            ListItem(
-                                                headlineContent = { Text(item.fileName) },
-                                                supportingContent = {
-                                                    if (item.tags.isNotEmpty()) {
-                                                        Text(
-                                                            item.tags.take(4).joinToString(", "),
-                                                            maxLines = 1,
-                                                            overflow = TextOverflow.Ellipsis
-                                                        )
-                                                    }
-                                                },
+                                    if (gallerySource == GallerySource.Immich) {
+                                        val matches =
+                                            if (immichSelectedAlbum == null) {
+                                                remember(queryLower, immichAlbums) {
+                                                    immichAlbums.filter(::matchesImmichAlbumQuery).take(10)
+                                                }
+                                            } else {
+                                                remember(queryLower, immichAlbumAssets) {
+                                                    immichAlbumAssets.filter(::matchesImmichAssetQuery).take(10)
+                                                }
+                                            }
+                                        if (matches.isNotEmpty()) {
+                                            matches.forEach { item ->
+                                                ListItem(
+                                                    headlineContent = {
+                                                        val title =
+                                                            if (item is ImmichAlbum) item.name
+                                                            else (item as ImmichAsset).fileName
+                                                        Text(title)
+                                                    },
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable {
+                                                            val title =
+                                                                if (item is ImmichAlbum) item.name
+                                                                else (item as ImmichAsset).fileName
+                                                            queryText = title
+                                                            isExecutingSearch = true
+                                                            searchActive = false
+                                                        }
+                                                )
+                                            }
+                                        } else {
+                                            Box(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
-                                                    .clickable {
-                                                        queryText = item.fileName
-                                                        isExecutingSearch = true
-                                                        searchActive = false
-                                                    }
-                                            )
+                                                    .padding(16.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    "No matches found",
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
                                         }
                                     } else {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(16.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(
-                                                "No matches found",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
+                                        val matches = remember(queryLower, items) {
+                                            items.filter(::matchesQuery).take(10)
+                                        }
+                                        if (matches.isNotEmpty()) {
+                                            matches.forEach { item ->
+                                                ListItem(
+                                                    headlineContent = { Text(item.fileName) },
+                                                    supportingContent = {
+                                                        if (item.tags.isNotEmpty()) {
+                                                            Text(
+                                                                item.tags.take(4).joinToString(", "),
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                        }
+                                                    },
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable {
+                                                            queryText = item.fileName
+                                                            isExecutingSearch = true
+                                                            searchActive = false
+                                                        }
+                                                )
+                                            }
+                                        } else {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(16.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    "No matches found",
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -665,6 +1075,95 @@ internal fun GalleryScreen(
                                         "Start typing to search",
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+
+                    }
+                }
+
+                if (immichConfigured) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        InputChip(
+                            selected = gallerySource == GallerySource.Local,
+                            onClick = { gallerySource = GallerySource.Local },
+                            label = { Text("Local") },
+                            colors = InputChipDefaults.inputChipColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                            )
+                        )
+                        InputChip(
+                            selected = gallerySource == GallerySource.Immich,
+                            onClick = { gallerySource = GallerySource.Immich },
+                            label = { Text("Immich") },
+                            colors = InputChipDefaults.inputChipColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                            )
+                        )
+                    }
+                }
+
+                val sortMenuExpanded = remember { mutableStateOf(false) }
+                val orderMenuExpanded = remember { mutableStateOf(false) }
+
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    item {
+                        Box {
+                            InputChip(
+                                selected = false,
+                                onClick = { sortMenuExpanded.value = true },
+                                label = { Text("Sort: ${gallerySortField.label}") },
+                                colors = InputChipDefaults.inputChipColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                )
+                            )
+                            DropdownMenu(
+                                expanded = sortMenuExpanded.value,
+                                onDismissRequest = { sortMenuExpanded.value = false }
+                            ) {
+                                GallerySortField.values().forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option.label) },
+                                        onClick = {
+                                            gallerySortField = option
+                                            sortMenuExpanded.value = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    item {
+                        Box {
+                            InputChip(
+                                selected = false,
+                                onClick = { orderMenuExpanded.value = true },
+                                label = { Text("Order: ${gallerySortOrder.label}") },
+                                colors = InputChipDefaults.inputChipColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                )
+                            )
+                            DropdownMenu(
+                                expanded = orderMenuExpanded.value,
+                                onDismissRequest = { orderMenuExpanded.value = false }
+                            ) {
+                                GallerySortOrder.values().forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option.label) },
+                                        onClick = {
+                                            gallerySortOrder = option
+                                            orderMenuExpanded.value = false
+                                        }
                                     )
                                 }
                             }
@@ -710,76 +1209,251 @@ internal fun GalleryScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .then(if (gallerySource == GallerySource.Immich) Modifier.pullRefresh(pullRefreshState) else Modifier)
         ) {
             val gridBottomPadding = if (selectedIds.isNotEmpty()) 128.dp else 88.dp
 
             Column(modifier = Modifier.fillMaxSize()) {
-                if (items.isEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = "No RAW files yet",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Tap the + button to add RAW files",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                } else {
-                    LazyVerticalGrid(
-                        modifier = Modifier.fillMaxSize(),
-                        columns = GridCells.Fixed(columns),
-                        contentPadding = PaddingValues(
-                            start = 16.dp,
-                            top = 16.dp,
-                            end = 16.dp,
-                            bottom = gridBottomPadding
-                        ),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(filteredItems.size) { index ->
-                            val item = filteredItems[index]
-                            val isSelected = item.projectId in selectedIds
-                            GalleryItemCard(
-                                item = item,
-                                selected = isSelected,
-                                isProcessing = isTaggingInFlight(item.projectId),
-                                automaticTaggingEnabled = automaticTaggingEnabled,
-                                processingProgress = tagProgressFor(item.projectId),
-                                onClick = {
-                                    if (isBulkExporting) return@GalleryItemCard
-                                    if (selectedIds.isEmpty()) {
-                                        onOpenItem(item)
-                                    } else {
+                if (gallerySource == GallerySource.Local) {
+                    if (items.isEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = "No RAW files yet",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Tap the + button to add RAW files",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            modifier = Modifier.fillMaxSize(),
+                            columns = GridCells.Fixed(columns),
+                            contentPadding = PaddingValues(
+                                start = 16.dp,
+                                top = 16.dp,
+                                end = 16.dp,
+                                bottom = gridBottomPadding
+                            ),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(sortedLocalItems.size) { index ->
+                                val item = sortedLocalItems[index]
+                                val isSelected = item.projectId in selectedIds
+                                val needsImmichSync =
+                                    immichDescriptionSyncEnabled &&
+                                        !item.immichAssetId.isNullOrBlank() &&
+                                        item.editsUpdatedAtMs > item.immichSidecarUpdatedAtMs
+                                val showImmichOriginIcon =
+                                    immichDescriptionSyncEnabled && !item.immichAssetId.isNullOrBlank()
+                                GalleryItemCard(
+                                    item = item,
+                                    selected = isSelected,
+                                    isProcessing = isTaggingInFlight(item.projectId),
+                                    automaticTaggingEnabled = automaticTaggingEnabled,
+                                    processingProgress = tagProgressFor(item.projectId),
+                                    needsImmichSync = needsImmichSync,
+                                    showImmichOriginIcon = showImmichOriginIcon && !needsImmichSync,
+                                    onClick = {
+                                        if (isBulkExporting) return@GalleryItemCard
+                                        if (selectedIds.isEmpty()) {
+                                            onOpenItem(item)
+                                        } else {
+                                            selectedIds =
+                                                if (isSelected) selectedIds - item.projectId
+                                                else selectedIds + item.projectId
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (isBulkExporting) return@GalleryItemCard
                                         selectedIds =
                                             if (isSelected) selectedIds - item.projectId else selectedIds + item.projectId
                                     }
-                                },
-                                onLongClick = {
-                                    if (isBulkExporting) return@GalleryItemCard
-                                    selectedIds =
-                                        if (isSelected) selectedIds - item.projectId else selectedIds + item.projectId
-                                }
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    val showingImmichAlbums = immichSelectedAlbum == null
+                    if (immichSelectedAlbum != null) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(onClick = {
+                                immichSelectedAlbum = null
+                                immichAlbumAssets = emptyList()
+                                immichError = null
+                            }) { Text("Albums") }
+                            Text(
+                                text = immichSelectedAlbum?.name.orEmpty(),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
+                        }
+                    }
+                    when {
+                        !immichConfigured -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(32.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = "Immich not configured",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = when (immichAuthMode) {
+                                        ImmichAuthMode.Login ->
+                                            "Add your server URL and log in from settings to browse Immich."
+                                        ImmichAuthMode.ApiKey ->
+                                            "Add your server URL and API key in settings to browse Immich."
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                TextButton(onClick = onOpenSettings) { Text("Open settings") }
+                            }
+                        }
+                        immichLoading -> {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                LoadingIndicator()
+                            }
+                        }
+                        immichError != null -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(32.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = immichError ?: "Immich error",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                TextButton(onClick = { immichRefreshTrigger++ }) { Text("Retry") }
+                            }
+                        }
+                        showingImmichAlbums && sortedImmichAlbums.isEmpty() -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(32.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = if (queryLower.isNotBlank()) "No Immich matches"
+                                    else "No Immich albums found",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        !showingImmichAlbums && sortedImmichAssets.isEmpty() -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(32.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = if (queryLower.isNotBlank()) "No Immich matches"
+                                    else "No Immich images found",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        else -> {
+                            LazyVerticalGrid(
+                                modifier = Modifier.fillMaxSize(),
+                                columns = GridCells.Fixed(columns),
+                                contentPadding = PaddingValues(
+                                    start = 16.dp,
+                                    top = 16.dp,
+                                    end = 16.dp,
+                                    bottom = gridBottomPadding
+                                ),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                if (showingImmichAlbums) {
+                                    items(sortedImmichAlbums.size) { index ->
+                                        val album = sortedImmichAlbums[index]
+                                        val thumbId = album.thumbnailAssetId
+                                        val thumbnail =
+                                            thumbId?.let { localItemByImmichAssetId[it]?.thumbnail }
+                                                ?: thumbId?.let { immichThumbs[it] }
+                                        LaunchedEffect(thumbId, immichConfigured) {
+                                            if (immichConfigured && thumbId != null) ensureImmichThumbnail(thumbId)
+                                        }
+                                        ImmichAlbumCard(
+                                            name = album.name,
+                                            assetCount = album.assetCount,
+                                            thumbnail = thumbnail,
+                                            onClick = { immichSelectedAlbum = album }
+                                        )
+                                    }
+                                } else {
+                                    items(sortedImmichAssets.size) { index ->
+                                        val asset = sortedImmichAssets[index]
+                                        val thumbnail = localItemByImmichAssetId[asset.id]?.thumbnail ?: immichThumbs[asset.id]
+                                        LaunchedEffect(asset.id, immichConfigured) {
+                                            if (immichConfigured) ensureImmichThumbnail(asset.id)
+                                        }
+                                        ImmichItemCard(
+                                            fileName = asset.fileName,
+                                            thumbnail = thumbnail,
+                                            isDownloading = immichDownloadInFlight[asset.id] == true,
+                                            onClick = { startImmichImport(asset) }
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // Multi-selection Floating Toolbar
+            if (gallerySource == GallerySource.Immich) {
+                PullRefreshIndicator(
+                    refreshing = isPullRefreshing,
+                    state = pullRefreshState,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    contentColor = MaterialTheme.colorScheme.primary
+                )
+            }
+
             AnimatedVisibility(
-                visible = selectedIds.isNotEmpty(),
+                visible = selectedIds.isNotEmpty() && gallerySource == GallerySource.Local,
                 enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
                 exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom),
                 modifier = Modifier

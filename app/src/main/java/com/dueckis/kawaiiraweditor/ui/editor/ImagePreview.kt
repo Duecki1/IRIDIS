@@ -93,7 +93,6 @@ internal fun ImagePreview(
     viewportRoi: CropState? = null,
     onViewportRoiChange: ((CropState?, Float) -> Unit)? = null,
     maskOverlay: MaskState? = null,
-    // Callback to request a one-off original/no-adjustments preview. Called from this composable when needed.
     requestBeforePreview: (suspend () -> Bitmap?)? = null,
     activeSubMask: SubMaskState? = null,
     isMaskMode: Boolean = false,
@@ -299,7 +298,6 @@ internal fun ImagePreview(
                 modifier = imageModifier
             )
 
-            // Before overlay
             val rb = beforeBitmap
             if (rb != null) {
                 Image(
@@ -318,8 +316,6 @@ internal fun ImagePreview(
                         )
                 )
             }
-
-            // (Compare IconButton moved to end of Box to ensure it is topmost and clickable)
 
             val viewportBmp = viewportBitmap
             val viewportRoiSnapshot = viewportRoi?.normalized()

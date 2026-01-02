@@ -36,71 +36,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
-import com.dueckis.kawaiiraweditor.data.model.CropState
-import com.dueckis.kawaiiraweditor.ui.components.AdjustmentSlider
 import com.dueckis.kawaiiraweditor.ui.components.PanelSectionCard
 import com.dueckis.kawaiiraweditor.ui.components.doubleTapSliderThumbToReset
 import kotlin.math.abs
-import kotlin.math.cos
-import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.sin
 
 private const val BASE_RATIO = 1.618f
-
-internal data class CropPreset(
-    val name: String,
-    val ratio: Float?
-)
-
-private val cropPresets = listOf(
-    CropPreset("Free", null),
-    CropPreset("Original", 0f),
-    CropPreset("1:1", 1f),
-    CropPreset("5:4", 5f / 4f),
-    CropPreset("4:3", 4f / 3f),
-    CropPreset("3:2", 3f / 2f),
-    CropPreset("16:9", 16f / 9f),
-    CropPreset("21:9", 21f / 9f),
-    CropPreset("65:24", 65f / 24f)
-)
-
-internal data class AutoCropParams(
-    val baseAspectRatio: Float,
-    val rotationDegrees: Float,
-    val aspectRatio: Float?
-)
-
-internal fun computeMaxCropNormalized(params: AutoCropParams): CropState {
-    val baseAspect = params.baseAspectRatio.takeIf { it.isFinite() && it > 0f } ?: 1f
-    val (w, h) = if (baseAspect >= 1f) {
-        baseAspect to 1f
-    } else {
-        1f to (1f / baseAspect)
-    }
-    val ratio = params.aspectRatio?.takeIf { it.isFinite() && it > 0f } ?: (w / h)
-
-    val angle = abs(params.rotationDegrees) % 180f
-    val rad = (angle * Math.PI / 180.0).toFloat()
-    val s = sin(rad).coerceAtLeast(0f)
-    val c = cos(rad).coerceAtLeast(0f)
-
-    val cropH = min(
-        h / (ratio * s + c).coerceAtLeast(0.000001f),
-        w / (ratio * c + s).coerceAtLeast(0.000001f)
-    ).coerceIn(0f, h)
-    val cropW = (ratio * cropH).coerceIn(0f, w)
-
-    val x = ((w - cropW) / 2f).coerceIn(0f, (w - 1f).coerceAtLeast(0f))
-    val y = ((h - cropH) / 2f).coerceIn(0f, (h - 1f).coerceAtLeast(0f))
-
-    return CropState(
-        x = (x / w).coerceIn(0f, 1f),
-        y = (y / h).coerceIn(0f, 1f),
-        width = (cropW / w).coerceIn(0f, 1f),
-        height = (cropH / h).coerceIn(0f, 1f)
-    ).normalized()
-}
 
 @Composable
 internal fun CropTransformControls(
@@ -198,24 +139,24 @@ internal fun CropTransformControls(
                 Icon(Icons.Filled.Refresh, contentDescription = "Reset")
             }
         }
-	    ) {
-	        val isOrientationToggleDisabled =
-	            adjustments.aspectRatio == null || adjustments.aspectRatio == 1f || activePreset?.ratio == 0f
-	        Row(
-	            modifier = Modifier.fillMaxWidth(),
-	            horizontalArrangement = Arrangement.SpaceBetween,
-	            verticalAlignment = Alignment.CenterVertically
-	        ) {
-	            Text(
-	                text = "Aspect Ratio",
-	                style = MaterialTheme.typography.titleSmall,
-	                color = MaterialTheme.colorScheme.onSurface
-	            )
+    ) {
+        val isOrientationToggleDisabled =
+            adjustments.aspectRatio == null || adjustments.aspectRatio == 1f || activePreset?.ratio == 0f
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Aspect Ratio",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
 
-	            IconButton(
-	                enabled = !isOrientationToggleDisabled,
-	                onClick = {
-	                    val current = adjustments.aspectRatio ?: return@IconButton
+            IconButton(
+                enabled = !isOrientationToggleDisabled,
+                onClick = {
+                    val current = adjustments.aspectRatio ?: return@IconButton
                     onAdjustmentsChange(requestAutoCrop(adjustments.copy(aspectRatio = 1f / current, crop = null)))
                 }
             ) {
@@ -235,15 +176,16 @@ internal fun CropTransformControls(
                                     if (current != null && current.isFinite() && current != 0f) 1f / current else current
                                 }
 
-                                else -> when (preset.ratio) {
-                                    null -> null
-                                    0f -> originalRatio
-                                    else -> {
-                                        val imageRatio = originalRatio
-                                        val base = preset.ratio
-                                        if (imageRatio != null && imageRatio < 1f && base > 1f) 1f / base else base
+                                else ->
+                                    when (preset.ratio) {
+                                        null -> null
+                                        0f -> originalRatio
+                                        else -> {
+                                            val imageRatio = originalRatio
+                                            val base = preset.ratio
+                                            if (imageRatio != null && imageRatio < 1f && base > 1f) 1f / base else base
+                                        }
                                     }
-                                }
                             }
                             onAdjustmentsChange(requestAutoCrop(adjustments.copy(aspectRatio = ar, crop = null)))
                         },

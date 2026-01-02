@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,17 +15,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CompareArrows
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.RadioButtonChecked
-import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.Layers
-import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -34,23 +27,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.model.MaskState
-import com.dueckis.kawaiiraweditor.data.model.SubMaskMode
-import com.dueckis.kawaiiraweditor.data.model.SubMaskState
-import com.dueckis.kawaiiraweditor.data.model.SubMaskType
-
-@Composable
-internal fun MaskIcon(type: String, modifier: Modifier = Modifier) {
-    val icon =
-        when (type) {
-            SubMaskType.AiSubject.id -> Icons.Outlined.AutoAwesome
-            SubMaskType.AiEnvironment.id -> Icons.Outlined.AutoAwesome
-            SubMaskType.Brush.id -> Icons.Filled.Edit
-            SubMaskType.Linear.id -> Icons.Outlined.Tune
-            SubMaskType.Radial.id -> Icons.Filled.RadioButtonChecked
-            else -> Icons.Outlined.Layers
-        }
-    Icon(imageVector = icon, contentDescription = null, modifier = modifier)
-}
 
 @Composable
 internal fun MaskItemCard(
@@ -126,63 +102,6 @@ internal fun MaskItemCard(
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-internal fun SubMaskItemChip(
-    subMask: SubMaskState,
-    isSelected: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-    onMenuClick: () -> Unit
-) {
-    val containerColor =
-        if (isSelected) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainerLow
-    val contentColor =
-        if (isSelected) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onSurface
-
-    Surface(
-        onClick = onClick,
-        color = containerColor,
-        contentColor = contentColor,
-        shape = RoundedCornerShape(8.dp),
-        border = if (isSelected) BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary) else null,
-        modifier = modifier.height(32.dp)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 8.dp)
-        ) {
-            Text(
-                text = if (subMask.mode == SubMaskMode.Additive) "+" else "-",
-                style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            MaskIcon(subMask.type, modifier = Modifier.size(14.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text =
-                    when (subMask.type) {
-                        SubMaskType.AiSubject.id -> "Subject"
-                        SubMaskType.AiEnvironment.id -> "Environment"
-                        SubMaskType.Brush.id -> "Brush"
-                        SubMaskType.Linear.id -> "Linear"
-                        SubMaskType.Radial.id -> "Radial"
-                        else -> "Edit"
-                    },
-                style = MaterialTheme.typography.labelSmall
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Icon(
-                imageVector = Icons.Filled.MoreVert,
-                contentDescription = "Menu",
-                modifier =
-                    Modifier
-                        .size(16.dp)
-                        .clickable { onMenuClick() }
-            )
         }
     }
 }
