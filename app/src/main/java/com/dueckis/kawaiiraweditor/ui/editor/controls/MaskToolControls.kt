@@ -131,6 +131,59 @@ internal fun MaskToolControls(
 
         SubMaskType.AiSubject.id -> {
             Text("Draw loosely over subject to detect.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                "Softness: ${(selectedSubMask.aiSubject.softness.coerceIn(0f, 1f) * 100f).roundToInt()}%",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Slider(
+                value = selectedSubMask.aiSubject.softness.coerceIn(0f, 1f),
+                onValueChange = { v ->
+                    onBeginEditInteraction()
+                    val updated =
+                        masks.map { m ->
+                            if (m.id != selectedMask.id) m
+                            else
+                                m.copy(
+                                    subMasks =
+                                        m.subMasks.map { s ->
+                                            if (s.id != selectedSubMask.id) s else s.copy(aiSubject = s.aiSubject.copy(softness = v))
+                                        }
+                                )
+                        }
+                    onMasksChange(updated)
+                },
+                onValueChangeFinished = onEndEditInteraction,
+                valueRange = 0f..1f
+            )
+            val subjectFeather = selectedSubMask.aiSubject.feather.coerceIn(-1f, 1f)
+            val subjectFeatherPct = (subjectFeather * 100f).roundToInt()
+            val subjectFeatherLabel = if (subjectFeatherPct >= 0) "+$subjectFeatherPct%" else "$subjectFeatherPct%"
+            Text(
+                "Expand/Shrink: $subjectFeatherLabel",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Slider(
+                value = subjectFeather,
+                onValueChange = { v ->
+                    onBeginEditInteraction()
+                    val updated =
+                        masks.map { m ->
+                            if (m.id != selectedMask.id) m
+                            else
+                                m.copy(
+                                    subMasks =
+                                        m.subMasks.map { s ->
+                                            if (s.id != selectedSubMask.id) s else s.copy(aiSubject = s.aiSubject.copy(feather = v))
+                                        }
+                                )
+                        }
+                    onMasksChange(updated)
+                },
+                onValueChangeFinished = onEndEditInteraction,
+                valueRange = -1f..1f
+            )
             Button(
                 onClick = {
                     val updated = masks.map { m ->
@@ -259,6 +312,61 @@ internal fun MaskToolControls(
                         }
                     }
                 }
+
+                Text(
+                    "Softness: ${(selectedSubMask.aiEnvironment.softness.coerceIn(0f, 1f) * 100f).roundToInt()}%",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Slider(
+                    value = selectedSubMask.aiEnvironment.softness.coerceIn(0f, 1f),
+                    onValueChange = { v ->
+                        onBeginEditInteraction()
+                        val updated =
+                            masks.map { m ->
+                                if (m.id != selectedMask.id) m
+                                else
+                                    m.copy(
+                                        subMasks =
+                                            m.subMasks.map { s ->
+                                                if (s.id != selectedSubMask.id) s else s.copy(aiEnvironment = s.aiEnvironment.copy(softness = v))
+                                            }
+                                    )
+                            }
+                        onMasksChange(updated)
+                    },
+                    onValueChangeFinished = onEndEditInteraction,
+                    valueRange = 0f..1f
+                )
+                val environmentFeather = selectedSubMask.aiEnvironment.feather.coerceIn(-1f, 1f)
+                val environmentFeatherPct = (environmentFeather * 100f).roundToInt()
+                val environmentFeatherLabel =
+                    if (environmentFeatherPct >= 0) "+$environmentFeatherPct%" else "$environmentFeatherPct%"
+                Text(
+                    "Expand/Shrink: $environmentFeatherLabel",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Slider(
+                    value = environmentFeather,
+                    onValueChange = { v ->
+                        onBeginEditInteraction()
+                        val updated =
+                            masks.map { m ->
+                                if (m.id != selectedMask.id) m
+                                else
+                                    m.copy(
+                                        subMasks =
+                                            m.subMasks.map { s ->
+                                                if (s.id != selectedSubMask.id) s else s.copy(aiEnvironment = s.aiEnvironment.copy(feather = v))
+                                            }
+                                    )
+                            }
+                        onMasksChange(updated)
+                    },
+                    onValueChangeFinished = onEndEditInteraction,
+                    valueRange = -1f..1f
+                )
 
                 LaunchedEffect(expanded) {
                     if (expanded && detectedAiEnvironmentCategories == null && !isDetectingAiEnvironmentCategories) {

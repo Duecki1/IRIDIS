@@ -3,6 +3,7 @@ package com.dueckis.kawaiiraweditor.data.model
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
+import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 
 internal enum class MaskOverlayMode {
@@ -330,7 +331,121 @@ internal fun buildMaskOverlayBitmap(
         }
     }
 
-    fun applyAiMask(apply: (idx: Int, intensity: Int) -> Unit, dataUrl: String?, softness: Float) {
+    fun maxFilterU8(src: IntArray, radius: Int): IntArray {
+        if (radius <= 0) return src
+        val tmp = IntArray(src.size)
+        val dst = IntArray(src.size)
+        val rowDeque = IntArray(width)
+        val colDeque = IntArray(height)
+
+        for (y in 0 until height) {
+            var head = 0
+            var tail = 0
+            val row = y * width
+            val last = width - 1
+            val prefill = minOf(radius, last)
+            for (x in 0..prefill) {
+                val v = src[row + x]
+                while (tail > head && src[row + rowDeque[tail - 1]] <= v) tail--
+                rowDeque[tail++] = x
+            }
+            for (x in 0 until width) {
+                val end = x + radius
+                if (end <= last && end > prefill) {
+                    val v = src[row + end]
+                    while (tail > head && src[row + rowDeque[tail - 1]] <= v) tail--
+                    rowDeque[tail++] = end
+                }
+                val start = x - radius
+                while (head < tail && rowDeque[head] < start) head++
+                tmp[row + x] = src[row + rowDeque[head]]
+            }
+        }
+
+        for (x in 0 until width) {
+            var head = 0
+            var tail = 0
+            val last = height - 1
+            val prefill = minOf(radius, last)
+            for (y in 0..prefill) {
+                val v = tmp[y * width + x]
+                while (tail > head && tmp[colDeque[tail - 1] * width + x] <= v) tail--
+                colDeque[tail++] = y
+            }
+            for (y in 0 until height) {
+                val end = y + radius
+                if (end <= last && end > prefill) {
+                    val v = tmp[end * width + x]
+                    while (tail > head && tmp[colDeque[tail - 1] * width + x] <= v) tail--
+                    colDeque[tail++] = end
+                }
+                val start = y - radius
+                while (head < tail && colDeque[head] < start) head++
+                dst[y * width + x] = tmp[colDeque[head] * width + x]
+            }
+        }
+
+        return dst
+    }
+
+    fun minFilterU8(src: IntArray, radius: Int): IntArray {
+        if (radius <= 0) return src
+        val tmp = IntArray(src.size)
+        val dst = IntArray(src.size)
+        val rowDeque = IntArray(width)
+        val colDeque = IntArray(height)
+
+        for (y in 0 until height) {
+            var head = 0
+            var tail = 0
+            val row = y * width
+            val last = width - 1
+            val prefill = minOf(radius, last)
+            for (x in 0..prefill) {
+                val v = src[row + x]
+                while (tail > head && src[row + rowDeque[tail - 1]] >= v) tail--
+                rowDeque[tail++] = x
+            }
+            for (x in 0 until width) {
+                val end = x + radius
+                if (end <= last && end > prefill) {
+                    val v = src[row + end]
+                    while (tail > head && src[row + rowDeque[tail - 1]] >= v) tail--
+                    rowDeque[tail++] = end
+                }
+                val start = x - radius
+                while (head < tail && rowDeque[head] < start) head++
+                tmp[row + x] = src[row + rowDeque[head]]
+            }
+        }
+
+        for (x in 0 until width) {
+            var head = 0
+            var tail = 0
+            val last = height - 1
+            val prefill = minOf(radius, last)
+            for (y in 0..prefill) {
+                val v = tmp[y * width + x]
+                while (tail > head && tmp[colDeque[tail - 1] * width + x] >= v) tail--
+                colDeque[tail++] = y
+            }
+            for (y in 0 until height) {
+                val end = y + radius
+                if (end <= last && end > prefill) {
+                    val v = tmp[end * width + x]
+                    while (tail > head && tmp[colDeque[tail - 1] * width + x] >= v) tail--
+                    colDeque[tail++] = end
+                }
+                val start = y - radius
+                while (head < tail && colDeque[head] < start) head++
+                dst[y * width + x] = tmp[colDeque[head] * width + x]
+            }
+        }
+
+        return dst
+    }
+
+    fun applyAiMask(apply: (idx: Int, intensity: Int) -> Unit, dataUrl: String?, softness: Float, feather: Float) {
         val url = dataUrl ?: return
         val decoded = decodeMaskDataUrlToBitmap(url) ?: return
         val scaled =
@@ -344,8 +459,16 @@ internal fun buildMaskOverlayBitmap(
         val maskU8 = IntArray(width * height) { i -> (pixels[i] shr 16) and 0xFF }
         val radius = (softness.coerceIn(0f, 1f) * 10f).roundToInt()
         val softened = if (radius >= 1) boxBlurU8(maskU8, radius) else maskU8
-        for (i in softened.indices) {
-            val v = softened[i]
+        val maxRadius = (minOf(width, height) * 0.04f).roundToInt().coerceIn(1, 60)
+        val featherRadius = (feather.coerceIn(-1f, 1f).absoluteValue * maxRadius).roundToInt()
+        val adjusted =
+            if (featherRadius >= 1) {
+                if (feather > 0f) maxFilterU8(softened, featherRadius) else minFilterU8(softened, featherRadius)
+            } else {
+                softened
+            }
+        for (i in adjusted.indices) {
+            val v = adjusted[i]
             if (v == 0) continue
             apply(i, v)
         }
@@ -385,10 +508,20 @@ internal fun buildMaskOverlayBitmap(
                 applyLinearMask({ idx, intensity -> layer[idx] = maxOf(layer[idx], intensity) }, highlightSubMask)
 
             SubMaskType.AiSubject.id ->
-                applyAiMask({ idx, intensity -> layer[idx] = maxOf(layer[idx], intensity) }, highlightSubMask.aiSubject.maskDataBase64, highlightSubMask.aiSubject.softness)
+                applyAiMask(
+                    apply = { idx, intensity -> layer[idx] = maxOf(layer[idx], intensity) },
+                    dataUrl = highlightSubMask.aiSubject.maskDataBase64,
+                    softness = highlightSubMask.aiSubject.softness,
+                    feather = highlightSubMask.aiSubject.feather
+                )
 
             SubMaskType.AiEnvironment.id ->
-                applyAiMask({ idx, intensity -> layer[idx] = maxOf(layer[idx], intensity) }, highlightSubMask.aiEnvironment.maskDataBase64, highlightSubMask.aiEnvironment.softness)
+                applyAiMask(
+                    apply = { idx, intensity -> layer[idx] = maxOf(layer[idx], intensity) },
+                    dataUrl = highlightSubMask.aiEnvironment.maskDataBase64,
+                    softness = highlightSubMask.aiEnvironment.softness,
+                    feather = highlightSubMask.aiEnvironment.feather
+                )
         }
 
         val overlayPixels = IntArray(width * height)
@@ -463,7 +596,8 @@ internal fun buildMaskOverlayBitmap(
                                 }
                             },
                             dataUrl = sub.aiSubject.maskDataBase64,
-                            softness = sub.aiSubject.softness
+                            softness = sub.aiSubject.softness,
+                            feather = sub.aiSubject.feather
                         )
 
                     SubMaskType.AiEnvironment.id ->
@@ -476,7 +610,8 @@ internal fun buildMaskOverlayBitmap(
                                 }
                             },
                             dataUrl = sub.aiEnvironment.maskDataBase64,
-                            softness = sub.aiEnvironment.softness
+                            softness = sub.aiEnvironment.softness,
+                            feather = sub.aiEnvironment.feather
                         )
                 }
             }
@@ -547,7 +682,8 @@ internal fun buildMaskOverlayBitmap(
                                 }
                             },
                             dataUrl = sub.aiSubject.maskDataBase64,
-                            softness = sub.aiSubject.softness
+                            softness = sub.aiSubject.softness,
+                            feather = sub.aiSubject.feather
                         )
 
                     SubMaskType.AiEnvironment.id ->
@@ -560,7 +696,8 @@ internal fun buildMaskOverlayBitmap(
                                 }
                             },
                             dataUrl = sub.aiEnvironment.maskDataBase64,
-                            softness = sub.aiEnvironment.softness
+                            softness = sub.aiEnvironment.softness,
+                            feather = sub.aiEnvironment.feather
                         )
                 }
             }

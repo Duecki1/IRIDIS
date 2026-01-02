@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -213,81 +214,83 @@ internal fun MaskingUI(
             val isSelected = mask.id == selectedMaskId
             var showMenu by remember(mask.id) { mutableStateOf(false) }
 
-            MaskItemCard(
-                mask = mask,
-                maskIndex = assignMaskNumber(mask.id).takeIf { it > 0 } ?: (index + 1),
-                isSelected = isSelected,
-                onClick = {
-                    onMaskTapModeChange(MaskTapMode.None)
-                    onSelectedMaskIdChange(mask.id)
-                    val firstSub = mask.subMasks.firstOrNull()
-                    onSelectedSubMaskIdChange(firstSub?.id)
-                    val shouldPaint = firstSub?.type == SubMaskType.Brush.id || firstSub?.type == SubMaskType.AiSubject.id
-                    onPaintingMaskChange(shouldPaint)
-                    onRequestMaskOverlayBlink(null)
-                },
-                onMenuClick = { showMenu = true }
-            )
-
-            DropdownMenu(
-                expanded = showMenu,
-                onDismissRequest = { showMenu = false },
-                shape = RoundedCornerShape(16.dp),
-                containerColor = MaterialTheme.colorScheme.surfaceContainer
-            ) {
-                DropdownMenuItem(
-                    text = { Text(if (mask.invert) "Uninvert Mask" else "Invert Mask") },
+            Box(modifier = Modifier.wrapContentSize()) {
+                MaskItemCard(
+                    mask = mask,
+                    maskIndex = assignMaskNumber(mask.id).takeIf { it > 0 } ?: (index + 1),
+                    isSelected = isSelected,
                     onClick = {
-                        showMenu = false
-                        onMasksChange(masks.map { m -> if (m.id == mask.id) m.copy(invert = !m.invert) else m })
-                        if (isSelected) onRequestMaskOverlayBlink(null)
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("Rename") },
-                    onClick = {
-                        showMenu = false
-                        renamingMaskId = mask.id
-                        showRenameDialog = true
-                    }
-                )
-                HorizontalDivider()
-                DropdownMenuItem(
-                    text = { Text("Duplicate") },
-                    onClick = {
-                        showMenu = false
-                        val dup = duplicateMaskState(mask, false)
-                        assignMaskNumber(dup.id)
-                        onMasksChange(masks.toMutableList().apply { add(index + 1, dup) }.toList())
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("Duplicate & Invert") },
-                    onClick = {
-                        showMenu = false
-                        val dup = duplicateMaskState(mask, true)
-                        assignMaskNumber(dup.id)
-                        onMasksChange(masks.toMutableList().apply { add(index + 1, dup) }.toList())
-                    }
+                        onMaskTapModeChange(MaskTapMode.None)
+                        onSelectedMaskIdChange(mask.id)
+                        val firstSub = mask.subMasks.firstOrNull()
+                        onSelectedSubMaskIdChange(firstSub?.id)
+                        val shouldPaint = firstSub?.type == SubMaskType.Brush.id || firstSub?.type == SubMaskType.AiSubject.id
+                        onPaintingMaskChange(shouldPaint)
+                        onRequestMaskOverlayBlink(null)
+                    },
+                    onMenuClick = { showMenu = true }
                 )
 
-                HorizontalDivider()
-
-                DropdownMenuItem(
-                    text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
-                    onClick = {
-                        showMenu = false
-                        val remaining = masks.filterNot { it.id == mask.id }
-                        onMasksChange(remaining)
-                        if (isSelected) {
-                            onPaintingMaskChange(false)
-                            onMaskTapModeChange(MaskTapMode.None)
-                            onSelectedMaskIdChange(remaining.firstOrNull()?.id)
-                            onSelectedSubMaskIdChange(remaining.firstOrNull()?.subMasks?.firstOrNull()?.id)
-                            onRequestMaskOverlayBlink(null)
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false },
+                    shape = RoundedCornerShape(16.dp),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(if (mask.invert) "Uninvert Mask" else "Invert Mask") },
+                        onClick = {
+                            showMenu = false
+                            onMasksChange(masks.map { m -> if (m.id == mask.id) m.copy(invert = !m.invert) else m })
+                            if (isSelected) onRequestMaskOverlayBlink(null)
                         }
-                    }
-                )
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        onClick = {
+                            showMenu = false
+                            renamingMaskId = mask.id
+                            showRenameDialog = true
+                        }
+                    )
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("Duplicate") },
+                        onClick = {
+                            showMenu = false
+                            val dup = duplicateMaskState(mask, false)
+                            assignMaskNumber(dup.id)
+                            onMasksChange(masks.toMutableList().apply { add(index + 1, dup) }.toList())
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Duplicate & Invert") },
+                        onClick = {
+                            showMenu = false
+                            val dup = duplicateMaskState(mask, true)
+                            assignMaskNumber(dup.id)
+                            onMasksChange(masks.toMutableList().apply { add(index + 1, dup) }.toList())
+                        }
+                    )
+
+                    HorizontalDivider()
+
+                    DropdownMenuItem(
+                        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                        onClick = {
+                            showMenu = false
+                            val remaining = masks.filterNot { it.id == mask.id }
+                            onMasksChange(remaining)
+                            if (isSelected) {
+                                onPaintingMaskChange(false)
+                                onMaskTapModeChange(MaskTapMode.None)
+                                onSelectedMaskIdChange(remaining.firstOrNull()?.id)
+                                onSelectedSubMaskIdChange(remaining.firstOrNull()?.subMasks?.firstOrNull()?.id)
+                                onRequestMaskOverlayBlink(null)
+                            }
+                        }
+                    )
+                }
             }
         }
     }
@@ -442,145 +445,147 @@ internal fun MaskingUI(
                             val dragAlpha by androidx.compose.animation.core.animateFloatAsState(if (isDragging) 0.9f else 1f, label = "SubMaskDragAlpha")
                             var showSubMenu by remember(sub.id) { mutableStateOf(false) }
 
-                            SubMaskItemChip(
-                                subMask = sub,
-                                isSelected = isSubSelected,
-                                modifier =
-                                    Modifier
-                                        .zIndex(if (isDragging) 1f else 0f)
-                                        .graphicsLayer(
-                                            translationX = if (isDragging) draggingSubMaskOffsetX else 0f,
-                                            scaleX = dragScale,
-                                            scaleY = dragScale,
-                                            alpha = dragAlpha
-                                        )
-                                        .pointerInput(selectedMask.id) {
-                                            detectDragGesturesAfterLongPress(
-                                                onDragStart = {
-                                                    draggingSubMaskId = sub.id
-                                                    draggingSubMaskOffsetX = 0f
-                                                    lastHapticReorderIndex = idx
-                                                    latestHaptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                },
-                                                onDragCancel = {
-                                                    if (draggingSubMaskId == sub.id) {
-                                                        draggingSubMaskId = null
-                                                        draggingSubMaskOffsetX = 0f
-                                                        lastHapticReorderIndex = null
-                                                    }
-                                                },
-                                                onDragEnd = {
-                                                    if (draggingSubMaskId == sub.id) {
-                                                        draggingSubMaskId = null
-                                                        draggingSubMaskOffsetX = 0f
-                                                        lastHapticReorderIndex = null
-                                                    }
-                                                },
-                                                onDrag = { change, dragAmount ->
-                                                    change.consume()
-                                                    if (draggingSubMaskId != sub.id) return@detectDragGesturesAfterLongPress
-
-                                                    draggingSubMaskOffsetX += dragAmount.x
-
-                                                    val currentMaskId = selectedMask.id
-                                                    val currentMask =
-                                                        latestMasks.firstOrNull { it.id == currentMaskId }
-                                                            ?: return@detectDragGesturesAfterLongPress
-                                                    val fromIndex = currentMask.subMasks.indexOfFirst { it.id == sub.id }
-                                                    if (fromIndex == -1) return@detectDragGesturesAfterLongPress
-
-                                                    val layoutInfo = subMaskChipsState.layoutInfo
-                                                    val draggedInfo =
-                                                        layoutInfo.visibleItemsInfo.firstOrNull { it.index == fromIndex }
-                                                            ?: return@detectDragGesturesAfterLongPress
-                                                    val draggedCenterX = draggedInfo.offset + draggingSubMaskOffsetX + (draggedInfo.size / 2f)
-
-                                                    val targetInfo =
-                                                        layoutInfo.visibleItemsInfo.firstOrNull { info ->
-                                                            info.index != fromIndex &&
-                                                                draggedCenterX >= info.offset &&
-                                                                draggedCenterX <= (info.offset + info.size)
-                                                        } ?: return@detectDragGesturesAfterLongPress
-
-                                                    val toIndex = targetInfo.index
-                                                    if (fromIndex == toIndex) return@detectDragGesturesAfterLongPress
-                                                    if (lastHapticReorderIndex != toIndex) {
-                                                        latestHaptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                                        lastHapticReorderIndex = toIndex
-                                                    }
-
-                                                    val movedSubMasks =
-                                                        currentMask.subMasks.toMutableList().apply {
-                                                            add(toIndex, removeAt(fromIndex))
-                                                        }.toList()
-
-                                                    latestOnMasksChange(
-                                                        latestMasks.map { m ->
-                                                            if (m.id != currentMaskId) m else m.copy(subMasks = movedSubMasks)
-                                                        }
-                                                    )
-
-                                                    draggingSubMaskOffsetX += (draggedInfo.offset - targetInfo.offset).toFloat()
-                                                }
+                            Box(modifier = Modifier.wrapContentSize()) {
+                                SubMaskItemChip(
+                                    subMask = sub,
+                                    isSelected = isSubSelected,
+                                    modifier =
+                                        Modifier
+                                            .zIndex(if (isDragging) 1f else 0f)
+                                            .graphicsLayer(
+                                                translationX = if (isDragging) draggingSubMaskOffsetX else 0f,
+                                                scaleX = dragScale,
+                                                scaleY = dragScale,
+                                                alpha = dragAlpha
                                             )
-                                        },
-                                onClick = {
-                                    onSelectedSubMaskIdChange(sub.id)
-                                    onPaintingMaskChange(sub.type == SubMaskType.Brush.id || sub.type == SubMaskType.AiSubject.id)
-                                    onMaskTapModeChange(MaskTapMode.None)
-                                    onRequestMaskOverlayBlink(sub.id)
-                                },
-                                onMenuClick = { showSubMenu = true }
-                            )
+                                            .pointerInput(selectedMask.id) {
+                                                detectDragGesturesAfterLongPress(
+                                                    onDragStart = {
+                                                        draggingSubMaskId = sub.id
+                                                        draggingSubMaskOffsetX = 0f
+                                                        lastHapticReorderIndex = idx
+                                                        latestHaptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    },
+                                                    onDragCancel = {
+                                                        if (draggingSubMaskId == sub.id) {
+                                                            draggingSubMaskId = null
+                                                            draggingSubMaskOffsetX = 0f
+                                                            lastHapticReorderIndex = null
+                                                        }
+                                                    },
+                                                    onDragEnd = {
+                                                        if (draggingSubMaskId == sub.id) {
+                                                            draggingSubMaskId = null
+                                                            draggingSubMaskOffsetX = 0f
+                                                            lastHapticReorderIndex = null
+                                                        }
+                                                    },
+                                                    onDrag = { change, dragAmount ->
+                                                        change.consume()
+                                                        if (draggingSubMaskId != sub.id) return@detectDragGesturesAfterLongPress
 
-                            DropdownMenu(
-                                expanded = showSubMenu,
-                                onDismissRequest = { showSubMenu = false },
-                                containerColor = MaterialTheme.colorScheme.surfaceContainer
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("Duplicate") },
+                                                        draggingSubMaskOffsetX += dragAmount.x
+
+                                                        val currentMaskId = selectedMask.id
+                                                        val currentMask =
+                                                            latestMasks.firstOrNull { it.id == currentMaskId }
+                                                                ?: return@detectDragGesturesAfterLongPress
+                                                        val fromIndex = currentMask.subMasks.indexOfFirst { it.id == sub.id }
+                                                        if (fromIndex == -1) return@detectDragGesturesAfterLongPress
+
+                                                        val layoutInfo = subMaskChipsState.layoutInfo
+                                                        val draggedInfo =
+                                                            layoutInfo.visibleItemsInfo.firstOrNull { it.index == fromIndex }
+                                                                ?: return@detectDragGesturesAfterLongPress
+                                                        val draggedCenterX = draggedInfo.offset + draggingSubMaskOffsetX + (draggedInfo.size / 2f)
+
+                                                        val targetInfo =
+                                                            layoutInfo.visibleItemsInfo.firstOrNull { info ->
+                                                                info.index != fromIndex &&
+                                                                    draggedCenterX >= info.offset &&
+                                                                    draggedCenterX <= (info.offset + info.size)
+                                                            } ?: return@detectDragGesturesAfterLongPress
+
+                                                        val toIndex = targetInfo.index
+                                                        if (fromIndex == toIndex) return@detectDragGesturesAfterLongPress
+                                                        if (lastHapticReorderIndex != toIndex) {
+                                                            latestHaptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                            lastHapticReorderIndex = toIndex
+                                                        }
+
+                                                        val movedSubMasks =
+                                                            currentMask.subMasks.toMutableList().apply {
+                                                                add(toIndex, removeAt(fromIndex))
+                                                            }.toList()
+
+                                                        latestOnMasksChange(
+                                                            latestMasks.map { m ->
+                                                                if (m.id != currentMaskId) m else m.copy(subMasks = movedSubMasks)
+                                                            }
+                                                        )
+
+                                                        draggingSubMaskOffsetX += (draggedInfo.offset - targetInfo.offset).toFloat()
+                                                    }
+                                                )
+                                            },
                                     onClick = {
-                                        showSubMenu = false
+                                        onSelectedSubMaskIdChange(sub.id)
+                                        onPaintingMaskChange(sub.type == SubMaskType.Brush.id || sub.type == SubMaskType.AiSubject.id)
                                         onMaskTapModeChange(MaskTapMode.None)
-                                        val dup = duplicateSubMaskState(sub)
-                                        val updated = masks.map { m ->
-                                            if (m.id != selectedMask.id) m
-                                            else m.copy(subMasks = m.subMasks.toMutableList().apply { add(idx + 1, dup) }.toList())
-                                        }
-                                        onMasksChange(updated)
-                                        onSelectedSubMaskIdChange(dup.id)
-                                        onPaintingMaskChange(dup.type == SubMaskType.Brush.id || dup.type == SubMaskType.AiSubject.id)
-                                        onRequestMaskOverlayBlink(dup.id)
-                                    }
+                                        onRequestMaskOverlayBlink(sub.id)
+                                    },
+                                    onMenuClick = { showSubMenu = true }
                                 )
-                                DropdownMenuItem(
-                                    text = { Text(if (sub.mode == SubMaskMode.Additive) "Change to Subtract" else "Change to Add") },
-                                    onClick = {
-                                        showSubMenu = false
-                                        val newMode = if (sub.mode == SubMaskMode.Additive) SubMaskMode.Subtractive else SubMaskMode.Additive
-                                        val updated = masks.map { m ->
-                                            if (m.id != selectedMask.id) m
-                                            else m.copy(subMasks = m.subMasks.map { s -> if (s.id == sub.id) s.copy(mode = newMode) else s })
+
+                                DropdownMenu(
+                                    expanded = showSubMenu,
+                                    onDismissRequest = { showSubMenu = false },
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainer
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Duplicate") },
+                                        onClick = {
+                                            showSubMenu = false
+                                            onMaskTapModeChange(MaskTapMode.None)
+                                            val dup = duplicateSubMaskState(sub)
+                                            val updated = masks.map { m ->
+                                                if (m.id != selectedMask.id) m
+                                                else m.copy(subMasks = m.subMasks.toMutableList().apply { add(idx + 1, dup) }.toList())
+                                            }
+                                            onMasksChange(updated)
+                                            onSelectedSubMaskIdChange(dup.id)
+                                            onPaintingMaskChange(dup.type == SubMaskType.Brush.id || dup.type == SubMaskType.AiSubject.id)
+                                            onRequestMaskOverlayBlink(dup.id)
                                         }
-                                        onMasksChange(updated)
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
-                                    onClick = {
-                                        showSubMenu = false
-                                        val updated = masks.map { m ->
-                                            if (m.id != selectedMask.id) m
-                                            else m.copy(subMasks = m.subMasks.filterNot { it.id == sub.id })
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(if (sub.mode == SubMaskMode.Additive) "Change to Subtract" else "Change to Add") },
+                                        onClick = {
+                                            showSubMenu = false
+                                            val newMode = if (sub.mode == SubMaskMode.Additive) SubMaskMode.Subtractive else SubMaskMode.Additive
+                                            val updated = masks.map { m ->
+                                                if (m.id != selectedMask.id) m
+                                                else m.copy(subMasks = m.subMasks.map { s -> if (s.id == sub.id) s.copy(mode = newMode) else s })
+                                            }
+                                            onMasksChange(updated)
                                         }
-                                        onMasksChange(updated)
-                                        if (isSubSelected) {
-                                            onPaintingMaskChange(false)
-                                            onSelectedSubMaskIdChange(updated.firstOrNull { it.id == selectedMask.id }?.subMasks?.firstOrNull()?.id)
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                                        onClick = {
+                                            showSubMenu = false
+                                            val updated = masks.map { m ->
+                                                if (m.id != selectedMask.id) m
+                                                else m.copy(subMasks = m.subMasks.filterNot { it.id == sub.id })
+                                            }
+                                            onMasksChange(updated)
+                                            if (isSubSelected) {
+                                                onPaintingMaskChange(false)
+                                                onSelectedSubMaskIdChange(updated.firstOrNull { it.id == selectedMask.id }?.subMasks?.firstOrNull()?.id)
+                                            }
                                         }
-                                    }
-                                )
+                                    )
+                                }
                             }
                         }
                     }

@@ -44,10 +44,11 @@ import com.dueckis.kawaiiraweditor.data.immich.completeImmichOAuth
 import com.dueckis.kawaiiraweditor.data.immich.loginImmich
 import com.dueckis.kawaiiraweditor.data.immich.parseImmichOAuthParams
 import com.dueckis.kawaiiraweditor.data.immich.startImmichOAuth
+import com.dueckis.kawaiiraweditor.data.model.GalleryItem
+import com.dueckis.kawaiiraweditor.data.model.EditorPanelTab
+import com.dueckis.kawaiiraweditor.data.model.Screen
 import com.dueckis.kawaiiraweditor.data.model.updateById
 import com.dueckis.kawaiiraweditor.data.model.updateByIds
-import com.dueckis.kawaiiraweditor.data.model.GalleryItem
-import com.dueckis.kawaiiraweditor.data.model.Screen
 import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
 import com.dueckis.kawaiiraweditor.data.permissions.maybeRequestPostNotificationsPermission
 import com.dueckis.kawaiiraweditor.data.preferences.AppPreferences
@@ -87,6 +88,7 @@ fun KawaiiApp(
     var currentScreen by remember { mutableStateOf(Screen.Gallery) }
     var galleryItems by remember { mutableStateOf<List<GalleryItem>>(emptyList()) }
     var selectedItem by remember { mutableStateOf<GalleryItem?>(null) }
+    var editorInitialTab by remember { mutableStateOf<EditorPanelTab?>(null) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
     var editorDismissProgressTarget by remember { mutableFloatStateOf(0f) }
     val editorDismissProgress = remember { Animatable(0f) }
@@ -230,6 +232,7 @@ fun KawaiiApp(
         if (pendingProjectToOpen != null && galleryItems.isNotEmpty()) {
             val target = galleryItems.firstOrNull { it.projectId == pendingProjectToOpen }
             if (target != null) {
+                editorInitialTab = null
                 selectedItem = target
                 currentScreen = Screen.Editor
                 editorDismissProgress.snapTo(0f)
@@ -355,6 +358,7 @@ fun KawaiiApp(
             }
             currentScreen = Screen.Gallery
             selectedItem = null
+            editorInitialTab = null
             refreshTrigger++
             editorDismissProgressTarget = 0f
             editorDismissProgress.snapTo(0f)
@@ -389,11 +393,12 @@ fun KawaiiApp(
                             item.copy(rawMetadata = rawMetadata)
                         }
                     },
-                    onOpenItem = { item ->
+                    onOpenItem = { item, initialTab ->
                         if (currentScreen == Screen.Editor) return@GalleryScreen
                         coroutineScope.launch {
                             editorDismissProgressTarget = 0f
                             editorDismissProgress.snapTo(1f)
+                            editorInitialTab = initialTab
                             selectedItem = item
                             currentScreen = Screen.Editor
                             editorDismissProgress.animateTo(
@@ -463,6 +468,7 @@ fun KawaiiApp(
                             lowQualityPreviewEnabled = lowQualityPreviewEnabled,
                             environmentMaskingEnabled = environmentMaskingEnabled,
                             immichDescriptionSyncEnabled = immichDescriptionSyncEnabled,
+                            initialPanelTab = editorInitialTab ?: EditorPanelTab.Adjustments,
                             maskRenameTags = maskRenameTags,
                             onBackClick = { requestExitEditor(animated = true) },
                             onPredictiveBackProgress = { progress ->

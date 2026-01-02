@@ -77,6 +77,7 @@ internal fun SubMaskState.toJsonObject(): JSONObject {
                 SubMaskType.AiSubject.id -> JSONObject().apply {
                     aiSubject.maskDataBase64?.let { put("maskDataBase64", it) }
                     put("softness", aiSubject.softness.coerceIn(0f, 1f))
+                    put("feather", aiSubject.feather.coerceIn(-1f, 1f))
                     aiSubject.baseTransform?.let { put("baseTransform", it.toJsonObject()) }
                     aiSubject.baseWidthPx?.takeIf { it > 0 }?.let { put("baseWidthPx", it) }
                     aiSubject.baseHeightPx?.takeIf { it > 0 }?.let { put("baseHeightPx", it) }
@@ -86,6 +87,7 @@ internal fun SubMaskState.toJsonObject(): JSONObject {
                     put("category", aiEnvironment.category)
                     aiEnvironment.maskDataBase64?.let { put("maskDataBase64", it) }
                     put("softness", aiEnvironment.softness.coerceIn(0f, 1f))
+                    put("feather", aiEnvironment.feather.coerceIn(-1f, 1f))
                     aiEnvironment.baseTransform?.let { put("baseTransform", it.toJsonObject()) }
                     aiEnvironment.baseWidthPx?.takeIf { it > 0 }?.let { put("baseWidthPx", it) }
                     aiEnvironment.baseHeightPx?.takeIf { it > 0 }?.let { put("baseHeightPx", it) }

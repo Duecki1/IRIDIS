@@ -124,10 +124,16 @@ import com.dueckis.kawaiiraweditor.data.media.decodeToBitmap
 import com.dueckis.kawaiiraweditor.data.media.displayNameForUri
 import com.dueckis.kawaiiraweditor.data.media.parseRawMetadataForSearch
 import com.dueckis.kawaiiraweditor.data.media.saveJpegToPictures
+import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
+import com.dueckis.kawaiiraweditor.data.model.AiEnvironmentCategory
+import com.dueckis.kawaiiraweditor.data.model.EditorPanelTab
 import com.dueckis.kawaiiraweditor.data.model.GalleryItem
+import com.dueckis.kawaiiraweditor.data.model.MaskTransformState
+import com.dueckis.kawaiiraweditor.data.model.SubMaskType
 import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
 import com.dueckis.kawaiiraweditor.data.permissions.maybeRequestPostNotificationsPermission
 import com.dueckis.kawaiiraweditor.data.storage.ProjectStorage
+import com.dueckis.kawaiiraweditor.domain.ai.AiEnvironmentMaskGenerator
 import com.dueckis.kawaiiraweditor.domain.ai.ClipAutoTagger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -141,6 +147,21 @@ import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.exp
 import kotlin.math.min
+
+private data class AiMaskCopyInfo(
+    val hasAiSubject: Boolean,
+    val environmentCategories: List<String>
+) {
+    val hasAiEnvironment: Boolean
+        get() = environmentCategories.isNotEmpty()
+}
+
+private data class EnvironmentMaskUpdate(
+    val dataByCategory: Map<String, String>,
+    val baseWidthPx: Int,
+    val baseHeightPx: Int,
+    val hadFailures: Boolean
+)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -160,7 +181,7 @@ internal fun GalleryScreen(
     tagProgressFor: (String) -> Float?,
     onTagProgressChange: (String, Float) -> Unit,
     onMetadataChanged: (String, Map<String, String>) -> Unit,
-    onOpenItem: (GalleryItem) -> Unit,
+    onOpenItem: (GalleryItem, EditorPanelTab?) -> Unit,
     onAddClick: (GalleryItem) -> Unit,
     onThumbnailReady: (String, Bitmap) -> Unit,
     onTagsChanged: (String, List<String>) -> Unit,
@@ -217,7 +238,7 @@ internal fun GalleryScreen(
         )
         onAddClick(item)
         if (openAfterImport) {
-            onOpenItem(item)
+            onOpenItem(item, null)
         }
         coroutineScope.launch {
             val previewBytes = withContext(Dispatchers.Default) {
@@ -526,6 +547,15 @@ internal fun GalleryScreen(
     var isBulkExporting by remember { mutableStateOf(false) }
     var isPastingAdjustments by remember { mutableStateOf(false) }
     var copiedAdjustmentsJson by remember { mutableStateOf<String?>(null) }
+    var pasteProgressMessage by remember { mutableStateOf<String?>(null) }
+    var pendingPasteIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    var pendingPasteAdjustmentsJson by remember { mutableStateOf<String?>(null) }
+    var pendingPasteEnvironmentCategories by remember { mutableStateOf<List<String>>(emptyList()) }
+    var pendingPasteHasSubjectMasks by remember { mutableStateOf(false) }
+    var pendingPasteOpenTarget by remember { mutableStateOf<GalleryItem?>(null) }
+    var pendingRunEnvironmentMasks by remember { mutableStateOf(false) }
+    var showEnvironmentMaskDialog by remember { mutableStateOf(false) }
+    var showSubjectMaskDialog by remember { mutableStateOf(false) }
     var bulkExportDone by remember { mutableIntStateOf(0) }
     var bulkExportTotal by remember { mutableIntStateOf(0) }
     var bulkExportStatus by remember { mutableStateOf<String?>(null) }
@@ -561,6 +591,70 @@ internal fun GalleryScreen(
             immichAlbumAssets = emptyList()
             immichError = null
         }
+    }
+
+    fun parseAiMaskCopyInfo(adjustmentsJson: String): AiMaskCopyInfo {
+        return runCatching {
+            val obj = JSONObject(adjustmentsJson)
+            val masksArr = obj.optJSONArray("masks") ?: return@runCatching AiMaskCopyInfo(false, emptyList())
+            var hasSubject = false
+            val envCategories = linkedSetOf<String>()
+            for (i in 0 until masksArr.length()) {
+                val maskObj = masksArr.optJSONObject(i) ?: continue
+                val subMasksArr = maskObj.optJSONArray("subMasks") ?: continue
+                for (j in 0 until subMasksArr.length()) {
+                    val subObj = subMasksArr.optJSONObject(j) ?: continue
+                    when (subObj.optString("type")) {
+                        SubMaskType.AiSubject.id -> hasSubject = true
+                        SubMaskType.AiEnvironment.id -> {
+                            val params = subObj.optJSONObject("parameters")
+                            val category = AiEnvironmentCategory.fromId(params?.optString("category")).id
+                            envCategories.add(category)
+                        }
+                    }
+                }
+            }
+            AiMaskCopyInfo(hasSubject, envCategories.toList())
+        }.getOrDefault(AiMaskCopyInfo(false, emptyList()))
+    }
+
+    fun updateEnvironmentMasksJson(
+        adjustmentsJson: String,
+        environmentMaskDataByCategory: Map<String, String>,
+        baseTransform: MaskTransformState?,
+        baseWidthPx: Int?,
+        baseHeightPx: Int?,
+        clearMissing: Boolean
+    ): String {
+        return runCatching {
+            val obj = JSONObject(adjustmentsJson)
+            val masksArr = obj.optJSONArray("masks") ?: return@runCatching adjustmentsJson
+            for (i in 0 until masksArr.length()) {
+                val maskObj = masksArr.optJSONObject(i) ?: continue
+                val subMasksArr = maskObj.optJSONArray("subMasks") ?: continue
+                for (j in 0 until subMasksArr.length()) {
+                    val subObj = subMasksArr.optJSONObject(j) ?: continue
+                    if (subObj.optString("type") != SubMaskType.AiEnvironment.id) continue
+                    val params = subObj.optJSONObject("parameters") ?: JSONObject().also { subObj.put("parameters", it) }
+                    val categoryId = AiEnvironmentCategory.fromId(params.optString("category")).id
+                    val dataUrl = environmentMaskDataByCategory[categoryId]
+                    if (dataUrl != null) {
+                        params.put("maskDataBase64", dataUrl)
+                        baseTransform?.let { params.put("baseTransform", it.toJsonObject()) }
+                        if (baseWidthPx != null && baseHeightPx != null) {
+                            params.put("baseWidthPx", baseWidthPx)
+                            params.put("baseHeightPx", baseHeightPx)
+                        }
+                    } else if (clearMissing) {
+                        params.remove("maskDataBase64")
+                        params.remove("baseTransform")
+                        params.remove("baseWidthPx")
+                        params.remove("baseHeightPx")
+                    }
+                }
+            }
+            obj.toString()
+        }.getOrDefault(adjustmentsJson)
     }
 
     fun startBulkExport(projectIds: List<String>) {
@@ -654,26 +748,105 @@ internal fun GalleryScreen(
         }
     }
 
-    fun startPasteAdjustments(projectIds: List<String>, adjustmentsJson: String) {
+    suspend fun pasteAdjustments(
+        projectIds: List<String>,
+        adjustmentsJson: String,
+        regenerateEnvironmentMasks: Boolean,
+        environmentCategories: List<String>
+    ) {
         if (isBulkExporting || isPastingAdjustments) return
         if (projectIds.isEmpty()) return
         isPastingAdjustments = true
 
-        coroutineScope.launch {
-            var successCount = 0
-            var failureCount = 0
+        val uniqueEnvironmentCategories = environmentCategories.distinct()
+        val shouldRegenerateEnvironment = regenerateEnvironmentMasks && uniqueEnvironmentCategories.isNotEmpty()
+        val environmentGenerator =
+            if (shouldRegenerateEnvironment) AiEnvironmentMaskGenerator(context) else null
+        val baseTransform = if (shouldRegenerateEnvironment) MaskTransformState() else null
+        val baseJson = if (shouldRegenerateEnvironment) AdjustmentState().toJson(emptyList()) else ""
+        var successCount = 0
+        var failureCount = 0
+        var environmentFailureCount = 0
 
-            for (projectId in projectIds) {
+        try {
+            for ((index, projectId) in projectIds.withIndex()) {
+                pasteProgressMessage =
+                    if (shouldRegenerateEnvironment) {
+                        "Regenerating environment masks (${index + 1}/${projectIds.size})..."
+                    } else {
+                        "Pasting adjustments (${index + 1}/${projectIds.size})..."
+                    }
+
                 val rawBytes = withContext(Dispatchers.IO) { storage.loadRawBytes(projectId) }
                 if (rawBytes == null) {
                     failureCount++
                     continue
                 }
 
-                withContext(Dispatchers.IO) { storage.saveAdjustments(projectId, adjustmentsJson) }
+                var effectiveJson = adjustmentsJson
+                if (shouldRegenerateEnvironment && environmentGenerator != null) {
+                    val envUpdate =
+                        withContext(Dispatchers.Default) {
+                            val previewBytes =
+                                runCatching { LibRawDecoder.decode(rawBytes, baseJson) }.getOrNull()
+                            val bitmap = previewBytes?.decodeToBitmap() ?: return@withContext null
+                            try {
+                                val dataByCategory = mutableMapOf<String, String>()
+                                var hadFailures = false
+                                val baseWidth = bitmap.width.coerceAtLeast(1)
+                                val baseHeight = bitmap.height.coerceAtLeast(1)
+                                for (categoryId in uniqueEnvironmentCategories) {
+                                    val category = AiEnvironmentCategory.fromId(categoryId)
+                                    val dataUrl =
+                                        runCatching {
+                                            environmentGenerator.generateEnvironmentMaskDataUrl(bitmap, category)
+                                        }.getOrNull()
+                                    if (dataUrl == null) {
+                                        hadFailures = true
+                                    } else {
+                                        dataByCategory[category.id] = dataUrl
+                                    }
+                                }
+                                EnvironmentMaskUpdate(
+                                    dataByCategory = dataByCategory,
+                                    baseWidthPx = baseWidth,
+                                    baseHeightPx = baseHeight,
+                                    hadFailures = hadFailures
+                                )
+                            } finally {
+                                bitmap.recycle()
+                            }
+                        }
+
+                    if (envUpdate == null) {
+                        environmentFailureCount++
+                        effectiveJson =
+                            updateEnvironmentMasksJson(
+                                adjustmentsJson = adjustmentsJson,
+                                environmentMaskDataByCategory = emptyMap(),
+                                baseTransform = null,
+                                baseWidthPx = null,
+                                baseHeightPx = null,
+                                clearMissing = true
+                            )
+                    } else {
+                        if (envUpdate.hadFailures) environmentFailureCount++
+                        effectiveJson =
+                            updateEnvironmentMasksJson(
+                                adjustmentsJson = adjustmentsJson,
+                                environmentMaskDataByCategory = envUpdate.dataByCategory,
+                                baseTransform = baseTransform,
+                                baseWidthPx = envUpdate.baseWidthPx,
+                                baseHeightPx = envUpdate.baseHeightPx,
+                                clearMissing = true
+                            )
+                    }
+                }
+
+                withContext(Dispatchers.IO) { storage.saveAdjustments(projectId, effectiveJson) }
 
                 val previewBytes = withContext(Dispatchers.Default) {
-                    runCatching { LibRawDecoder.decode(rawBytes, adjustmentsJson) }.getOrNull()
+                    runCatching { LibRawDecoder.decode(rawBytes, effectiveJson) }.getOrNull()
                 }
                 val previewBitmap = previewBytes?.decodeToBitmap()
                 if (previewBitmap == null) {
@@ -700,16 +873,56 @@ internal fun GalleryScreen(
 
                 successCount++
             }
-
+        } finally {
             isPastingAdjustments = false
-            onRequestRefresh()
-            val msg =
-                when {
-                    failureCount == 0 -> "Pasted adjustments to $successCount image(s)."
-                    successCount == 0 -> "Paste failed."
-                    else -> "Pasted to $successCount image(s), $failureCount failed."
-                }
-            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            pasteProgressMessage = null
+        }
+
+        onRequestRefresh()
+        val msg = buildString {
+            when {
+                failureCount == 0 -> append("Pasted adjustments to $successCount image(s).")
+                successCount == 0 -> append("Paste failed.")
+                else -> append("Pasted to $successCount image(s), $failureCount failed.")
+            }
+            if (environmentFailureCount > 0) {
+                if (isNotEmpty()) append(" ")
+                append("Environment masks failed on $environmentFailureCount image(s).")
+            }
+        }
+        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+    }
+
+    fun launchPaste(
+        regenerateEnvironmentMasks: Boolean,
+        openMasksAfterPaste: Boolean
+    ) {
+        val ids = pendingPasteIds
+        val json = pendingPasteAdjustmentsJson
+        val envCategories = if (regenerateEnvironmentMasks) pendingPasteEnvironmentCategories else emptyList()
+        val openTarget = if (openMasksAfterPaste) pendingPasteOpenTarget else null
+
+        pendingPasteIds = emptyList()
+        pendingPasteAdjustmentsJson = null
+        pendingPasteEnvironmentCategories = emptyList()
+        pendingPasteHasSubjectMasks = false
+        pendingPasteOpenTarget = null
+        pendingRunEnvironmentMasks = false
+        showEnvironmentMaskDialog = false
+        showSubjectMaskDialog = false
+
+        if (json == null || ids.isEmpty()) return
+
+        coroutineScope.launch {
+            pasteAdjustments(
+                projectIds = ids,
+                adjustmentsJson = json,
+                regenerateEnvironmentMasks = regenerateEnvironmentMasks,
+                environmentCategories = envCategories
+            )
+            if (openTarget != null) {
+                onOpenItem(openTarget, EditorPanelTab.Masks)
+            }
         }
     }
 
@@ -782,7 +995,7 @@ internal fun GalleryScreen(
                     )
                 }
         if (existing != null) {
-            onOpenItem(existing)
+            onOpenItem(existing, null)
             return
         }
         if (immichDownloadInFlight[asset.id] == true) return
@@ -1269,7 +1482,7 @@ internal fun GalleryScreen(
                                     onClick = {
                                         if (isBulkExporting) return@GalleryItemCard
                                         if (selectedIds.isEmpty()) {
-                                            onOpenItem(item)
+                                            onOpenItem(item, null)
                                         } else {
                                             selectedIds =
                                                 if (isSelected) selectedIds - item.projectId
@@ -1494,7 +1707,20 @@ internal fun GalleryScreen(
                                 enabled = !isBulkExporting && !isPastingAdjustments && copiedAdjustmentsJson != null,
                                 onClick = {
                                     val json = copiedAdjustmentsJson ?: return@IconButton
-                                    startPasteAdjustments(selectedIds.toList(), json)
+                                    val orderedIds = selectedItems.map { it.projectId }
+                                    if (orderedIds.isEmpty()) return@IconButton
+                                    val maskInfo = parseAiMaskCopyInfo(json)
+                                    pendingPasteIds = orderedIds
+                                    pendingPasteAdjustmentsJson = json
+                                    pendingPasteEnvironmentCategories = maskInfo.environmentCategories
+                                    pendingPasteHasSubjectMasks = maskInfo.hasAiSubject
+                                    pendingPasteOpenTarget = selectedItems.firstOrNull()
+                                    pendingRunEnvironmentMasks = false
+                                    when {
+                                        maskInfo.hasAiEnvironment -> showEnvironmentMaskDialog = true
+                                        maskInfo.hasAiSubject -> showSubjectMaskDialog = true
+                                        else -> launchPaste(regenerateEnvironmentMasks = false, openMasksAfterPaste = false)
+                                    }
                                 }
                             ) {
                                 Icon(Icons.Default.ContentPaste, contentDescription = "Paste adjustments")
@@ -1715,5 +1941,97 @@ internal fun GalleryScreen(
         )
     } else if (showSelectionInfo && selectionInfoTarget == null) {
         showSelectionInfo = false
+    }
+
+    if (showEnvironmentMaskDialog) {
+        val count = pendingPasteIds.size
+        val message =
+            if (count == 1) {
+                "These adjustments include environment masks. Regenerate them now?"
+            } else {
+                "These adjustments include environment masks. Regenerate them for $count images?"
+            }
+        AlertDialog(
+            onDismissRequest = {
+                showEnvironmentMaskDialog = false
+                pendingRunEnvironmentMasks = false
+                if (pendingPasteHasSubjectMasks) showSubjectMaskDialog = true
+                else launchPaste(regenerateEnvironmentMasks = false, openMasksAfterPaste = false)
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingRunEnvironmentMasks = true
+                        showEnvironmentMaskDialog = false
+                        if (pendingPasteHasSubjectMasks) showSubjectMaskDialog = true
+                        else launchPaste(regenerateEnvironmentMasks = true, openMasksAfterPaste = false)
+                    }
+                ) { Text("Run") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        pendingRunEnvironmentMasks = false
+                        showEnvironmentMaskDialog = false
+                        if (pendingPasteHasSubjectMasks) showSubjectMaskDialog = true
+                        else launchPaste(regenerateEnvironmentMasks = false, openMasksAfterPaste = false)
+                    }
+                ) { Text("Skip") }
+            },
+            title = { Text("Regenerate environment masks?") },
+            text = { Text(message) }
+        )
+    }
+
+    if (showSubjectMaskDialog) {
+        val count = pendingPasteIds.size
+        val message =
+            if (count <= 1) {
+                "These adjustments include a subject mask. Open the editor in the Masking tab to redo it?"
+            } else {
+                "These adjustments include subject masks. Open the editor in the Masking tab for the first selected image to redo them?"
+            }
+        AlertDialog(
+            onDismissRequest = {
+                showSubjectMaskDialog = false
+                launchPaste(regenerateEnvironmentMasks = pendingRunEnvironmentMasks, openMasksAfterPaste = false)
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showSubjectMaskDialog = false
+                        launchPaste(regenerateEnvironmentMasks = pendingRunEnvironmentMasks, openMasksAfterPaste = true)
+                    }
+                ) { Text("Open masks") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showSubjectMaskDialog = false
+                        launchPaste(regenerateEnvironmentMasks = pendingRunEnvironmentMasks, openMasksAfterPaste = false)
+                    }
+                ) { Text("Not now") }
+            },
+            title = { Text("Redo subject masks?") },
+            text = { Text(message) }
+        )
+    }
+
+    if (pasteProgressMessage != null) {
+        AlertDialog(
+            onDismissRequest = { },
+            confirmButton = { },
+            title = { Text(pasteProgressMessage ?: "") },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LoadingIndicator(
+                        modifier = Modifier.height(18.dp),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text("Please wait...")
+                }
+            }
+        )
     }
 }

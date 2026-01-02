@@ -159,6 +159,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.PI
+import kotlin.math.absoluteValue
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.roundToInt
@@ -173,6 +174,7 @@ internal fun EditorScreen(
     lowQualityPreviewEnabled: Boolean,
     environmentMaskingEnabled: Boolean,
     immichDescriptionSyncEnabled: Boolean,
+    initialPanelTab: EditorPanelTab = EditorPanelTab.Adjustments,
     maskRenameTags: List<String> = emptyList(),
     onBackClick: () -> Unit,
     onPredictiveBackProgress: (Float) -> Unit,
@@ -199,6 +201,7 @@ internal fun EditorScreen(
     var lastImmichSidecarSyncRequest by remember(galleryItem.projectId) { mutableStateOf<ImmichSidecarSyncRequest?>(null) }
     var isImmichSidecarSyncing by remember(galleryItem.projectId) { mutableStateOf(false) }
     val immichSyncIdleMs = 30_000L
+    val aiFeatherCache = remember(galleryItem.projectId) { LinkedHashMap<String, String>(8, 0.75f, true) }
 
     fun resolveImmichConfigOrNull(): ImmichConfig? {
         val server = appPreferences.getImmichServerUrl().trim()
@@ -322,6 +325,7 @@ internal fun EditorScreen(
     var currentRevisionId by remember(galleryItem.projectId) { mutableStateOf<String?>(null) }
     var sessionRevisionId by remember(galleryItem.projectId) { mutableStateOf<String?>(null) }
     var sessionParentRevisionId by remember(galleryItem.projectId) { mutableStateOf<String?>(null) }
+    var baseRevisionId by remember(galleryItem.projectId) { mutableStateOf<String?>(null) }
     val configuration = LocalConfiguration.current
     val isTablet = configuration.screenWidthDp >= 600
 
@@ -562,6 +566,7 @@ internal fun EditorScreen(
                                             com.dueckis.kawaiiraweditor.data.model.AiSubjectMaskParametersState(
                                                 maskDataBase64 = paramsObj.optString("maskDataBase64").takeIf { it.isNotBlank() },
                                                 softness = paramsObj.optDouble("softness", 0.25).toFloat().coerceIn(0f, 1f),
+                                                feather = paramsObj.optDouble("feather", 0.0).toFloat().coerceIn(-1f, 1f),
                                                 baseTransform = parseMaskTransform(paramsObj.optJSONObject("baseTransform")) ?: defaultTransform,
                                                 baseWidthPx = paramsObj.optInt("baseWidthPx", 0).takeIf { it > 0 },
                                                 baseHeightPx = paramsObj.optInt("baseHeightPx", 0).takeIf { it > 0 }
@@ -579,6 +584,7 @@ internal fun EditorScreen(
                                                 category = paramsObj.optString("category", "sky"),
                                                 maskDataBase64 = paramsObj.optString("maskDataBase64").takeIf { it.isNotBlank() },
                                                 softness = paramsObj.optDouble("softness", 0.25).toFloat().coerceIn(0f, 1f),
+                                                feather = paramsObj.optDouble("feather", 0.0).toFloat().coerceIn(-1f, 1f),
                                                 baseTransform = parseMaskTransform(paramsObj.optJSONObject("baseTransform")) ?: defaultTransform,
                                                 baseWidthPx = paramsObj.optInt("baseWidthPx", 0).takeIf { it > 0 },
                                                 baseHeightPx = paramsObj.optInt("baseHeightPx", 0).takeIf { it > 0 }
@@ -758,7 +764,7 @@ internal fun EditorScreen(
             }
     }
 
-    var panelTab by remember { mutableStateOf(EditorPanelTab.Adjustments) }
+    var panelTab by remember(galleryItem.projectId) { mutableStateOf(initialPanelTab) }
     val isCropMode = panelTab == EditorPanelTab.CropTransform
     val isCropPreviewActive = isCropMode && !isComparingOriginal
     var selectedMaskId by remember { mutableStateOf<String?>(null) }
@@ -887,6 +893,166 @@ internal fun EditorScreen(
             val b64 = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
             "data:image/png;base64,$b64"
         }.getOrNull()
+    }
+
+    fun maxFilterU8(src: IntArray, width: Int, height: Int, radius: Int): IntArray {
+        if (radius <= 0) return src
+        val tmp = IntArray(src.size)
+        val dst = IntArray(src.size)
+        val rowDeque = IntArray(width)
+        val colDeque = IntArray(height)
+
+        for (y in 0 until height) {
+            var head = 0
+            var tail = 0
+            val row = y * width
+            val last = width - 1
+            val prefill = minOf(radius, last)
+            for (x in 0..prefill) {
+                val v = src[row + x]
+                while (tail > head && src[row + rowDeque[tail - 1]] <= v) tail--
+                rowDeque[tail++] = x
+            }
+            for (x in 0 until width) {
+                val end = x + radius
+                if (end <= last && end > prefill) {
+                    val v = src[row + end]
+                    while (tail > head && src[row + rowDeque[tail - 1]] <= v) tail--
+                    rowDeque[tail++] = end
+                }
+                val start = x - radius
+                while (head < tail && rowDeque[head] < start) head++
+                tmp[row + x] = src[row + rowDeque[head]]
+            }
+        }
+
+        for (x in 0 until width) {
+            var head = 0
+            var tail = 0
+            val last = height - 1
+            val prefill = minOf(radius, last)
+            for (y in 0..prefill) {
+                val v = tmp[y * width + x]
+                while (tail > head && tmp[colDeque[tail - 1] * width + x] <= v) tail--
+                colDeque[tail++] = y
+            }
+            for (y in 0 until height) {
+                val end = y + radius
+                if (end <= last && end > prefill) {
+                    val v = tmp[end * width + x]
+                    while (tail > head && tmp[colDeque[tail - 1] * width + x] <= v) tail--
+                    colDeque[tail++] = end
+                }
+                val start = y - radius
+                while (head < tail && colDeque[head] < start) head++
+                dst[y * width + x] = tmp[colDeque[head] * width + x]
+            }
+        }
+
+        return dst
+    }
+
+    fun minFilterU8(src: IntArray, width: Int, height: Int, radius: Int): IntArray {
+        if (radius <= 0) return src
+        val tmp = IntArray(src.size)
+        val dst = IntArray(src.size)
+        val rowDeque = IntArray(width)
+        val colDeque = IntArray(height)
+
+        for (y in 0 until height) {
+            var head = 0
+            var tail = 0
+            val row = y * width
+            val last = width - 1
+            val prefill = minOf(radius, last)
+            for (x in 0..prefill) {
+                val v = src[row + x]
+                while (tail > head && src[row + rowDeque[tail - 1]] >= v) tail--
+                rowDeque[tail++] = x
+            }
+            for (x in 0 until width) {
+                val end = x + radius
+                if (end <= last && end > prefill) {
+                    val v = src[row + end]
+                    while (tail > head && src[row + rowDeque[tail - 1]] >= v) tail--
+                    rowDeque[tail++] = end
+                }
+                val start = x - radius
+                while (head < tail && rowDeque[head] < start) head++
+                tmp[row + x] = src[row + rowDeque[head]]
+            }
+        }
+
+        for (x in 0 until width) {
+            var head = 0
+            var tail = 0
+            val last = height - 1
+            val prefill = minOf(radius, last)
+            for (y in 0..prefill) {
+                val v = tmp[y * width + x]
+                while (tail > head && tmp[colDeque[tail - 1] * width + x] >= v) tail--
+                colDeque[tail++] = y
+            }
+            for (y in 0 until height) {
+                val end = y + radius
+                if (end <= last && end > prefill) {
+                    val v = tmp[end * width + x]
+                    while (tail > head && tmp[colDeque[tail - 1] * width + x] >= v) tail--
+                    colDeque[tail++] = end
+                }
+                val start = y - radius
+                while (head < tail && colDeque[head] < start) head++
+                dst[y * width + x] = tmp[colDeque[head] * width + x]
+            }
+        }
+
+        return dst
+    }
+
+    fun applyAiFeatherToDataUrl(dataUrl: String, feather: Float): String {
+        val normalized = feather.coerceIn(-1f, 1f)
+        if (normalized.absoluteValue < 0.001f) return dataUrl
+        val key = "${dataUrl.length}-${dataUrl.hashCode()}-${(normalized * 1000f).roundToInt()}"
+        synchronized(aiFeatherCache) {
+            aiFeatherCache[key]?.let { return it }
+        }
+        val decoded = decodeDataUrlBitmap(dataUrl) ?: return dataUrl
+        val width = decoded.width.coerceAtLeast(1)
+        val height = decoded.height.coerceAtLeast(1)
+        val pixels = IntArray(width * height)
+        decoded.getPixels(pixels, 0, width, 0, 0, width, height)
+        decoded.recycle()
+        val maskU8 = IntArray(width * height) { i -> (pixels[i] shr 16) and 0xFF }
+        val maxRadius = (minOf(width, height) * 0.04f).roundToInt().coerceIn(1, 60)
+        val radius = (normalized.absoluteValue * maxRadius).roundToInt()
+        val adjusted =
+            if (radius >= 1) {
+                if (normalized > 0f) maxFilterU8(maskU8, width, height, radius) else minFilterU8(maskU8, width, height, radius)
+            } else {
+                maskU8
+            }
+        val outPixels = IntArray(width * height) { idx ->
+            val v = adjusted[idx].coerceIn(0, 255)
+            (255 shl 24) or (v shl 16) or (v shl 8) or v
+        }
+        val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        out.setPixels(outPixels, 0, width, 0, 0, width, height)
+        val encoded = encodeBitmapToPngDataUrl(out)
+        out.recycle()
+        if (encoded != null) {
+            synchronized(aiFeatherCache) {
+                aiFeatherCache[key] = encoded
+                if (aiFeatherCache.size > 8) {
+                    val iterator = aiFeatherCache.entries.iterator()
+                    if (iterator.hasNext()) {
+                        iterator.next()
+                        iterator.remove()
+                    }
+                }
+            }
+            return encoded
+        }
+        return dataUrl
     }
 
     fun rotateBitmapInPlaceSameSize(src: Bitmap, angleDegrees: Float): Bitmap {
@@ -1118,7 +1284,26 @@ internal fun EditorScreen(
         currentAdjustments: AdjustmentState
     ): List<MaskState> {
         val filtered = masksForRender(source)
-        return remapAiMasksForTransform(filtered, currentTransform, currentAdjustments)
+        val remapped = remapAiMasksForTransform(filtered, currentTransform, currentAdjustments)
+        return remapped.map { mask ->
+            val updated =
+                mask.subMasks.map { sub ->
+                    when (sub.type) {
+                        SubMaskType.AiSubject.id -> {
+                            val dataUrl = sub.aiSubject.maskDataBase64 ?: return@map sub
+                            val feathered = applyAiFeatherToDataUrl(dataUrl, sub.aiSubject.feather)
+                            if (feathered == dataUrl) sub else sub.copy(aiSubject = sub.aiSubject.copy(maskDataBase64 = feathered))
+                        }
+                        SubMaskType.AiEnvironment.id -> {
+                            val dataUrl = sub.aiEnvironment.maskDataBase64 ?: return@map sub
+                            val feathered = applyAiFeatherToDataUrl(dataUrl, sub.aiEnvironment.feather)
+                            if (feathered == dataUrl) sub else sub.copy(aiEnvironment = sub.aiEnvironment.copy(maskDataBase64 = feathered))
+                        }
+                        else -> sub
+                    }
+                }
+            if (updated == mask.subMasks) mask else mask.copy(subMasks = updated)
+        }
     }
 
     var exportMasks by remember { mutableStateOf<List<MaskState>>(emptyList()) }
@@ -1381,6 +1566,48 @@ internal fun EditorScreen(
         }
     }
 
+    fun createManualVersion() {
+        coroutineScope.launch {
+            val json = buildCurrentEditsJson()
+            val updatedAtMs = System.currentTimeMillis()
+            val revisionId = UUID.randomUUID().toString()
+            val parentRevisionId = currentRevisionId ?: baseRevisionId
+            withContext(Dispatchers.IO) {
+                storage.saveAdjustments(
+                    projectId = galleryItem.projectId,
+                    adjustmentsJson = json,
+                    updatedAtMs = updatedAtMs
+                )
+                storage.appendEditHistory(
+                    projectId = galleryItem.projectId,
+                    entry = ProjectStorage.EditHistoryEntry(
+                        id = revisionId,
+                        source = ProjectStorage.EditHistorySource.Local,
+                        updatedAtMs = updatedAtMs,
+                        editsJson = json,
+                        parentId = parentRevisionId
+                    )
+                )
+            }
+            lastSavedEditsJson = json
+            currentRevisionId = revisionId
+            sessionRevisionId = revisionId
+            sessionParentRevisionId = parentRevisionId
+            if (immichDescriptionSyncEnabled && !galleryItem.immichAssetId.isNullOrBlank()) {
+                val req =
+                    ImmichSidecarSyncRequest(
+                        updatedAtMs = updatedAtMs,
+                        editsJson = json,
+                        parentRevisionId = parentRevisionId,
+                        revisionId = revisionId
+                    )
+                lastImmichSidecarSyncRequest = req
+                immichSidecarSyncRequests.trySend(req)
+            }
+            editTimelineEntries = withContext(Dispatchers.IO) { storage.loadEditHistory(galleryItem.projectId) }
+        }
+    }
+
     fun applyVersionEntry(entry: ProjectStorage.EditHistoryEntry) {
         coroutineScope.launch {
             val parsed = parseEditsJson(entry.editsJson)
@@ -1409,6 +1636,7 @@ internal fun EditorScreen(
             currentRevisionId = entry.id
             sessionRevisionId = null
             sessionParentRevisionId = null
+            baseRevisionId = null
             applyParsedEdits(parsed, resetHistory = true)
             withContext(Dispatchers.IO) {
                 storage.saveAdjustments(
@@ -1435,7 +1663,8 @@ internal fun EditorScreen(
         val entry: ProjectStorage.EditHistoryEntry,
         val depth: Int,
         val guides: List<Boolean>,
-        val isLast: Boolean
+        val isLast: Boolean,
+        val hasChildren: Boolean
     )
 
     fun buildVersionTreeItems(entries: List<ProjectStorage.EditHistoryEntry>): List<VersionTreeItem> {
@@ -1456,12 +1685,18 @@ internal fun EditorScreen(
             guides: List<Boolean>,
             isLast: Boolean
         ) {
-            items.add(VersionTreeItem(entry = node, depth = depth, guides = guides, isLast = isLast))
             val children = childrenByParent[node.id].orEmpty()
-            children.forEachIndexed { index, child ->
-                val childIsLast = index == children.lastIndex
+            val hasChildren = children.isNotEmpty()
+            items.add(VersionTreeItem(entry = node, depth = depth, guides = guides, isLast = isLast, hasChildren = hasChildren))
+            if (children.isEmpty()) return
+            val primaryChild = children.first()
+            val branchChildren = if (children.size > 1) children.drop(1) else emptyList()
+            val primaryIsLast = branchChildren.isEmpty()
+            walk(primaryChild, depth, guides, primaryIsLast)
+            branchChildren.forEachIndexed { index, child ->
+                val branchIsLast = index == branchChildren.lastIndex
                 val nextGuides = guides + !isLast
-                walk(child, depth + 1, nextGuides, childIsLast)
+                walk(child, depth + 1, nextGuides, branchIsLast)
             }
         }
 
@@ -1571,6 +1806,7 @@ internal fun EditorScreen(
         sessionRevisionId = null
         sessionParentRevisionId = null
         lastImmichSidecarSyncRequest = null
+        baseRevisionId = null
         adjustments = AdjustmentState()
         masks = emptyList()
         selectedMaskId = null
@@ -1622,7 +1858,32 @@ internal fun EditorScreen(
         val savedAdjustmentsJson = withContext(Dispatchers.IO) { storage.loadAdjustments(galleryItem.projectId) }
         lastSavedEditsJson = savedAdjustmentsJson
         val historyEntries = withContext(Dispatchers.IO) { storage.loadEditHistory(galleryItem.projectId) }
-        val matchingHistoryEntry = historyEntries.lastOrNull { it.editsJson == savedAdjustmentsJson }
+        var matchingHistoryEntry = historyEntries.lastOrNull { it.editsJson == savedAdjustmentsJson }
+        val hadHistory = historyEntries.isNotEmpty()
+        var createdBaseRevision = false
+        if (!hadHistory && savedAdjustmentsJson.isNotBlank() && savedAdjustmentsJson != "{}") {
+            val localUpdatedAtMs = withContext(Dispatchers.IO) { storage.getEditsUpdatedAtMs(galleryItem.projectId) }
+            if (localUpdatedAtMs > 0L) {
+                val baseId = IridisSidecarDescription.buildRevisionId(localUpdatedAtMs, savedAdjustmentsJson)
+                val baseEntry =
+                    ProjectStorage.EditHistoryEntry(
+                        id = baseId,
+                        source = ProjectStorage.EditHistorySource.Local,
+                        updatedAtMs = localUpdatedAtMs,
+                        editsJson = savedAdjustmentsJson,
+                        parentId = null
+                    )
+                withContext(Dispatchers.IO) {
+                    storage.appendEditHistory(
+                        projectId = galleryItem.projectId,
+                        entry = baseEntry
+                    )
+                }
+                matchingHistoryEntry = baseEntry
+                baseRevisionId = baseId
+                createdBaseRevision = true
+            }
+        }
         var appliedFromRemote = false
 
         if (immichDescriptionSyncEnabled) {
@@ -1700,7 +1961,7 @@ internal fun EditorScreen(
                             currentRevisionId = latestRemote.revisionId
                         }
                     }
-                    if (!appliedFromRemote && localRevisionId != null) {
+                    if (!appliedFromRemote && localRevisionId != null && !createdBaseRevision) {
                         currentRevisionId = localRevisionId
                     }
                 }.onFailure { error ->
@@ -1720,7 +1981,7 @@ internal fun EditorScreen(
                 editHistoryIndex = 0
                 isRestoringEditHistory = false
             }
-            if (currentRevisionId == null && savedAdjustmentsJson.isNotBlank() && savedAdjustmentsJson != "{}") {
+            if (currentRevisionId == null && !createdBaseRevision && savedAdjustmentsJson.isNotBlank() && savedAdjustmentsJson != "{}") {
                 currentRevisionId =
                     matchingHistoryEntry?.id
                         ?: run {
@@ -1847,7 +2108,7 @@ internal fun EditorScreen(
         if (revisionId == null) {
             revisionId = UUID.randomUUID().toString()
             sessionRevisionId = revisionId
-            sessionParentRevisionId = currentRevisionId
+            sessionParentRevisionId = currentRevisionId ?: baseRevisionId
         }
         val parentRevisionId = sessionParentRevisionId
         withContext(Dispatchers.IO) {
@@ -2784,6 +3045,7 @@ internal fun EditorScreen(
         AlertDialog(
             onDismissRequest = { showEditTimelineDialog = false },
             confirmButton = { TextButton(onClick = { showEditTimelineDialog = false }) { Text("Close") } },
+            dismissButton = { TextButton(onClick = { createManualVersion() }) { Text("New version") } },
             title = { Text("Version tree") },
             text = {
                 if (treeItems.isEmpty()) {
@@ -2844,7 +3106,7 @@ internal fun EditorScreen(
                                     androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
                                         val centerX = size.width / 2f
                                         val centerY = size.height / 2f
-                                        val endY = if (node.isLast) centerY else size.height
+                                        val endY = if (node.isLast && !node.hasChildren) centerY else size.height
                                         drawLine(
                                             color = lineColor,
                                             start = androidx.compose.ui.geometry.Offset(centerX, 0f),
