@@ -191,7 +191,8 @@ internal fun EditorScreen(
     data class ImmichSidecarSyncRequest(
         val updatedAtMs: Long,
         val editsJson: String,
-        val parentRevisionId: String?
+        val parentRevisionId: String?,
+        val revisionId: String
     )
     val immichSidecarSyncRequests =
         remember(galleryItem.projectId) { Channel<ImmichSidecarSyncRequest>(capacity = Channel.CONFLATED) }
@@ -235,7 +236,9 @@ internal fun EditorScreen(
             withContext(Dispatchers.IO) { storage.getImmichSidecarUpdatedAtMs(galleryItem.projectId) }
         if (!force && request.updatedAtMs <= alreadySyncedAtMs) return true
 
-        val revisionId = IridisSidecarDescription.buildRevisionId(request.updatedAtMs, request.editsJson)
+        val revisionId = request.revisionId.ifBlank {
+            IridisSidecarDescription.buildRevisionId(request.updatedAtMs, request.editsJson)
+        }
         withContext(Dispatchers.IO) {
             storage.appendEditHistory(
                 projectId = galleryItem.projectId,
@@ -282,7 +285,8 @@ internal fun EditorScreen(
                 info?.description,
                 request.editsJson,
                 request.updatedAtMs,
-                parentRevisionId = request.parentRevisionId
+                parentRevisionId = request.parentRevisionId,
+                revisionId = revisionId
             )
         val result = updateImmichAssetDescription(config, originImmichAssetId, newDescription)
         isImmichSidecarSyncing = false
@@ -316,6 +320,8 @@ internal fun EditorScreen(
     }
     var lastSavedEditsJson by remember(galleryItem.projectId) { mutableStateOf<String?>(null) }
     var currentRevisionId by remember(galleryItem.projectId) { mutableStateOf<String?>(null) }
+    var sessionRevisionId by remember(galleryItem.projectId) { mutableStateOf<String?>(null) }
+    var sessionParentRevisionId by remember(galleryItem.projectId) { mutableStateOf<String?>(null) }
     val configuration = LocalConfiguration.current
     val isTablet = configuration.screenWidthDp >= 600
 
@@ -1401,6 +1407,8 @@ internal fun EditorScreen(
             }
             lastSavedEditsJson = entry.editsJson
             currentRevisionId = entry.id
+            sessionRevisionId = null
+            sessionParentRevisionId = null
             applyParsedEdits(parsed, resetHistory = true)
             withContext(Dispatchers.IO) {
                 storage.saveAdjustments(
@@ -1560,6 +1568,9 @@ internal fun EditorScreen(
 
     LaunchedEffect(galleryItem.projectId) {
         isRestoringEditHistory = true
+        sessionRevisionId = null
+        sessionParentRevisionId = null
+        lastImmichSidecarSyncRequest = null
         adjustments = AdjustmentState()
         masks = emptyList()
         selectedMaskId = null
@@ -1610,6 +1621,8 @@ internal fun EditorScreen(
 
         val savedAdjustmentsJson = withContext(Dispatchers.IO) { storage.loadAdjustments(galleryItem.projectId) }
         lastSavedEditsJson = savedAdjustmentsJson
+        val historyEntries = withContext(Dispatchers.IO) { storage.loadEditHistory(galleryItem.projectId) }
+        val matchingHistoryEntry = historyEntries.lastOrNull { it.editsJson == savedAdjustmentsJson }
         var appliedFromRemote = false
 
         if (immichDescriptionSyncEnabled) {
@@ -1643,25 +1656,27 @@ internal fun EditorScreen(
                             withContext(Dispatchers.IO) { storage.getEditsUpdatedAtMs(galleryItem.projectId) }
                         }
                     val localRevisionId =
-                        if (localUpdatedAtMs > 0L && savedAdjustmentsJson.isNotBlank() && savedAdjustmentsJson != "{}") {
-                            IridisSidecarDescription.buildRevisionId(localUpdatedAtMs, savedAdjustmentsJson)
-                        } else {
-                            null
-                        }
+                        matchingHistoryEntry?.id
+                            ?: if (localUpdatedAtMs > 0L && savedAdjustmentsJson.isNotBlank() && savedAdjustmentsJson != "{}") {
+                                IridisSidecarDescription.buildRevisionId(localUpdatedAtMs, savedAdjustmentsJson)
+                            } else {
+                                null
+                            }
                     if (latestRemote != null && latestRemote.updatedAtMs > localUpdatedAtMs && latestRemote.editsJson.isNotBlank()) {
                         if (savedAdjustmentsJson.isNotBlank() && savedAdjustmentsJson != "{}") {
-                            val backupId = IridisSidecarDescription.buildRevisionId(localUpdatedAtMs, savedAdjustmentsJson)
-                            withContext(Dispatchers.IO) {
-                                storage.appendEditHistory(
-                                    projectId = galleryItem.projectId,
-                                    entry = ProjectStorage.EditHistoryEntry(
-                                        id = backupId,
-                                        source = ProjectStorage.EditHistorySource.Local,
-                                        updatedAtMs = localUpdatedAtMs,
-                                        editsJson = savedAdjustmentsJson,
-                                        parentId = localRevisionId
+                            if (matchingHistoryEntry == null && localRevisionId != null) {
+                                withContext(Dispatchers.IO) {
+                                    storage.appendEditHistory(
+                                        projectId = galleryItem.projectId,
+                                        entry = ProjectStorage.EditHistoryEntry(
+                                            id = localRevisionId,
+                                            source = ProjectStorage.EditHistorySource.Local,
+                                            updatedAtMs = localUpdatedAtMs,
+                                            editsJson = savedAdjustmentsJson,
+                                            parentId = null
+                                        )
                                     )
-                                )
+                                }
                             }
                         }
 
@@ -1706,8 +1721,12 @@ internal fun EditorScreen(
                 isRestoringEditHistory = false
             }
             if (currentRevisionId == null && savedAdjustmentsJson.isNotBlank() && savedAdjustmentsJson != "{}") {
-                val localUpdatedAtMs = withContext(Dispatchers.IO) { storage.getEditsUpdatedAtMs(galleryItem.projectId) }
-                currentRevisionId = IridisSidecarDescription.buildRevisionId(localUpdatedAtMs, savedAdjustmentsJson)
+                currentRevisionId =
+                    matchingHistoryEntry?.id
+                        ?: run {
+                            val localUpdatedAtMs = withContext(Dispatchers.IO) { storage.getEditsUpdatedAtMs(galleryItem.projectId) }
+                            IridisSidecarDescription.buildRevisionId(localUpdatedAtMs, savedAdjustmentsJson)
+                        }
             }
         }
         if (lastSavedEditsJson == "{}") {
@@ -1824,8 +1843,13 @@ internal fun EditorScreen(
         delay(350)
         if (json == lastSavedEditsJson) return@LaunchedEffect
         val updatedAtMs = System.currentTimeMillis()
-        val parentRevisionId = currentRevisionId
-        val revisionId = IridisSidecarDescription.buildRevisionId(updatedAtMs, json)
+        var revisionId = sessionRevisionId
+        if (revisionId == null) {
+            revisionId = UUID.randomUUID().toString()
+            sessionRevisionId = revisionId
+            sessionParentRevisionId = currentRevisionId
+        }
+        val parentRevisionId = sessionParentRevisionId
         withContext(Dispatchers.IO) {
             storage.saveAdjustments(galleryItem.projectId, json, updatedAtMs = updatedAtMs)
             storage.appendEditHistory(
@@ -1846,7 +1870,8 @@ internal fun EditorScreen(
                 ImmichSidecarSyncRequest(
                     updatedAtMs = updatedAtMs,
                     editsJson = json,
-                    parentRevisionId = parentRevisionId
+                    parentRevisionId = parentRevisionId,
+                    revisionId = revisionId
                 )
             lastImmichSidecarSyncRequest = req
             immichSidecarSyncRequests.trySend(req)
@@ -2405,15 +2430,13 @@ internal fun EditorScreen(
                                 }
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (immichDescriptionSyncEnabled) {
-                                    IconButton(
-                                        onClick = { openEditTimeline() },
-                                        colors = IconButtonDefaults.filledIconButtonColors(
-                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
-                                        )
-                                    ) {
-                                        Icon(Icons.Filled.History, contentDescription = "Edit timeline", tint = MaterialTheme.colorScheme.onSurface)
-                                    }
+                                IconButton(
+                                    onClick = { openEditTimeline() },
+                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+                                    )
+                                ) {
+                                    Icon(Icons.Filled.History, contentDescription = "Edit timeline", tint = MaterialTheme.colorScheme.onSurface)
                                 }
                                 IconButton(
                                     enabled = sessionHandle != 0L,
@@ -2764,7 +2787,7 @@ internal fun EditorScreen(
             title = { Text("Version tree") },
             text = {
                 if (treeItems.isEmpty()) {
-                    Text("No synced edits yet.")
+                    Text("No edits yet.")
                 } else {
                     Column(
                         modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),

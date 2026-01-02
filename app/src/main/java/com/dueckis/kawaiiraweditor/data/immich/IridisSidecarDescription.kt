@@ -24,8 +24,14 @@ internal object IridisSidecarDescription {
         val originalDescription: String
     )
 
-    internal fun upsert(description: String?, editsJson: String, updatedAtMs: Long): String {
-        return appendHistory(description, editsJson, updatedAtMs, maxEntries = defaultMaxEntries)
+    internal fun upsert(description: String?, editsJson: String, updatedAtMs: Long, revisionId: String? = null): String {
+        return appendHistory(
+            description = description,
+            editsJson = editsJson,
+            updatedAtMs = updatedAtMs,
+            revisionId = revisionId,
+            maxEntries = defaultMaxEntries
+        )
     }
 
     internal fun parse(description: String?): IridisSidecarDescriptionParsed? {
@@ -52,19 +58,20 @@ internal object IridisSidecarDescription {
         editsJson: String,
         updatedAtMs: Long,
         parentRevisionId: String? = null,
+        revisionId: String? = null,
         maxEntries: Int = defaultMaxEntries
     ): String {
         val base = description.orEmpty()
         val current = parseHistory(base)?.entries.orEmpty()
-        val revisionId = buildRevisionId(updatedAtMs, editsJson)
+        val resolvedRevisionId = revisionId ?: buildRevisionId(updatedAtMs, editsJson)
         val entry =
             IridisSidecarHistoryEntry(
                 editsJson = editsJson,
                 updatedAtMs = updatedAtMs.coerceAtLeast(0L),
-                revisionId = revisionId,
+                revisionId = resolvedRevisionId,
                 parentRevisionId = parentRevisionId
             )
-        val filtered = current.filterNot { it.revisionId == revisionId }
+        val filtered = current.filterNot { it.revisionId == resolvedRevisionId }
         val merged = (filtered + entry).takeLast(maxEntries.coerceAtLeast(1))
         val stripped = remove(base).trimEnd()
         val blocks = merged.joinToString(separator = "\n\n") { buildBlock(it) }
