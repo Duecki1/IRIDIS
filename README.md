@@ -67,6 +67,7 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - add support for immich
 - add ios support (maybe)
 - app should only open once
+- delete all kawaiirawapp references, make immich sync work smoothly, more feedback on downloading ml models, immich sync should save every devices last edit so it never gets lost accidentally
   
 ## Info
 Downloading the app will automatically install a Subject selection ML Model.
