@@ -65,6 +65,7 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Save calculated AI Masks
 - Tablet UI design
 - app should only open once
+- folder management
   
 ## Info
 Downloading the app will automatically install a Subject selection ML Model.
