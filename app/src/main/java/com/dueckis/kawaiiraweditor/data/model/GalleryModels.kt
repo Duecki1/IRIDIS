@@ -8,7 +8,9 @@ internal data class GalleryItem(
     val thumbnail: Bitmap? = null,
     val rating: Int = 0,
     val tags: List<String> = emptyList(),
-    val rawMetadata: Map<String, String> = emptyMap()
+    val rawMetadata: Map<String, String> = emptyMap(),
+    val createdAt: Long = 0L,
+    val modifiedAt: Long = 0L
 )
 
 internal enum class Screen {
@@ -16,4 +18,3 @@ internal enum class Screen {
     Settings,
     Editor
 }
-

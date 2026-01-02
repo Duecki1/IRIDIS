@@ -10,7 +10,9 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -41,6 +43,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.core.content.ContextCompat
 import com.dueckis.kawaiiraweditor.data.decoding.decodePreviewBytesForTagging
+import com.dueckis.kawaiiraweditor.data.immich.IMMICH_OAUTH_APP_REDIRECT_URI
+import com.dueckis.kawaiiraweditor.data.immich.ImmichAuthMode
+import com.dueckis.kawaiiraweditor.data.immich.ImmichLoginResult
+import com.dueckis.kawaiiraweditor.data.immich.buildImmichMobileRedirectUri
+import com.dueckis.kawaiiraweditor.data.immich.completeImmichOAuth
+import com.dueckis.kawaiiraweditor.data.immich.loginImmich
+import com.dueckis.kawaiiraweditor.data.immich.startImmichOAuth
 import com.dueckis.kawaiiraweditor.data.model.GalleryItem
 import com.dueckis.kawaiiraweditor.data.model.Screen
 import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
@@ -64,7 +73,9 @@ import java.util.concurrent.Executors
 @Composable
 fun KawaiiApp(
     pendingProjectToOpen: String? = null,
-    onProjectOpened: () -> Unit = {}
+    pendingImmichOAuthRedirect: String? = null,
+    onProjectOpened: () -> Unit = {},
+    onImmichOAuthHandled: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val storage = remember { ProjectStorage(context) }
@@ -86,6 +97,12 @@ fun KawaiiApp(
     var automaticTaggingEnabled by remember { mutableStateOf(appPreferences.isAutomaticTaggingEnabled()) }
     var environmentMaskingEnabled by remember { mutableStateOf(appPreferences.isEnvironmentMaskingEnabled()) }
     var openEditorOnImportEnabled by remember { mutableStateOf(appPreferences.isOpenEditorOnImportEnabled()) }
+    var immichServerUrl by remember { mutableStateOf(appPreferences.getImmichServerUrl()) }
+    var immichAuthMode by remember { mutableStateOf(appPreferences.getImmichAuthMode()) }
+    var immichLoginEmail by remember { mutableStateOf(appPreferences.getImmichLoginEmail()) }
+    var immichAccessToken by remember { mutableStateOf(appPreferences.getImmichAccessToken()) }
+    var immichApiKey by remember { mutableStateOf(appPreferences.getImmichApiKey()) }
+    var immichOAuthDebug by remember { mutableStateOf(appPreferences.getImmichOAuthDebug()) }
 
     appPreferences.ensureDefaultMaskRenameTagsSeeded()
     var maskRenameTags by remember { mutableStateOf(appPreferences.getMaskRenameTags()) }
@@ -144,6 +161,73 @@ fun KawaiiApp(
     }
 
     fun isMetadataInFlight(projectId: String): Boolean = metadataBackfillInFlight[projectId] == true
+
+    fun setImmichOAuthDebug(value: String) {
+        immichOAuthDebug = value
+        appPreferences.setImmichOAuthDebug(value)
+    }
+
+    data class ImmichOAuthParams(
+        val code: String?,
+        val state: String?,
+        val error: String?,
+        val errorDescription: String?
+    )
+
+    fun parseImmichOAuthParams(redirectUrl: String): ImmichOAuthParams {
+        val trimmed = redirectUrl.trim()
+        if (trimmed.isBlank()) return ImmichOAuthParams(null, null, null, null)
+        val parsed = runCatching { Uri.parse(trimmed) }.getOrNull()
+            ?: return ImmichOAuthParams(null, null, null, null)
+        val fragmentParams =
+            parsed.fragment?.takeIf { it.isNotBlank() }?.let { fragment ->
+                runCatching { Uri.parse("kawaiiraweditor://oauth/?$fragment") }.getOrNull()
+            }
+        fun pickParam(name: String): String? {
+            return parsed.getQueryParameter(name)?.takeIf { it.isNotBlank() }
+                ?: fragmentParams?.getQueryParameter(name)?.takeIf { it.isNotBlank() }
+        }
+        return ImmichOAuthParams(
+            code = pickParam("code"),
+            state = pickParam("state"),
+            error = pickParam("error"),
+            errorDescription = pickParam("error_description")
+        )
+    }
+
+    fun buildImmichCallbackUrl(serverUrl: String, redirectUrl: String): String {
+        val trimmed = redirectUrl.trim()
+        if (trimmed.isBlank()) return trimmed
+        val parsed = runCatching { Uri.parse(trimmed) }.getOrNull() ?: return trimmed
+        val scheme = parsed.scheme?.lowercase()
+        if (scheme == "http" || scheme == "https") return trimmed
+        val mobileRedirect = buildImmichMobileRedirectUri(serverUrl).ifBlank { return trimmed }
+        val baseUri = Uri.parse(mobileRedirect)
+        val builder =
+            Uri.Builder()
+                .scheme(baseUri.scheme)
+                .authority(baseUri.authority)
+                .path(baseUri.path)
+        val existingNames = mutableSetOf<String>()
+        parsed.queryParameterNames.forEach { name ->
+            existingNames.add(name)
+            parsed.getQueryParameters(name).forEach { value ->
+                builder.appendQueryParameter(name, value)
+            }
+        }
+        val fragment = parsed.fragment.orEmpty()
+        if (fragment.isNotBlank()) {
+            val fragmentParams = runCatching { Uri.parse("kawaiiraweditor://oauth/?$fragment") }.getOrNull()
+            fragmentParams?.queryParameterNames?.forEach { name ->
+                if (existingNames.add(name)) {
+                    fragmentParams.getQueryParameters(name).forEach { value ->
+                        builder.appendQueryParameter(name, value)
+                    }
+                }
+            }
+        }
+        return builder.build().toString()
+    }
 
     suspend fun computeAndPersistRawMetadata(projectId: String, rawBytes: ByteArray) {
         val json = withContext(metadataDispatcher) {
@@ -230,6 +314,74 @@ fun KawaiiApp(
         }
     }
 
+    LaunchedEffect(pendingImmichOAuthRedirect) {
+        val redirectUrl = pendingImmichOAuthRedirect?.trim().orEmpty()
+        if (redirectUrl.isBlank()) return@LaunchedEffect
+
+        val server = immichServerUrl.trim()
+        val state = appPreferences.getImmichOAuthState()
+        val verifier = appPreferences.getImmichOAuthVerifier()
+        val params = parseImmichOAuthParams(redirectUrl)
+        var callbackUrl = ""
+        var result: ImmichLoginResult? = null
+        var errorMessage: String? = null
+
+        if (server.isBlank()) {
+            errorMessage = "Immich server URL is missing."
+        } else if (state.isBlank() || verifier.isBlank()) {
+            errorMessage = "Immich login expired. Try again."
+        } else {
+            val callbackState = params.state
+            val callbackError = params.errorDescription ?: params.error
+            val callbackCode = params.code
+            if (!callbackError.isNullOrBlank()) {
+                errorMessage = "Immich login failed: $callbackError"
+            } else if (callbackCode.isNullOrBlank()) {
+                errorMessage = "Immich login failed: missing authorization code."
+            } else if (callbackState != null && callbackState != state) {
+                errorMessage = "Immich login failed: state mismatch."
+            } else {
+                callbackUrl = buildImmichCallbackUrl(server, redirectUrl)
+                result = completeImmichOAuth(server, callbackUrl, state, verifier)
+                val token = result?.accessToken
+                if (!token.isNullOrBlank()) {
+                    immichAccessToken = token
+                    appPreferences.setImmichAccessToken(token)
+                    val email = result?.userEmail
+                    if (!email.isNullOrBlank()) {
+                        immichLoginEmail = email
+                        appPreferences.setImmichLoginEmail(email)
+                    }
+                    Toast.makeText(context, "Logged in to Immich.", Toast.LENGTH_SHORT).show()
+                } else {
+                    errorMessage = result?.errorMessage ?: "Immich login failed."
+                }
+            }
+        }
+
+        appPreferences.clearImmichOAuthPending()
+        onImmichOAuthHandled()
+        setImmichOAuthDebug(
+            buildString {
+                append("OAuth redirect\n")
+                append("server=").append(server).append('\n')
+                append("redirect=").append(redirectUrl).append('\n')
+                if (callbackUrl.isNotBlank()) {
+                    append("callback=").append(callbackUrl).append('\n')
+                }
+                append("code=").append(if (params.code.isNullOrBlank()) "missing" else "present").append('\n')
+                append("state=").append(params.state.orEmpty()).append('\n')
+                append("error=").append((params.errorDescription ?: params.error).orEmpty()).append('\n')
+                append("resultStatus=").append(result?.statusCode?.toString().orEmpty()).append('\n')
+                append("resultError=").append(result?.errorMessage.orEmpty()).append('\n')
+                append("token=").append(if (result?.accessToken.isNullOrBlank()) "missing" else "present")
+            }
+        )
+        if (errorMessage != null) {
+            Toast.makeText(context, errorMessage, Toast.LENGTH_LONG).show()
+        }
+    }
+
     LaunchedEffect(refreshTrigger) {
         val projects = withContext(Dispatchers.IO) { storage.getAllProjects() }
         galleryItems = withContext(Dispatchers.IO) {
@@ -244,7 +396,9 @@ fun KawaiiApp(
                     thumbnail = thumbnail,
                     rating = metadata.rating,
                     tags = metadata.tags ?: emptyList(),
-                    rawMetadata = metadata.rawMetadata ?: emptyMap()
+                    rawMetadata = metadata.rawMetadata ?: emptyMap(),
+                    createdAt = metadata.createdAt,
+                    modifiedAt = metadata.modifiedAt
                 )
             }
         }
@@ -309,6 +463,10 @@ fun KawaiiApp(
                     lowQualityPreviewEnabled = lowQualityPreviewEnabled,
                     automaticTaggingEnabled = automaticTaggingEnabled,
                     openEditorOnImportEnabled = openEditorOnImportEnabled,
+                    immichServerUrl = immichServerUrl,
+                    immichAuthMode = immichAuthMode,
+                    immichAccessToken = immichAccessToken,
+                    immichApiKey = immichApiKey,
                     isTaggingInFlight = ::isTaggingInFlight,
                     onTaggingInFlightChange = ::setTaggingInFlight,
                     tagProgressFor = ::tagProgressFor,
@@ -442,6 +600,61 @@ fun KawaiiApp(
                         onOpenEditorOnImportEnabledChange = { enabled ->
                             openEditorOnImportEnabled = enabled
                             appPreferences.setOpenEditorOnImportEnabled(enabled)
+                        },
+                        immichServerUrl = immichServerUrl,
+                        immichAuthMode = immichAuthMode,
+                        immichLoginEmail = immichLoginEmail,
+                        immichAccessToken = immichAccessToken,
+                        immichApiKey = immichApiKey,
+                        immichOAuthDebug = immichOAuthDebug,
+                        onImmichServerUrlChange = { url ->
+                            immichServerUrl = url
+                            appPreferences.setImmichServerUrl(url)
+                        },
+                        onImmichAuthModeChange = { mode ->
+                            immichAuthMode = mode
+                            appPreferences.setImmichAuthMode(mode)
+                        },
+                        onImmichLoginEmailChange = { email ->
+                            immichLoginEmail = email
+                            appPreferences.setImmichLoginEmail(email)
+                        },
+                        onImmichAccessTokenChange = { token ->
+                            immichAccessToken = token
+                            appPreferences.setImmichAccessToken(token)
+                        },
+                        onImmichLogin = { serverUrl, email, password ->
+                            loginImmich(serverUrl, email, password)
+                        },
+                        onImmichOAuthStart = { serverUrl ->
+                            appPreferences.clearImmichOAuthPending()
+                            val redirectUri =
+                                buildImmichMobileRedirectUri(serverUrl).ifBlank { IMMICH_OAUTH_APP_REDIRECT_URI }
+                            val result = startImmichOAuth(serverUrl, redirectUri)
+                            val state = result?.state
+                            val verifier = result?.codeVerifier
+                            setImmichOAuthDebug(
+                                buildString {
+                                    append("OAuth start\n")
+                                    append("server=").append(serverUrl.trim()).append('\n')
+                                    append("redirect=").append(redirectUri).append('\n')
+                                    append("status=").append(result?.statusCode?.toString().orEmpty()).append('\n')
+                                    append("error=").append(result?.errorMessage.orEmpty()).append('\n')
+                                    append("authUrl=").append(result?.authorizationUrl.orEmpty())
+                                }
+                            )
+                            if (!result?.authorizationUrl.isNullOrBlank() && !state.isNullOrBlank() && !verifier.isNullOrBlank()) {
+                                appPreferences.setImmichOAuthPending(state, verifier)
+                            }
+                            result
+                        },
+                        onImmichApiKeyChange = { key ->
+                            immichApiKey = key
+                            appPreferences.setImmichApiKey(key)
+                        },
+                        onImmichOAuthDebugClear = {
+                            immichOAuthDebug = ""
+                            appPreferences.clearImmichOAuthDebug()
                         },
                         onBackClick = { currentScreen = Screen.Gallery }
                     )

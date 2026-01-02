@@ -28,16 +28,51 @@ import androidx.compose.ui.platform.LocalContext
 import com.dueckis.kawaiiraweditor.domain.update.StartupUpdateInfo
 import com.dueckis.kawaiiraweditor.domain.update.fetchStartupUpdateInfo
 import com.dueckis.kawaiiraweditor.domain.update.getInstalledVersionName
+import com.dueckis.kawaiiraweditor.data.immich.IMMICH_OAUTH_APP_REDIRECT_URI
 import com.dueckis.kawaiiraweditor.ui.startup.StartupSplash
 import com.dueckis.kawaiiraweditor.ui.theme.KawaiiRawEditorTheme
 
 class MainActivity : ComponentActivity() {
 
     private val pendingProjectToOpenState = mutableStateOf<String?>(null)
+    private val pendingImmichOAuthRedirectState = mutableStateOf<String?>(null)
+
+    private fun extractImmichOAuthRedirect(intent: Intent?): String? {
+        val data = intent?.data ?: return null
+        val scheme = data.scheme?.lowercase() ?: return null
+        if (scheme == "http" || scheme == "https" || scheme == "content" || scheme == "file") return null
+
+        val expectedScheme = Uri.parse(IMMICH_OAUTH_APP_REDIRECT_URI).scheme?.lowercase()
+        if (expectedScheme != null && scheme == expectedScheme) {
+            return data.toString()
+        }
+
+        val hasState = !data.getQueryParameter("state").isNullOrBlank()
+        val hasCode = !data.getQueryParameter("code").isNullOrBlank()
+        val hasError = !data.getQueryParameter("error").isNullOrBlank() ||
+            !data.getQueryParameter("error_description").isNullOrBlank()
+        val fragment = data.fragment.orEmpty()
+        val fragmentParams =
+            if (fragment.isNotBlank()) {
+                runCatching { Uri.parse("kawaiiraweditor://oauth/?$fragment") }.getOrNull()
+            } else {
+                null
+            }
+        val hasFragmentState = !fragmentParams?.getQueryParameter("state").isNullOrBlank()
+        val hasFragmentCode = !fragmentParams?.getQueryParameter("code").isNullOrBlank()
+        val hasFragmentError = !fragmentParams?.getQueryParameter("error").isNullOrBlank() ||
+            !fragmentParams?.getQueryParameter("error_description").isNullOrBlank()
+        if (!hasState && !hasCode && !hasError && !hasFragmentState && !hasFragmentCode && !hasFragmentError) {
+            return null
+        }
+
+        return data.toString()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Extract project_id from launch intent if present
         intent?.getStringExtra("project_id")?.let { pendingProjectToOpenState.value = it }
+        extractImmichOAuthRedirect(intent)?.let { pendingImmichOAuthRedirectState.value = it }
 
         setTheme(R.style.Theme_KawaiiRawEditor)
         super.onCreate(savedInstanceState)
@@ -50,6 +85,7 @@ class MainActivity : ComponentActivity() {
                 var didCheckForUpdates by remember { mutableStateOf(false) }
                 val currentVersionName = remember(context) { getInstalledVersionName(context) }
                 val pendingProjectToOpen by pendingProjectToOpenState
+                val pendingImmichOAuthRedirect by pendingImmichOAuthRedirectState
 
                 LaunchedEffect(showStartupSplash) {
                     if (showStartupSplash) return@LaunchedEffect
@@ -66,7 +102,9 @@ class MainActivity : ComponentActivity() {
                     Box(modifier = Modifier.fillMaxSize()) {
                         KawaiiApp(
                             pendingProjectToOpen = pendingProjectToOpen,
-                            onProjectOpened = { pendingProjectToOpenState.value = null }
+                            pendingImmichOAuthRedirect = pendingImmichOAuthRedirect,
+                            onProjectOpened = { pendingProjectToOpenState.value = null },
+                            onImmichOAuthHandled = { pendingImmichOAuthRedirectState.value = null }
                         )
                         if (showStartupSplash) {
                             StartupSplash(onFinished = { showStartupSplash = false })
@@ -105,5 +143,6 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         // If the activity is already running and receives a widget click, update the state
         intent?.getStringExtra("project_id")?.let { pendingProjectToOpenState.value = it }
+        extractImmichOAuthRedirect(intent)?.let { pendingImmichOAuthRedirectState.value = it }
     }
 }

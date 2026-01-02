@@ -72,6 +72,9 @@ internal data class AutoCropParams(
 )
 
 internal fun computeMaxCropNormalized(params: AutoCropParams): CropState {
+    if (params.aspectRatio == null) {
+        return CropState(0f, 0f, 1f, 1f)
+    }
     val baseAspect = params.baseAspectRatio.takeIf { it.isFinite() && it > 0f } ?: 1f
     val (w, h) = if (baseAspect >= 1f) {
         baseAspect to 1f

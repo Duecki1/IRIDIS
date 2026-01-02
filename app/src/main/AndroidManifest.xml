@@ -40,6 +40,17 @@
                 <data android:mimeType="image/*" />
             </intent-filter>
 
+            <!-- 2b. Immich OAuth redirect -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="kawaiiraweditor"
+                    android:host="oauth"
+                    android:pathPrefix="/immich" />
+            </intent-filter>
+
             <!-- 3. SHARE (Single): Appear in share sheet for one image -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
