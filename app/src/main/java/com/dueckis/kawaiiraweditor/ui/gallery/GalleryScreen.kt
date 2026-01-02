@@ -78,6 +78,8 @@ import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SearchBarDefaults
 import androidx.compose.material3.Surface
@@ -143,11 +145,15 @@ private enum class GallerySource {
     Immich
 }
 
-private enum class GallerySort(val label: String) {
-    NameAsc("Name A-Z"),
-    NameDesc("Name Z-A"),
+private enum class GallerySortField(val label: String) {
+    Name("Name"),
     Date("Date"),
     Changed("Changed")
+}
+
+private enum class GallerySortOrder(val label: String) {
+    Asc("Asc"),
+    Desc("Desc")
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -366,7 +372,8 @@ internal fun GalleryScreen(
 
     var queryText by rememberSaveable { mutableStateOf("") }
     val queryLower = remember(queryText) { queryText.trim().lowercase(Locale.US) }
-    var gallerySort by rememberSaveable { mutableStateOf(GallerySort.Date) }
+    var gallerySortField by rememberSaveable { mutableStateOf(GallerySortField.Date) }
+    var gallerySortOrder by rememberSaveable { mutableStateOf(GallerySortOrder.Desc) }
 
     fun matchesQuery(item: GalleryItem): Boolean {
         if (queryLower.isBlank()) return true
@@ -414,42 +421,81 @@ internal fun GalleryScreen(
     val filteredImmichAssets = remember(immichAlbumAssets, queryLower) {
         if (queryLower.isBlank()) immichAlbumAssets else immichAlbumAssets.filter(::matchesImmichAssetQuery)
     }
-    val sortedLocalItems = remember(filteredLocalItems, gallerySort) {
-        when (gallerySort) {
-            GallerySort.NameAsc ->
-                filteredLocalItems.sortedBy { it.fileName.lowercase(Locale.US) }
-            GallerySort.NameDesc ->
-                filteredLocalItems.sortedByDescending { it.fileName.lowercase(Locale.US) }
-            GallerySort.Date ->
-                filteredLocalItems.sortedByDescending { it.createdAt }
-            GallerySort.Changed ->
-                filteredLocalItems.sortedByDescending { it.modifiedAt }
-        }
-    }
-    val sortedImmichAlbums = remember(filteredImmichAlbums, gallerySort) {
-        when (gallerySort) {
-            GallerySort.NameAsc ->
-                filteredImmichAlbums.sortedBy { it.name.lowercase(Locale.US) }
-            GallerySort.NameDesc ->
-                filteredImmichAlbums.sortedByDescending { it.name.lowercase(Locale.US) }
-            GallerySort.Date ->
-                filteredImmichAlbums.sortedByDescending { parseIsoToEpoch(it.createdAt) }
-            GallerySort.Changed ->
-                filteredImmichAlbums.sortedByDescending {
-                    parseIsoToEpoch(it.lastModifiedAssetTimestamp ?: it.updatedAt)
+    val sortedLocalItems = remember(filteredLocalItems, gallerySortField, gallerySortOrder) {
+        when (gallerySortField) {
+            GallerySortField.Name -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredLocalItems.sortedBy { it.fileName.lowercase(Locale.US) }
+                } else {
+                    filteredLocalItems.sortedByDescending { it.fileName.lowercase(Locale.US) }
                 }
+            }
+            GallerySortField.Date -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredLocalItems.sortedBy { it.createdAt }
+                } else {
+                    filteredLocalItems.sortedByDescending { it.createdAt }
+                }
+            }
+            GallerySortField.Changed -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredLocalItems.sortedBy { it.modifiedAt }
+                } else {
+                    filteredLocalItems.sortedByDescending { it.modifiedAt }
+                }
+            }
         }
     }
-    val sortedImmichAssets = remember(filteredImmichAssets, gallerySort) {
-        when (gallerySort) {
-            GallerySort.NameAsc ->
-                filteredImmichAssets.sortedBy { it.fileName.lowercase(Locale.US) }
-            GallerySort.NameDesc ->
-                filteredImmichAssets.sortedByDescending { it.fileName.lowercase(Locale.US) }
-            GallerySort.Date ->
-                filteredImmichAssets.sortedByDescending { parseIsoToEpoch(it.createdAt) }
-            GallerySort.Changed ->
-                filteredImmichAssets.sortedByDescending { parseIsoToEpoch(it.updatedAt) }
+    val sortedImmichAlbums = remember(filteredImmichAlbums, gallerySortField, gallerySortOrder) {
+        when (gallerySortField) {
+            GallerySortField.Name -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredImmichAlbums.sortedBy { it.name.lowercase(Locale.US) }
+                } else {
+                    filteredImmichAlbums.sortedByDescending { it.name.lowercase(Locale.US) }
+                }
+            }
+            GallerySortField.Date -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredImmichAlbums.sortedBy { parseIsoToEpoch(it.createdAt) }
+                } else {
+                    filteredImmichAlbums.sortedByDescending { parseIsoToEpoch(it.createdAt) }
+                }
+            }
+            GallerySortField.Changed -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredImmichAlbums.sortedBy { parseIsoToEpoch(it.lastModifiedAssetTimestamp ?: it.updatedAt) }
+                } else {
+                    filteredImmichAlbums.sortedByDescending {
+                        parseIsoToEpoch(it.lastModifiedAssetTimestamp ?: it.updatedAt)
+                    }
+                }
+            }
+        }
+    }
+    val sortedImmichAssets = remember(filteredImmichAssets, gallerySortField, gallerySortOrder) {
+        when (gallerySortField) {
+            GallerySortField.Name -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredImmichAssets.sortedBy { it.fileName.lowercase(Locale.US) }
+                } else {
+                    filteredImmichAssets.sortedByDescending { it.fileName.lowercase(Locale.US) }
+                }
+            }
+            GallerySortField.Date -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredImmichAssets.sortedBy { parseIsoToEpoch(it.createdAt) }
+                } else {
+                    filteredImmichAssets.sortedByDescending { parseIsoToEpoch(it.createdAt) }
+                }
+            }
+            GallerySortField.Changed -> {
+                if (gallerySortOrder == GallerySortOrder.Asc) {
+                    filteredImmichAssets.sortedBy { parseIsoToEpoch(it.updatedAt) }
+                } else {
+                    filteredImmichAssets.sortedByDescending { parseIsoToEpoch(it.updatedAt) }
+                }
+            }
         }
     }
 
@@ -983,20 +1029,64 @@ internal fun GalleryScreen(
                     }
                 }
 
+                val sortMenuExpanded = remember { mutableStateOf(false) }
+                val orderMenuExpanded = remember { mutableStateOf(false) }
+
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(GallerySort.values().size) { index ->
-                        val option = GallerySort.values()[index]
-                        InputChip(
-                            selected = gallerySort == option,
-                            onClick = { gallerySort = option },
-                            label = { Text(option.label) },
-                            colors = InputChipDefaults.inputChipColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                    item {
+                        Box {
+                            InputChip(
+                                selected = false,
+                                onClick = { sortMenuExpanded.value = true },
+                                label = { Text("Sort: ${gallerySortField.label}") },
+                                colors = InputChipDefaults.inputChipColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                )
                             )
-                        )
+                            DropdownMenu(
+                                expanded = sortMenuExpanded.value,
+                                onDismissRequest = { sortMenuExpanded.value = false }
+                            ) {
+                                GallerySortField.values().forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option.label) },
+                                        onClick = {
+                                            gallerySortField = option
+                                            sortMenuExpanded.value = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    item {
+                        Box {
+                            InputChip(
+                                selected = false,
+                                onClick = { orderMenuExpanded.value = true },
+                                label = { Text("Order: ${gallerySortOrder.label}") },
+                                colors = InputChipDefaults.inputChipColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                )
+                            )
+                            DropdownMenu(
+                                expanded = orderMenuExpanded.value,
+                                onDismissRequest = { orderMenuExpanded.value = false }
+                            ) {
+                                GallerySortOrder.values().forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option.label) },
+                                        onClick = {
+                                            gallerySortOrder = option
+                                            orderMenuExpanded.value = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
