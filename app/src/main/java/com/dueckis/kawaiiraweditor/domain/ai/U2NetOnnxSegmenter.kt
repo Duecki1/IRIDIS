@@ -10,8 +10,6 @@ import ai.onnxruntime.OrtSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
-import java.net.URL
 import java.security.MessageDigest
 import java.nio.FloatBuffer
 import kotlin.math.roundToInt
@@ -19,11 +17,12 @@ import kotlin.math.roundToInt
 internal class U2NetOnnxSegmenter(private val context: Context) {
     companion object {
         private const val INPUT_SIZE = 320
-        private const val MODEL_URL =
+        internal const val MODEL_URL =
             "https://huggingface.co/CyberTimon/RapidRAW-Models/resolve/main/u2net.onnx?download=true"
-        private const val MODEL_SHA256 =
+        internal const val MODEL_SHA256 =
             "8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491"
-        private const val MODEL_FILENAME = "u2net.onnx"
+        internal const val MODEL_FILENAME = "u2net.onnx"
+        private const val MODEL_NOTIFICATION_ID = 0xA11001
     }
 
     private val lock = Any()
@@ -76,18 +75,23 @@ internal class U2NetOnnxSegmenter(private val context: Context) {
         }
     }
 
-    private suspend fun ensureModelOnDisk(): File = withContext(Dispatchers.IO) {
+    internal suspend fun ensureModelOnDisk(): File = withContext(Dispatchers.IO) {
         val dir = File(context.filesDir, "models").apply { mkdirs() }
         val dest = File(dir, MODEL_FILENAME)
         if (dest.exists() && sha256Hex(dest) == MODEL_SHA256) return@withContext dest
         if (dest.exists()) dest.delete()
 
-        URL(MODEL_URL).openStream().use { input ->
-            FileOutputStream(dest).use { output ->
-                input.copyTo(output)
-            }
-        }
-        check(sha256Hex(dest) == MODEL_SHA256) { "U2Net model hash mismatch after download" }
+        ModelDownloadHelper.downloadFileWithProgress(
+            context = context,
+            url = MODEL_URL,
+            finalDest = dest,
+            expectedSha256 = MODEL_SHA256,
+            notificationTitle = "Downloading subject AI model",
+            toastStart = "Downloading subject AI model...",
+            toastDone = "Subject AI model ready.",
+            toastFailure = "Subject AI model download failed.",
+            notificationId = MODEL_NOTIFICATION_ID
+        )
         dest
     }
 

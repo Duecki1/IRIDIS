@@ -8,10 +8,9 @@ import ai.onnxruntime.OrtSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
-import java.net.URL
 import java.nio.FloatBuffer
 import java.security.MessageDigest
+import java.util.Locale
 import kotlin.math.roundToInt
 
 internal class SegFormerOnnxSegmenter(
@@ -291,12 +290,18 @@ internal class SegFormerOnnxSegmenter(
         if (dest.exists() && sha256Hex(dest) == modelSha256) return@withContext dest
         if (dest.exists()) dest.delete()
 
-        URL(modelUrl).openStream().use { input ->
-            FileOutputStream(dest).use { output ->
-                input.copyTo(output)
-            }
-        }
-        check(sha256Hex(dest) == modelSha256) { "SegFormer model hash mismatch after download ($modelFilename)" }
+        val displayName = modelDisplayName()
+        ModelDownloadHelper.downloadFileWithProgress(
+            context = context,
+            url = modelUrl,
+            finalDest = dest,
+            expectedSha256 = modelSha256,
+            notificationTitle = "Downloading $displayName",
+            toastStart = "Downloading $displayName...",
+            toastDone = "$displayName ready.",
+            toastFailure = "$displayName download failed.",
+            notificationId = modelNotificationId()
+        )
         dest
     }
 
@@ -341,5 +346,18 @@ internal class SegFormerOnnxSegmenter(
 
         val fb = FloatBuffer.wrap(chw)
         return OnnxTensor.createTensor(ortEnv, fb, longArrayOf(1, 3, h.toLong(), w.toLong()))
+    }
+
+    private fun modelDisplayName(): String {
+        val lower = modelFilename.lowercase(Locale.US)
+        return when {
+            lower.contains("cityscapes") -> "Environment AI model (Cityscapes)"
+            lower.contains("ade") -> "Environment AI model (ADE20K)"
+            else -> "Environment AI model"
+        }
+    }
+
+    private fun modelNotificationId(): Int {
+        return ("segformer_$modelFilename").hashCode() and 0x7fffffff
     }
 }

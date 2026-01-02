@@ -75,7 +75,6 @@ import com.dueckis.kawaiiraweditor.ui.editor.masking.MaskItemCard
 import com.dueckis.kawaiiraweditor.ui.editor.masking.SubMaskItemChip
 import com.dueckis.kawaiiraweditor.ui.editor.masking.duplicateMaskState
 import com.dueckis.kawaiiraweditor.ui.editor.masking.duplicateSubMaskState
-import com.dueckis.kawaiiraweditor.ui.editor.masking.newSubMaskState
 import java.util.UUID
 import kotlin.math.roundToInt
 
@@ -94,6 +93,8 @@ internal fun MaskingUI(
     showMaskOverlay: Boolean,
     onShowMaskOverlayChange: (Boolean) -> Unit,
     onRequestMaskOverlayBlink: (String?) -> Unit,
+    onCreateMask: (SubMaskType) -> Unit,
+    onCreateSubMask: (SubMaskMode, SubMaskType) -> Unit,
     brushSize: Float,
     onBrushSizeChange: (Float) -> Unit,
     brushTool: BrushTool,
@@ -179,27 +180,7 @@ internal fun MaskingUI(
                         onClick = {
                             showCreateMenu = false
                             onMaskTapModeChange(MaskTapMode.None)
-                            val newMaskId = UUID.randomUUID().toString()
-                            val newSubId = UUID.randomUUID().toString()
-                            val subMask = newSubMaskState(newSubId, SubMaskMode.Additive, type)
-                            val newMask = MaskState(
-                                id = newMaskId,
-                                name =
-                                    when (type) {
-                                        SubMaskType.AiEnvironment -> AiEnvironmentCategory.fromId(subMask.aiEnvironment.category).label
-                                        SubMaskType.AiSubject -> "Subject"
-                                        SubMaskType.Brush -> "Brush"
-                                        SubMaskType.Linear -> "Gradient"
-                                        SubMaskType.Radial -> "Radial"
-                                    },
-                                subMasks = listOf(subMask)
-                            )
-                            assignMaskNumber(newMaskId)
-                            onMasksChange(masks + newMask)
-                            onSelectedMaskIdChange(newMaskId)
-                            onSelectedSubMaskIdChange(newSubId)
-                            onPaintingMaskChange(type == SubMaskType.Brush || type == SubMaskType.AiSubject)
-                            onRequestMaskOverlayBlink(null)
+                            onCreateMask(type)
                         }
                     )
                 }
@@ -408,15 +389,7 @@ internal fun MaskingUI(
                                         showAddSubTypeMenu = false
                                         pendingSubMaskMode = null
                                         onMaskTapModeChange(MaskTapMode.None)
-                                        val newSubId = UUID.randomUUID().toString()
-                                        val updated = masks.map { m ->
-                                            if (m.id != selectedMask.id) m
-                                            else m.copy(subMasks = m.subMasks + newSubMaskState(newSubId, selectedMode, type))
-                                        }
-                                        onMasksChange(updated)
-                                        onSelectedSubMaskIdChange(newSubId)
-                                        onPaintingMaskChange(type == SubMaskType.Brush || type == SubMaskType.AiSubject)
-                                        onRequestMaskOverlayBlink(newSubId)
+                                        onCreateSubMask(selectedMode, type)
                                     }
                                 )
                             }

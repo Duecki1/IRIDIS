@@ -23,6 +23,8 @@ import com.dueckis.kawaiiraweditor.data.model.BrushTool
 import com.dueckis.kawaiiraweditor.data.model.EditorPanelTab
 import com.dueckis.kawaiiraweditor.data.model.MaskState
 import com.dueckis.kawaiiraweditor.data.model.MaskTapMode
+import com.dueckis.kawaiiraweditor.data.model.SubMaskMode
+import com.dueckis.kawaiiraweditor.data.model.SubMaskType
 import com.dueckis.kawaiiraweditor.data.model.adjustmentSections
 import com.dueckis.kawaiiraweditor.data.model.vignetteSection
 import com.dueckis.kawaiiraweditor.domain.HistogramData
@@ -50,6 +52,8 @@ internal fun EditorControlsContent(
     showMaskOverlay: Boolean,
     onShowMaskOverlayChange: (Boolean) -> Unit,
     onRequestMaskOverlayBlink: (String?) -> Unit,
+    onCreateMask: (SubMaskType) -> Unit,
+    onCreateSubMask: (SubMaskMode, SubMaskType) -> Unit,
     brushSize: Float,
     onBrushSizeChange: (Float) -> Unit,
     brushTool: BrushTool,
@@ -215,6 +219,8 @@ internal fun EditorControlsContent(
                             showMaskOverlay = showMaskOverlay,
                             onShowMaskOverlayChange = onShowMaskOverlayChange,
                             onRequestMaskOverlayBlink = onRequestMaskOverlayBlink,
+                            onCreateMask = onCreateMask,
+                            onCreateSubMask = onCreateSubMask,
                             brushSize = brushSize,
                             onBrushSizeChange = onBrushSizeChange,
                             brushTool = brushTool,

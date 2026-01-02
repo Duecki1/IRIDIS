@@ -121,6 +121,10 @@ fun KawaiiApp(
         }
     }
 
+    LaunchedEffect(Unit) {
+        requestNotificationPermissionIfNeeded()
+    }
+
     val tagBackfillQueue = remember { Channel<String>(capacity = Channel.UNLIMITED) }
     val tagBackfillQueued = remember { mutableStateMapOf<String, Boolean>() }
     val tagBackfillInFlight = remember { mutableStateMapOf<String, Boolean>() }

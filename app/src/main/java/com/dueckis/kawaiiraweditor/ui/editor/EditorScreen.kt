@@ -131,12 +131,16 @@ import com.dueckis.kawaiiraweditor.domain.HistogramData
 import com.dueckis.kawaiiraweditor.domain.HistogramUtils
 import com.dueckis.kawaiiraweditor.domain.ai.AiEnvironmentMaskGenerator
 import com.dueckis.kawaiiraweditor.domain.ai.AiSubjectMaskGenerator
+import com.dueckis.kawaiiraweditor.domain.ai.ModelInfo
 import com.dueckis.kawaiiraweditor.domain.ai.NormalizedPoint
+import com.dueckis.kawaiiraweditor.domain.ai.U2NetOnnxSegmenter
+import com.dueckis.kawaiiraweditor.domain.ai.missingModels
 import com.dueckis.kawaiiraweditor.domain.editor.EditorHistoryEntry
 import com.dueckis.kawaiiraweditor.ui.editor.components.ExportButton
 import com.dueckis.kawaiiraweditor.ui.editor.controls.AutoCropParams
 import com.dueckis.kawaiiraweditor.ui.editor.controls.EditorControlsContent
 import com.dueckis.kawaiiraweditor.ui.editor.controls.computeMaxCropNormalized
+import com.dueckis.kawaiiraweditor.ui.editor.masking.newSubMaskState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -164,6 +168,20 @@ import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.math.sin
+
+private enum class PendingModelDownloadAction {
+    SubjectMask,
+    EnvironmentMask,
+    EnvironmentDetect,
+    SubjectMaskSelect
+}
+
+private data class PendingSubjectMaskCreation(
+    val createNewMask: Boolean,
+    val targetMaskId: String?,
+    val mode: SubMaskMode,
+    val type: SubMaskType
+)
 
 @OptIn(kotlinx.coroutines.FlowPreview::class, ExperimentalMaterial3ExpressiveApi::class,
     ExperimentalMaterial3Api::class
@@ -716,14 +734,27 @@ internal fun EditorScreen(
     var metadataJson by remember { mutableStateOf<String?>(null) }
     var showAiSubjectOverrideDialog by remember { mutableStateOf(false) }
     var aiSubjectOverrideTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var showModelDownloadDialog by remember(galleryItem.projectId) { mutableStateOf(false) }
+    var pendingModelDownloadAction by remember(galleryItem.projectId) { mutableStateOf<PendingModelDownloadAction?>(null) }
+    var pendingModelDownloadNames by remember(galleryItem.projectId) { mutableStateOf<List<String>>(emptyList()) }
+    var pendingSubjectMaskPoints by remember(galleryItem.projectId) { mutableStateOf<List<MaskPoint>>(emptyList()) }
+    var pendingSubjectMaskCreation by remember(galleryItem.projectId) { mutableStateOf<PendingSubjectMaskCreation?>(null) }
     val editHistory = remember(galleryItem.projectId) { mutableStateListOf<EditorHistoryEntry>() }
+
+    fun clearModelDownloadState() {
+        showModelDownloadDialog = false
+        pendingModelDownloadAction = null
+        pendingModelDownloadNames = emptyList()
+        pendingSubjectMaskPoints = emptyList()
+        pendingSubjectMaskCreation = null
+    }
     var editHistoryIndex by remember(galleryItem.projectId) { mutableIntStateOf(-1) }
     var isRestoringEditHistory by remember(galleryItem.projectId) { mutableStateOf(false) }
     var isHistoryInteractionActive by remember(galleryItem.projectId) { mutableStateOf(false) }
 
     PredictiveBackHandler {
         try {
-            val shouldAnimate = !showAiSubjectOverrideDialog && !showMetadataDialog
+            val shouldAnimate = !showAiSubjectOverrideDialog && !showMetadataDialog && !showModelDownloadDialog
             it.collect { event ->
                 if (shouldAnimate) {
                     onPredictiveBackProgress(event.progress)
@@ -737,6 +768,10 @@ internal fun EditorScreen(
 
                 showMetadataDialog -> {
                     showMetadataDialog = false
+                }
+
+                showModelDownloadDialog -> {
+                    clearModelDownloadState()
                 }
 
                 else -> {
@@ -2405,15 +2440,99 @@ internal fun EditorScreen(
         aiEnvironmentSourceBitmap = decoded
         return decoded
     }
-    val onLassoFinished: (List<MaskPoint>) -> Unit = onLasso@{ points ->
-        val maskId = selectedMaskId ?: return@onLasso
-        val subId = selectedSubMaskId ?: return@onLasso
-        val bmp = editedBitmap ?: return@onLasso
-        if (points.size < 3) return@onLasso
+
+    fun missingSubjectModels(): List<ModelInfo> {
+        return missingModels(
+            context,
+            listOf(ModelInfo("Subject AI model (U2Net)", U2NetOnnxSegmenter.MODEL_FILENAME))
+        )
+    }
+
+    fun missingEnvironmentModels(): List<ModelInfo> {
+        return missingModels(
+            context,
+            listOf(
+                ModelInfo("Environment AI model (Cityscapes)", AiEnvironmentMaskGenerator.CITYSCAPES_MODEL_FILENAME),
+                ModelInfo("Environment AI model (ADE20K)", AiEnvironmentMaskGenerator.ADE20K_MODEL_FILENAME)
+            )
+        )
+    }
+
+    fun requestModelDownloadConfirmation(
+        missing: List<ModelInfo>,
+        action: PendingModelDownloadAction,
+        subjectPoints: List<MaskPoint> = emptyList()
+    ): Boolean {
+        if (missing.isEmpty()) return false
+        pendingModelDownloadNames = missing.map { it.displayName }
+        pendingModelDownloadAction = action
+        if (subjectPoints.isNotEmpty()) pendingSubjectMaskPoints = subjectPoints
+        showModelDownloadDialog = true
+        return true
+    }
+
+    fun createMaskForType(type: SubMaskType) {
+        val newMaskId = UUID.randomUUID().toString()
+        val newSubId = UUID.randomUUID().toString()
+        val subMask = newSubMaskState(newSubId, SubMaskMode.Additive, type)
+        val maskName =
+            when (type) {
+                SubMaskType.AiEnvironment -> AiEnvironmentCategory.fromId(subMask.aiEnvironment.category).label
+                SubMaskType.AiSubject -> "Subject"
+                SubMaskType.Brush -> "Brush"
+                SubMaskType.Linear -> "Gradient"
+                SubMaskType.Radial -> "Radial"
+            }
+        val newMask =
+            MaskState(
+                id = newMaskId,
+                name = maskName,
+                subMasks = listOf(subMask)
+            )
+        assignNumber(newMaskId)
+        masks = masks + newMask
+        selectedMaskId = newMaskId
+        selectedSubMaskId = newSubId
+        isPaintingMask = type == SubMaskType.Brush || type == SubMaskType.AiSubject
+        requestMaskOverlayBlink(null)
+    }
+
+    fun addSubMaskToMask(maskId: String, mode: SubMaskMode, type: SubMaskType) {
+        if (masks.none { it.id == maskId }) return
+        val newSubId = UUID.randomUUID().toString()
+        masks =
+            masks.map { m ->
+                if (m.id != maskId) m
+                else m.copy(subMasks = m.subMasks + newSubMaskState(newSubId, mode, type))
+            }
+        selectedMaskId = maskId
+        selectedSubMaskId = newSubId
+        isPaintingMask = type == SubMaskType.Brush || type == SubMaskType.AiSubject
+        requestMaskOverlayBlink(newSubId)
+    }
+
+    fun startSubjectModelDownloadAndCreateMask(pending: PendingSubjectMaskCreation) {
+        coroutineScope.launch {
+            val ready = runCatching { aiSubjectMaskGenerator.ensureModelReady() }.isSuccess
+            if (!ready) return@launch
+            if (pending.createNewMask) {
+                createMaskForType(pending.type)
+            } else {
+                val target = pending.targetMaskId ?: return@launch
+                addSubMaskToMask(target, pending.mode, pending.type)
+            }
+        }
+    }
+
+    fun startSubjectMaskGeneration(points: List<MaskPoint>) {
+        val maskId = selectedMaskId ?: return
+        val subId = selectedSubMaskId ?: return
+        val bmp = editedBitmap ?: return
+        if (points.size < 3) return
 
         coroutineScope.launch {
             isGeneratingAiMask = true
-            statusMessage = "Generating subject mask…"
+            statusMessage = "Generating subject mask..."
             val dataUrl =
                 runCatching {
                     aiSubjectMaskGenerator.generateSubjectMaskDataUrl(
@@ -2456,7 +2575,8 @@ internal fun EditorScreen(
         }
     }
 
-    val onGenerateAiEnvironmentMask: (() -> Unit)? = if (!environmentMaskingEnabled) null else fun() {
+    fun startGenerateAiEnvironmentMask() {
+        if (!environmentMaskingEnabled) return
         val maskId = selectedMaskId ?: return
         val subId = selectedSubMaskId ?: return
         val handle = sessionHandle
@@ -2469,7 +2589,7 @@ internal fun EditorScreen(
         val category = AiEnvironmentCategory.fromId(sub.aiEnvironment.category)
         coroutineScope.launch {
             isGeneratingAiMask = true
-            statusMessage = "Generating ${category.label.lowercase()} mask…"
+            statusMessage = "Generating ${category.label.lowercase()} mask..."
             val result =
                 runCatching {
                     val generator = aiEnvironmentMaskGenerator ?: error("Environment masking disabled.")
@@ -2518,7 +2638,8 @@ internal fun EditorScreen(
         }
     }
 
-    val onDetectAiEnvironmentCategories: (() -> Unit)? = if (!environmentMaskingEnabled) null else fun() {
+    fun startDetectAiEnvironmentCategories() {
+        if (!environmentMaskingEnabled) return
         if (isDetectingAiEnvironmentCategories) return
         if (detectedAiEnvironmentCategories != null) return
         val handle = sessionHandle
@@ -2535,6 +2656,70 @@ internal fun EditorScreen(
             if (detected != null) detectedAiEnvironmentCategories = detected
             isDetectingAiEnvironmentCategories = false
         }
+    }
+
+    val onCreateMask: (SubMaskType) -> Unit = onCreateMask@{ type ->
+        if (type == SubMaskType.AiSubject) {
+            val missing = missingSubjectModels()
+            if (requestModelDownloadConfirmation(missing, PendingModelDownloadAction.SubjectMaskSelect)) {
+                pendingSubjectMaskCreation =
+                    PendingSubjectMaskCreation(
+                        createNewMask = true,
+                        targetMaskId = null,
+                        mode = SubMaskMode.Additive,
+                        type = type
+                    )
+                return@onCreateMask
+            }
+        }
+        createMaskForType(type)
+    }
+
+    val onCreateSubMask: (SubMaskMode, SubMaskType) -> Unit = onCreateSubMask@{ mode, type ->
+        val targetMaskId = selectedMaskId ?: return@onCreateSubMask
+        if (type == SubMaskType.AiSubject) {
+            val missing = missingSubjectModels()
+            if (requestModelDownloadConfirmation(missing, PendingModelDownloadAction.SubjectMaskSelect)) {
+                pendingSubjectMaskCreation =
+                    PendingSubjectMaskCreation(
+                        createNewMask = false,
+                        targetMaskId = targetMaskId,
+                        mode = mode,
+                        type = type
+                    )
+                return@onCreateSubMask
+            }
+        }
+        addSubMaskToMask(targetMaskId, mode, type)
+    }
+    val onLassoFinished: (List<MaskPoint>) -> Unit = onLasso@{ points ->
+        if (selectedMaskId == null || selectedSubMaskId == null || editedBitmap == null) return@onLasso
+        if (points.size < 3) return@onLasso
+        val missing = missingSubjectModels()
+        if (requestModelDownloadConfirmation(missing, PendingModelDownloadAction.SubjectMask, points)) return@onLasso
+        startSubjectMaskGeneration(points)
+    }
+
+    val onGenerateAiEnvironmentMask: (() -> Unit)? = if (!environmentMaskingEnabled) null else fun() {
+        val maskId = selectedMaskId ?: return
+        val subId = selectedSubMaskId ?: return
+        val sub =
+            masks.firstOrNull { it.id == maskId }?.subMasks?.firstOrNull { it.id == subId }
+                ?: return
+        if (sub.type != SubMaskType.AiEnvironment.id) return
+        val missing = missingEnvironmentModels()
+        if (requestModelDownloadConfirmation(missing, PendingModelDownloadAction.EnvironmentMask)) return
+        startGenerateAiEnvironmentMask()
+    }
+
+    val onDetectAiEnvironmentCategories: (() -> Unit)? = if (!environmentMaskingEnabled) null else fun() {
+        if (isDetectingAiEnvironmentCategories) return
+        if (detectedAiEnvironmentCategories != null) return
+        val handle = sessionHandle
+        if (handle == 0L) return
+        val missing = missingEnvironmentModels()
+        if (requestModelDownloadConfirmation(missing, PendingModelDownloadAction.EnvironmentDetect)) return
+        startDetectAiEnvironmentCategories()
     }
 
     val canUndo = editHistoryIndex > 0
@@ -2925,6 +3110,8 @@ internal fun EditorScreen(
                                                 showMaskOverlay = showMaskOverlay,
                                                 onShowMaskOverlayChange = { showMaskOverlay = it },
                                                 onRequestMaskOverlayBlink = ::requestMaskOverlayBlink,
+                                                onCreateMask = onCreateMask,
+                                                onCreateSubMask = onCreateSubMask,
                                                 brushSize = brushSize,
                                                 onBrushSizeChange = { brushSize = it },
                                                 brushTool = brushTool,
@@ -3202,6 +3389,43 @@ internal fun EditorScreen(
                     }
                 }
             }
+        )
+    }
+
+    if (showModelDownloadDialog) {
+        val modelsText = pendingModelDownloadNames.joinToString(", ")
+        val message =
+            if (modelsText.isBlank()) {
+                "This feature needs to download AI model files from the internet. Your photos stay on-device; only model files are downloaded."
+            } else {
+                "This feature needs to download: $modelsText. The models are downloaded from third-party servers. Your photos stay on-device; only model files are downloaded."
+            }
+        AlertDialog(
+            onDismissRequest = { clearModelDownloadState() },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val action = pendingModelDownloadAction
+                        val subjectPoints = pendingSubjectMaskPoints
+                        val pendingCreation = pendingSubjectMaskCreation
+                        clearModelDownloadState()
+                        when (action) {
+                            PendingModelDownloadAction.SubjectMask -> startSubjectMaskGeneration(subjectPoints)
+                            PendingModelDownloadAction.EnvironmentMask -> startGenerateAiEnvironmentMask()
+                            PendingModelDownloadAction.EnvironmentDetect -> startDetectAiEnvironmentCategories()
+                            PendingModelDownloadAction.SubjectMaskSelect -> {
+                                if (pendingCreation != null) startSubjectModelDownloadAndCreateMask(pendingCreation)
+                            }
+                            null -> Unit
+                        }
+                    }
+                ) { Text("Download") }
+            },
+            dismissButton = {
+                TextButton(onClick = { clearModelDownloadState() }) { Text("Cancel") }
+            },
+            title = { Text("Download AI model(s)?") },
+            text = { Text(message) }
         )
     }
 

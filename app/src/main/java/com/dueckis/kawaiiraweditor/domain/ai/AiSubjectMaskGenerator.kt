@@ -17,6 +17,10 @@ class AiSubjectMaskGenerator(appContext: Context) {
     private val context = appContext.applicationContext
     private val u2net = U2NetOnnxSegmenter(context)
 
+    suspend fun ensureModelReady() {
+        u2net.ensureModelOnDisk()
+    }
+
     suspend fun generateSubjectMaskDataUrl(
         previewBitmap: Bitmap,
         lassoPoints: List<NormalizedPoint>,

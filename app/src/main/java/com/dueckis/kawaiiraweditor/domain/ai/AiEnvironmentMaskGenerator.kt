@@ -16,17 +16,17 @@ internal class AiEnvironmentMaskGenerator(appContext: Context) {
 
     private val cityscapes = SegFormerOnnxSegmenter(
         context = context,
-        modelUrl = "https://huggingface.co/Xenova/segformer-b2-finetuned-cityscapes-1024-1024/resolve/main/onnx/model_fp16.onnx?download=true",
-        modelSha256 = "323d74b5e4150b93d2682059c40ce227a6effeabc9a7926776b6e8499c2b2761",
-        modelFilename = "segformer_cityscapes_b2_fp16.onnx",
+        modelUrl = CITYSCAPES_MODEL_URL,
+        modelSha256 = CITYSCAPES_MODEL_SHA256,
+        modelFilename = CITYSCAPES_MODEL_FILENAME,
         inputSize = 512
     )
 
     private val ade20k = SegFormerOnnxSegmenter(
         context = context,
-        modelUrl = "https://huggingface.co/Xenova/segformer-b2-finetuned-ade-512-512/resolve/main/onnx/model_fp16.onnx?download=true",
-        modelSha256 = "79209c2663c66b35af907b9bfeab79570d396ab7c4d0c22a54814288538a8d1b",
-        modelFilename = "segformer_ade20k_b2_fp16.onnx",
+        modelUrl = ADE20K_MODEL_URL,
+        modelSha256 = ADE20K_MODEL_SHA256,
+        modelFilename = ADE20K_MODEL_FILENAME,
         inputSize = 256
     )
 
@@ -139,5 +139,17 @@ internal class AiEnvironmentMaskGenerator(appContext: Context) {
             pixels[i] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
         }
         return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+    }
+
+    companion object {
+        internal const val CITYSCAPES_MODEL_URL =
+            "https://huggingface.co/Xenova/segformer-b2-finetuned-cityscapes-1024-1024/resolve/main/onnx/model_fp16.onnx?download=true"
+        internal const val CITYSCAPES_MODEL_SHA256 = "323d74b5e4150b93d2682059c40ce227a6effeabc9a7926776b6e8499c2b2761"
+        internal const val CITYSCAPES_MODEL_FILENAME = "segformer_cityscapes_b2_fp16.onnx"
+
+        internal const val ADE20K_MODEL_URL =
+            "https://huggingface.co/Xenova/segformer-b2-finetuned-ade-512-512/resolve/main/onnx/model_fp16.onnx?download=true"
+        internal const val ADE20K_MODEL_SHA256 = "79209c2663c66b35af907b9bfeab79570d396ab7c4d0c22a54814288538a8d1b"
+        internal const val ADE20K_MODEL_FILENAME = "segformer_ade20k_b2_fp16.onnx"
     }
 }

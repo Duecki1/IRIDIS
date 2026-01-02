@@ -135,6 +135,8 @@ import com.dueckis.kawaiiraweditor.data.permissions.maybeRequestPostNotification
 import com.dueckis.kawaiiraweditor.data.storage.ProjectStorage
 import com.dueckis.kawaiiraweditor.domain.ai.AiEnvironmentMaskGenerator
 import com.dueckis.kawaiiraweditor.domain.ai.ClipAutoTagger
+import com.dueckis.kawaiiraweditor.domain.ai.ModelInfo
+import com.dueckis.kawaiiraweditor.domain.ai.missingModels
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
@@ -1945,12 +1947,24 @@ internal fun GalleryScreen(
 
     if (showEnvironmentMaskDialog) {
         val count = pendingPasteIds.size
+        val missing = missingModels(
+            context,
+            listOf(
+                ModelInfo("Environment AI model (Cityscapes)", AiEnvironmentMaskGenerator.CITYSCAPES_MODEL_FILENAME),
+                ModelInfo("Environment AI model (ADE20K)", AiEnvironmentMaskGenerator.ADE20K_MODEL_FILENAME)
+            )
+        )
+        val missingText = missing.joinToString(", ") { it.displayName }
         val message =
             if (count == 1) {
                 "These adjustments include environment masks. Regenerate them now?"
             } else {
                 "These adjustments include environment masks. Regenerate them for $count images?"
             }
+        val downloadNote =
+            if (missingText.isBlank()) "" else "This will download: $missingText. The models are downloaded from third-party servers. Your photos stay on-device; only model files are downloaded."
+        val fullMessage =
+            if (downloadNote.isBlank()) message else "$message\n\n$downloadNote"
         AlertDialog(
             onDismissRequest = {
                 showEnvironmentMaskDialog = false
@@ -1979,7 +1993,7 @@ internal fun GalleryScreen(
                 ) { Text("Skip") }
             },
             title = { Text("Regenerate environment masks?") },
-            text = { Text(message) }
+            text = { Text(fullMessage) }
         )
     }
 
