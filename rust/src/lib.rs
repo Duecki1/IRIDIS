@@ -3219,7 +3219,7 @@ impl PreviewKind {
             PreviewKind::SuperLow => (64, 64),
             PreviewKind::Low => (256, 256),
             PreviewKind::Preview => (1280, 720),
-            PreviewKind::Zoom => (2304, 2304),
+            PreviewKind::Zoom => (4096, 4096),
         }
     }
 }
@@ -3501,7 +3501,7 @@ fn render_from_session(
     let effective_kind;
     let linear = if payload.preview.use_zoom {
         let requested = payload.preview.max_dimension;
-        let max_dim = 2304;
+        let max_dim = 4096;
         let stage_cap = match kind {
             PreviewKind::SuperLow => 64,
             PreviewKind::Low => 256,

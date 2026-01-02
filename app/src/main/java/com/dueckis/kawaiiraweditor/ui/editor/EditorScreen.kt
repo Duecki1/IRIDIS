@@ -91,9 +91,11 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
@@ -168,6 +170,11 @@ import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.math.sin
+
+private const val PREVIEW_DEFAULT_MAX_DIM = 1920
+private const val PREVIEW_MAX_DIM_CAP = 4096
+private const val PREVIEW_DIM_STEP = 128
+private const val PREVIEW_OVERSAMPLE = 1.15f
 
 private enum class PendingModelDownloadAction {
     SubjectMask,
@@ -702,20 +709,38 @@ internal fun EditorScreen(
     var editedViewportBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var editedViewportRoi by remember { mutableStateOf<CropState?>(null) }
     val currentViewportRoi = remember { AtomicReference<CropState?>(null) }
-    var viewportScale by remember { mutableFloatStateOf(1f) }
     var viewportRoiForDebounce by remember { mutableStateOf<CropState?>(null) }
     var fullPreviewDirtyByViewport by remember { mutableStateOf(false) }
+    var previewContainerSize by remember { mutableStateOf(IntSize.Zero) }
 
-    fun zoomMaxDimensionForScale(scale: Float): Int {
-        val minDim = 1280
-        val maxDim = 2304
-        val minScale = 1.1f
-        val maxScale = 5f
-        val t = ((scale - minScale) / (maxScale - minScale)).coerceIn(0f, 1f)
-        val desired = (minDim + (maxDim - minDim) * t).roundToInt()
-        val clamped = desired.coerceIn(minDim, maxDim)
-        val step = 128
-        return (clamped / step) * step
+    fun combinedPreviewRegion(crop: CropState?, roi: CropState?): CropState? {
+        val normalizedCrop = crop?.normalized()
+        val normalizedRoi = roi?.normalized()
+        if (normalizedCrop == null && normalizedRoi == null) return null
+        val width = (normalizedCrop?.width ?: 1f) * (normalizedRoi?.width ?: 1f)
+        val height = (normalizedCrop?.height ?: 1f) * (normalizedRoi?.height ?: 1f)
+        val clampedW = width.coerceIn(0f, 1f)
+        val clampedH = height.coerceIn(0f, 1f)
+        if (clampedW >= 0.999f && clampedH >= 0.999f) return null
+        return CropState(0f, 0f, clampedW, clampedH)
+    }
+
+    fun previewMaxDimensionForRegion(region: CropState?, containerSize: IntSize, fallback: Int? = null): Int? {
+        val normalized = region?.normalized() ?: return fallback
+        if (containerSize.width <= 0 || containerSize.height <= 0) return fallback
+
+        val containerW = containerSize.width.toFloat()
+        val containerH = containerSize.height.toFloat()
+        val safeWidth = normalized.width.coerceAtLeast(0.0001f)
+        val safeHeight = normalized.height.coerceAtLeast(0.0001f)
+        val required = maxOf(containerW / safeWidth, containerH / safeHeight) * PREVIEW_OVERSAMPLE
+
+        val minDim = (fallback ?: PREVIEW_DEFAULT_MAX_DIM).toFloat()
+        val clamped = required.coerceIn(minDim, PREVIEW_MAX_DIM_CAP.toFloat())
+        if (fallback == null && clamped <= PREVIEW_DEFAULT_MAX_DIM + 1f) return null
+        val snapped = ((clamped / PREVIEW_DIM_STEP).roundToInt() * PREVIEW_DIM_STEP)
+            .coerceIn(minDim.roundToInt(), PREVIEW_MAX_DIM_CAP)
+        return snapped
     }
 
     var originalBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -1857,7 +1882,6 @@ internal fun EditorScreen(
         editedViewportBitmap = null
         editedViewportRoi = null
         currentViewportRoi.set(null)
-        viewportScale = 1f
         viewportRoiForDebounce = null
         fullPreviewDirtyByViewport = false
         uncroppedBitmap = null
@@ -2043,12 +2067,25 @@ internal fun EditorScreen(
         histogramData = withContext(Dispatchers.Default) { HistogramUtils.calculateHistogram(bmp) }
     }
 
-    LaunchedEffect(adjustments, masks, isDraggingMaskHandle, isComparingOriginal) {
+    LaunchedEffect(adjustments, masks, isDraggingMaskHandle, isComparingOriginal, previewContainerSize) {
         if (isDraggingMaskHandle) return@LaunchedEffect
         if (isCropMode && !isComparingOriginal) return@LaunchedEffect
         val viewportRoi = currentViewportRoi.get()
         val useViewportRender = viewportRoi != null && !isComparingOriginal && !isCropMode
-        val viewportMaxDim = if (useViewportRender) zoomMaxDimensionForScale(viewportScale) else 0
+        val viewportRegion = if (useViewportRender) combinedPreviewRegion(adjustments.crop, viewportRoi) else null
+        val viewportMaxDim =
+            if (useViewportRender) {
+                previewMaxDimensionForRegion(viewportRegion, previewContainerSize, fallback = PREVIEW_DEFAULT_MAX_DIM)
+                    ?: PREVIEW_DEFAULT_MAX_DIM
+            } else {
+                0
+            }
+        val cropPreviewMaxDim =
+            if (!useViewportRender && !isComparingOriginal) {
+                previewMaxDimensionForRegion(combinedPreviewRegion(adjustments.crop, null), previewContainerSize)
+            } else {
+                null
+            }
         val json =
             withContext(Dispatchers.Default) {
                 if (useViewportRender) {
@@ -2074,7 +2111,21 @@ internal fun EditorScreen(
                     ).toJson(emptyList())
                 } else {
                     val currentTransform = adjustments.toMaskTransformState()
-                    adjustments.toJson(masksForRenderWithAiRemap(masks, currentTransform, adjustments))
+                    val renderMasks = masksForRenderWithAiRemap(masks, currentTransform, adjustments)
+                    if (cropPreviewMaxDim != null) {
+                        adjustments.toJsonObject(includeToneMapper = true).apply {
+                            put("masks", JSONArray().apply { renderMasks.forEach { put(it.toJsonObject()) } })
+                            put(
+                                "preview",
+                                JSONObject().apply {
+                                    put("useZoom", true)
+                                    put("maxDimension", cropPreviewMaxDim)
+                                }
+                            )
+                        }.toString()
+                    } else {
+                        adjustments.toJson(renderMasks)
+                    }
                 }
             }
         val version = renderVersion.incrementAndGet()
@@ -2120,10 +2171,25 @@ internal fun EditorScreen(
         if (!leavingCropMode) return@LaunchedEffect
         if (isComparingOriginal) return@LaunchedEffect
 
+        val cropPreviewMaxDim = previewMaxDimensionForRegion(combinedPreviewRegion(adjustments.crop, null), previewContainerSize)
         val json =
             withContext(Dispatchers.Default) {
                 val currentTransform = adjustments.toMaskTransformState()
-                adjustments.toJson(masksForRenderWithAiRemap(masks, currentTransform, adjustments))
+                val renderMasks = masksForRenderWithAiRemap(masks, currentTransform, adjustments)
+                if (cropPreviewMaxDim != null) {
+                    adjustments.toJsonObject(includeToneMapper = true).apply {
+                        put("masks", JSONArray().apply { renderMasks.forEach { put(it.toJsonObject()) } })
+                        put(
+                            "preview",
+                            JSONObject().apply {
+                                put("useZoom", true)
+                                put("maxDimension", cropPreviewMaxDim)
+                            }
+                        )
+                    }.toString()
+                } else {
+                    adjustments.toJson(renderMasks)
+                }
             }
         val version = renderVersion.incrementAndGet()
         renderRequests.trySend(
@@ -2189,10 +2255,25 @@ internal fun EditorScreen(
         val handle = sessionHandle
         if (handle == 0L) return@LaunchedEffect
 
+        val cropPreviewMaxDim = previewMaxDimensionForRegion(combinedPreviewRegion(adjustments.crop, null), previewContainerSize)
         val initialJson =
             withContext(Dispatchers.Default) {
                 val currentTransform = adjustments.toMaskTransformState()
-                adjustments.toJson(masksForRenderWithAiRemap(masks, currentTransform, adjustments))
+                val renderMasks = masksForRenderWithAiRemap(masks, currentTransform, adjustments)
+                if (cropPreviewMaxDim != null) {
+                    adjustments.toJsonObject(includeToneMapper = true).apply {
+                        put("masks", JSONArray().apply { renderMasks.forEach { put(it.toJsonObject()) } })
+                        put(
+                            "preview",
+                            JSONObject().apply {
+                                put("useZoom", true)
+                                put("maxDimension", cropPreviewMaxDim)
+                            }
+                        )
+                    }.toString()
+                } else {
+                    adjustments.toJson(renderMasks)
+                }
             }
         renderRequests.trySend(
             RenderRequest(
@@ -2739,8 +2820,7 @@ internal fun EditorScreen(
         applyEditHistoryEntry(entry)
     }
 
-    val onPreviewViewportRoiChange: (CropState?, Float) -> Unit = { roi, scale ->
-        viewportScale = scale
+    val onPreviewViewportRoiChange: (CropState?, Float) -> Unit = { roi, _ ->
         viewportRoiForDebounce = roi
         currentViewportRoi.set(roi)
         if (roi == null) {
@@ -2755,16 +2835,21 @@ internal fun EditorScreen(
         if (isCropMode) return@LaunchedEffect
         if (isComparingOriginal) return@LaunchedEffect
 
-        snapshotFlow { viewportRoiForDebounce?.normalized() to viewportScale }
+        snapshotFlow { viewportRoiForDebounce?.normalized() }
             .debounce(1000)
-            .collect { (roi, scale) ->
+            .collect { roi ->
                 if (isDraggingMaskHandle) return@collect
                 if (sessionHandle != handle) return@collect
                 if (isCropMode) return@collect
                 if (isComparingOriginal) return@collect
 
                 if (roi != null) {
-                    val maxDim = zoomMaxDimensionForScale(scale)
+                    val maxDim =
+                        previewMaxDimensionForRegion(
+                            combinedPreviewRegion(adjustments.crop, roi),
+                            previewContainerSize,
+                            fallback = PREVIEW_DEFAULT_MAX_DIM
+                        ) ?: PREVIEW_DEFAULT_MAX_DIM
                     val json =
                         withContext(Dispatchers.Default) {
                             val currentTransform = adjustments.toMaskTransformState()
@@ -2898,8 +2983,12 @@ internal fun EditorScreen(
                             .fillMaxWidth()
                             .weight(1f)) {
                             Column(modifier = Modifier.fillMaxSize()) {
-                                Box(modifier = Modifier
-                                    .weight(1f)) {
+                                Box(
+                                    modifier =
+                                        Modifier
+                                            .weight(1f)
+                                            .onSizeChanged { previewContainerSize = it }
+                                ) {
                                     Box {
                                         ImagePreview(
                                             bitmap = if (isComparingOriginal) originalBitmap ?: displayBitmap else displayBitmap,
