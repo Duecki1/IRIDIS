@@ -75,6 +75,7 @@ import androidx.compose.material3.IconButtonDefaults
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 private enum class CropHandle {
     Move,
@@ -327,10 +328,20 @@ internal fun ImagePreview(
                             .fillMaxSize()
                             .graphicsLayer(scaleX = scale, scaleY = scale, translationX = offsetX, translationY = offsetY)
                 ) {
-                    val roiLeftPx = left + viewportRoiSnapshot.x * displayW
-                    val roiTopPx = top + viewportRoiSnapshot.y * displayH
-                    val roiWPx = (viewportRoiSnapshot.width * displayW).coerceAtLeast(1f)
-                    val roiHPx = (viewportRoiSnapshot.height * displayH).coerceAtLeast(1f)
+                    val roiWNorm = viewportRoiSnapshot.width.coerceAtLeast(0.0001f)
+                    val roiHNorm = viewportRoiSnapshot.height.coerceAtLeast(0.0001f)
+                    val zoomW = (viewportBmp.width.toFloat() / roiWNorm).coerceAtLeast(1f)
+                    val zoomH = (viewportBmp.height.toFloat() / roiHNorm).coerceAtLeast(1f)
+                    val roiX = (viewportRoiSnapshot.x * zoomW).roundToInt().coerceIn(0, (zoomW - 1f).toInt())
+                    val roiY = (viewportRoiSnapshot.y * zoomH).roundToInt().coerceIn(0, (zoomH - 1f).toInt())
+                    val alignedRoiX = roiX.toFloat() / zoomW
+                    val alignedRoiY = roiY.toFloat() / zoomH
+                    val alignedRoiW = viewportBmp.width.toFloat() / zoomW
+                    val alignedRoiH = viewportBmp.height.toFloat() / zoomH
+                    val roiLeftPx = left + alignedRoiX * displayW
+                    val roiTopPx = top + alignedRoiY * displayH
+                    val roiWPx = (alignedRoiW * displayW).coerceAtLeast(1f)
+                    val roiHPx = (alignedRoiH * displayH).coerceAtLeast(1f)
                     val dst = android.graphics.RectF(roiLeftPx, roiTopPx, roiLeftPx + roiWPx, roiTopPx + roiHPx)
                     drawIntoCanvas { canvas ->
                         canvas.nativeCanvas.drawBitmap(viewportBmp, null, dst, viewportPaint)
