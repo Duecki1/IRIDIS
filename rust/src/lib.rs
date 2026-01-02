@@ -1474,6 +1474,72 @@ fn box_blur_u8(src: &[u8], width: usize, height: usize, radius: usize) -> Vec<u8
     dst
 }
 
+fn box_blur_f32(src: &[f32], width: usize, height: usize, radius: usize) -> Vec<f32> {
+    if radius == 0 || width == 0 || height == 0 {
+        return src.to_vec();
+    }
+    let w = width;
+    let h = height;
+    let r = radius;
+    let mut tmp = vec![0.0f32; w * h];
+    let mut dst = vec![0.0f32; w * h];
+
+    // Horizontal pass
+    for y in 0..h {
+        let row = y * w;
+        let denom = (2 * r + 1) as f32;
+        let mut sum: f32 = 0.0;
+
+        // x = 0 window: replicate edge pixels.
+        sum += src[row] * (r as f32 + 1.0);
+        let max_ix = r.min(w - 1);
+        for ix in 1..=max_ix {
+            sum += src[row + ix];
+        }
+        let repeats = r.saturating_sub(max_ix) as f32;
+        if repeats > 0.0 {
+            sum += src[row + (w - 1)] * repeats;
+        }
+        tmp[row] = sum / denom;
+
+        for x in 1..w {
+            let add_x = (x + r).min(w - 1);
+            let sub_x = x.saturating_sub(r + 1).min(w - 1);
+            sum += src[row + add_x];
+            sum -= src[row + sub_x];
+            tmp[row + x] = sum / denom;
+        }
+    }
+
+    // Vertical pass
+    for x in 0..w {
+        let denom = (2 * r + 1) as f32;
+        let mut sum: f32 = 0.0;
+
+        // y = 0 window: replicate edge pixels.
+        sum += tmp[x] * (r as f32 + 1.0);
+        let max_iy = r.min(h - 1);
+        for iy in 1..=max_iy {
+            sum += tmp[iy * w + x];
+        }
+        let repeats = r.saturating_sub(max_iy) as f32;
+        if repeats > 0.0 {
+            sum += tmp[(h - 1) * w + x] * repeats;
+        }
+        dst[x] = sum / denom;
+
+        for y in 1..h {
+            let add_y = (y + r).min(h - 1);
+            let sub_y = y.saturating_sub(r + 1).min(h - 1);
+            sum += tmp[add_y * w + x];
+            sum -= tmp[sub_y * w + x];
+            dst[y * w + x] = sum / denom;
+        }
+    }
+
+    dst
+}
+
 fn generate_mask_bitmap(sub_masks: &[SubMaskPayload], width: u32, height: u32) -> Vec<u8> {
     let len = (width * height) as usize;
     let mut mask = vec![0u8; len];
@@ -1506,6 +1572,125 @@ fn generate_mask_bitmap(sub_masks: &[SubMaskPayload], width: u32, height: u32) -
 
 fn get_luma(color: [f32; 3]) -> f32 {
     color[0] * 0.2126 + color[1] * 0.7152 + color[2] * 0.0722
+}
+
+struct DetailBlurLuma {
+    sharpness: Option<Vec<f32>>,
+    clarity: Option<Vec<f32>>,
+    structure: Option<Vec<f32>>,
+}
+
+fn build_luma_buffer(linear: &[f32], width: u32, height: u32) -> Vec<f32> {
+    let mut luma = Vec::with_capacity((width as usize) * (height as usize));
+    if width == 0 || height == 0 {
+        return luma;
+    }
+    let count = (width as usize) * (height as usize);
+    for idx in 0..count {
+        let base = idx * 4;
+        let color = [linear[base], linear[base + 1], linear[base + 2]];
+        luma.push(get_luma(color));
+    }
+    luma
+}
+
+fn build_detail_blurs(
+    linear: &[f32],
+    width: u32,
+    height: u32,
+    want_sharpness: bool,
+    want_clarity: bool,
+    want_structure: bool,
+) -> Option<DetailBlurLuma> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    if !want_sharpness && !want_clarity && !want_structure {
+        return None;
+    }
+
+    const SHARPNESS_RADIUS: usize = 2;
+    const CLARITY_RADIUS: usize = 8;
+    const STRUCTURE_RADIUS: usize = 40;
+
+    let luma = build_luma_buffer(linear, width, height);
+    let sharpness = if want_sharpness {
+        Some(box_blur_f32(&luma, width as usize, height as usize, SHARPNESS_RADIUS))
+    } else {
+        None
+    };
+    let clarity = if want_clarity {
+        Some(box_blur_f32(&luma, width as usize, height as usize, CLARITY_RADIUS))
+    } else {
+        None
+    };
+    let structure = if want_structure {
+        Some(box_blur_f32(&luma, width as usize, height as usize, STRUCTURE_RADIUS))
+    } else {
+        None
+    };
+
+    Some(DetailBlurLuma {
+        sharpness,
+        clarity,
+        structure,
+    })
+}
+
+fn sample_linear_color(linear: &[f32], width: u32, height: u32, x: u32, y: u32) -> [f32; 3] {
+    if width == 0 || height == 0 {
+        return [0.0, 0.0, 0.0];
+    }
+    let clamped_x = x.min(width.saturating_sub(1));
+    let clamped_y = y.min(height.saturating_sub(1));
+    let idx = (clamped_y * width + clamped_x) as usize * 4;
+    [linear[idx], linear[idx + 1], linear[idx + 2]]
+}
+
+fn sample_ca_corrected_color(
+    linear: &[f32],
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+    ca_rc: f32,
+    ca_by: f32,
+) -> [f32; 3] {
+    if width == 0 || height == 0 {
+        return [0.0, 0.0, 0.0];
+    }
+    if ca_rc.abs() < 0.000001 && ca_by.abs() < 0.000001 {
+        return sample_linear_color(linear, width, height, x, y);
+    }
+
+    let center_x = width as f32 / 2.0;
+    let center_y = height as f32 / 2.0;
+    let current_x = x as f32;
+    let current_y = y as f32;
+    let dx = current_x - center_x;
+    let dy = current_y - center_y;
+    let dist = (dx * dx + dy * dy).sqrt();
+    if dist <= 0.000001 {
+        return sample_linear_color(linear, width, height, x, y);
+    }
+
+    let dir_x = dx / dist;
+    let dir_y = dy / dist;
+    let red_shift_x = dir_x * dist * ca_rc;
+    let red_shift_y = dir_y * dist * ca_rc;
+    let blue_shift_x = dir_x * dist * ca_by;
+    let blue_shift_y = dir_y * dist * ca_by;
+
+    let red_x = (current_x - red_shift_x).round().clamp(0.0, (width - 1) as f32) as u32;
+    let red_y = (current_y - red_shift_y).round().clamp(0.0, (height - 1) as f32) as u32;
+    let blue_x = (current_x - blue_shift_x).round().clamp(0.0, (width - 1) as f32) as u32;
+    let blue_y = (current_y - blue_shift_y).round().clamp(0.0, (height - 1) as f32) as u32;
+
+    let r = sample_linear_color(linear, width, height, red_x, red_y)[0];
+    let g = sample_linear_color(linear, width, height, x, y)[1];
+    let b = sample_linear_color(linear, width, height, blue_x, blue_y)[2];
+
+    [r, g, b]
 }
 
 fn rgb_to_hue(color: [f32; 3]) -> f32 {
@@ -1878,7 +2063,174 @@ fn apply_highlights_adjustment(mut colors: [f32; 3], highlights: f32) -> [f32; 3
     colors
 }
 
-fn apply_color_adjustments(mut colors: [f32; 3], settings: &AdjustmentValues) -> [f32; 3] {
+fn apply_dehaze(color: [f32; 3], amount: f32) -> [f32; 3] {
+    if amount.abs() < 0.00001 {
+        return color;
+    }
+
+    let atmospheric_light = [0.95, 0.97, 1.0];
+    if amount > 0.0 {
+        let dark_channel = color[0].min(color[1]).min(color[2]);
+        let transmission_estimate = 1.0 - dark_channel;
+        let t = 1.0 - amount * transmission_estimate;
+        let recovered = [
+            (color[0] - atmospheric_light[0]) / t.max(0.1) + atmospheric_light[0],
+            (color[1] - atmospheric_light[1]) / t.max(0.1) + atmospheric_light[1],
+            (color[2] - atmospheric_light[2]) / t.max(0.1) + atmospheric_light[2],
+        ];
+        let mut result = [
+            color[0] + (recovered[0] - color[0]) * amount,
+            color[1] + (recovered[1] - color[1]) * amount,
+            color[2] + (recovered[2] - color[2]) * amount,
+        ];
+        result = [
+            0.5 + (result[0] - 0.5) * (1.0 + amount * 0.15),
+            0.5 + (result[1] - 0.5) * (1.0 + amount * 0.15),
+            0.5 + (result[2] - 0.5) * (1.0 + amount * 0.15),
+        ];
+        let luma = get_luma(result);
+        let sat_mix = 1.0 + amount * 0.1;
+        [
+            luma + (result[0] - luma) * sat_mix,
+            luma + (result[1] - luma) * sat_mix,
+            luma + (result[2] - luma) * sat_mix,
+        ]
+    } else {
+        let mix = amount.abs() * 0.7;
+        [
+            color[0] + (atmospheric_light[0] - color[0]) * mix,
+            color[1] + (atmospheric_light[1] - color[1]) * mix,
+            color[2] + (atmospheric_light[2] - color[2]) * mix,
+        ]
+    }
+}
+
+fn apply_creative_color(mut colors: [f32; 3], saturation: f32, vibrance: f32) -> [f32; 3] {
+    let luma = get_luma(colors);
+
+    if saturation != 0.0 {
+        let sat_mix = 1.0 + saturation;
+        colors[0] = luma + (colors[0] - luma) * sat_mix;
+        colors[1] = luma + (colors[1] - luma) * sat_mix;
+        colors[2] = luma + (colors[2] - luma) * sat_mix;
+    }
+
+    if vibrance != 0.0 {
+        let c_max = colors[0].max(colors[1]).max(colors[2]);
+        let c_min = colors[0].min(colors[1]).min(colors[2]);
+        let delta = c_max - c_min;
+
+        if delta >= 0.02 {
+            let current_sat = delta / c_max.max(0.001);
+
+            if vibrance > 0.0 {
+                let sat_mask = 1.0 - smoothstep(0.4, 0.9, current_sat);
+
+                let hue = rgb_to_hue(colors);
+                let skin_center = 25.0;
+                let hue_dist = (hue - skin_center).abs().min(360.0 - (hue - skin_center).abs());
+                let is_skin = smoothstep(35.0, 10.0, hue_dist);
+                let skin_dampener = 1.0 - is_skin * 0.4;
+
+                let amount = vibrance * sat_mask * skin_dampener * 3.0;
+                let vib_mix = 1.0 + amount;
+                colors[0] = luma + (colors[0] - luma) * vib_mix;
+                colors[1] = luma + (colors[1] - luma) * vib_mix;
+                colors[2] = luma + (colors[2] - luma) * vib_mix;
+            } else {
+                let desat_mask = 1.0 - smoothstep(0.2, 0.8, current_sat);
+                let amount = vibrance * desat_mask;
+                let vib_mix = 1.0 + amount;
+                colors[0] = luma + (colors[0] - luma) * vib_mix;
+                colors[1] = luma + (colors[1] - luma) * vib_mix;
+                colors[2] = luma + (colors[2] - luma) * vib_mix;
+            }
+        }
+    }
+
+    colors
+}
+
+fn compute_centre_mask(x: u32, y: u32, width: u32, height: u32) -> f32 {
+    if width == 0 || height == 0 {
+        return 0.0;
+    }
+    let full_w = width as f32;
+    let full_h = height as f32;
+    let aspect = full_h / full_w;
+    let uv_x = (x as f32 / full_w - 0.5) * 2.0;
+    let uv_y = (y as f32 / full_h - 0.5) * 2.0;
+    let d = ((uv_x * uv_x) + (uv_y * aspect) * (uv_y * aspect)).sqrt() * 0.5;
+    let midpoint = 0.4;
+    let feather = 0.375;
+    let vignette_mask = smoothstep(midpoint - feather, midpoint + feather, d);
+    1.0 - vignette_mask
+}
+
+fn apply_centre_tonal_and_color(colors: [f32; 3], centre_amount: f32, centre_mask: f32) -> [f32; 3] {
+    if centre_amount.abs() < 0.00001 {
+        return colors;
+    }
+
+    let exposure_boost = centre_mask * centre_amount * 0.5;
+    let mut processed = apply_filmic_brightness(colors, exposure_boost);
+
+    let vibrance_boost = centre_mask * centre_amount * 0.4;
+    let saturation_center_boost = centre_mask * centre_amount * 0.3;
+    let saturation_edge_effect = -(1.0 - centre_mask) * centre_amount * 0.8;
+    let total_saturation = saturation_center_boost + saturation_edge_effect;
+
+    processed = apply_creative_color(processed, total_saturation, vibrance_boost);
+    processed
+}
+
+fn apply_local_contrast_from_luma(color: [f32; 3], blurred_luma: f32, amount: f32) -> [f32; 3] {
+    if amount.abs() < 0.00001 {
+        return color;
+    }
+
+    let center_luma = get_luma(color);
+    let shadow_protection = smoothstep(0.0, 0.1, center_luma);
+    let highlight_protection = 1.0 - smoothstep(0.6, 1.0, center_luma);
+    let midtone_mask = shadow_protection * highlight_protection;
+    if midtone_mask < 0.001 {
+        return color;
+    }
+
+    let safe_center_luma = center_luma.max(0.0001);
+    let blurred_color = [
+        color[0] * (blurred_luma / safe_center_luma),
+        color[1] * (blurred_luma / safe_center_luma),
+        color[2] * (blurred_luma / safe_center_luma),
+    ];
+
+    let final_color = if amount < 0.0 {
+        [
+            color[0] + (blurred_color[0] - color[0]) * -amount,
+            color[1] + (blurred_color[1] - color[1]) * -amount,
+            color[2] + (blurred_color[2] - color[2]) * -amount,
+        ]
+    } else {
+        let detail = [
+            color[0] - blurred_color[0],
+            color[1] - blurred_color[1],
+            color[2] - blurred_color[2],
+        ];
+        [
+            color[0] + detail[0] * amount * 1.5,
+            color[1] + detail[1] * amount * 1.5,
+            color[2] + detail[2] * amount * 1.5,
+        ]
+    };
+
+    [
+        color[0] + (final_color[0] - color[0]) * midtone_mask,
+        color[1] + (final_color[1] - color[1]) * midtone_mask,
+        color[2] + (final_color[2] - color[2]) * midtone_mask,
+    ]
+}
+
+fn apply_color_adjustments(mut colors: [f32; 3], settings: &AdjustmentValues, centre_mask: f32) -> [f32; 3] {
     // Exposure (linear, RapidRAW-like): color *= 2^exposure
     if settings.exposure != 0.0 {
         let factor = 2f32.powf(settings.exposure);
@@ -1886,6 +2238,9 @@ fn apply_color_adjustments(mut colors: [f32; 3], settings: &AdjustmentValues) ->
         colors[1] *= factor;
         colors[2] *= factor;
     }
+
+    colors = apply_dehaze(colors, settings.dehaze);
+    colors = apply_centre_tonal_and_color(colors, settings.centre, centre_mask);
 
     // Temperature and Tint adjustment (applied early like RapidRAW)
     // RapidRAW: temp_kelvin_mult = vec3(1.0 + temp * 0.2, 1.0 + temp * 0.05, 1.0 - temp * 0.2)
@@ -1926,72 +2281,7 @@ fn apply_color_adjustments(mut colors: [f32; 3], settings: &AdjustmentValues) ->
         settings.color_grading.balance,
     );
 
-    let luma = get_luma(colors);
-    
-    // Saturation adjustment - RapidRAW: mix(vec3(luma), processed, 1.0 + sat)
-    if settings.saturation != 0.0 {
-        let sat_mix = 1.0 + settings.saturation;
-        colors[0] = luma + (colors[0] - luma) * sat_mix;
-        colors[1] = luma + (colors[1] - luma) * sat_mix;
-        colors[2] = luma + (colors[2] - luma) * sat_mix;
-    }
-
-    // Vibrance adjustment - RapidRAW implementation with skin tone protection
-    if settings.vibrance != 0.0 {
-        let c_max = colors[0].max(colors[1]).max(colors[2]);
-        let c_min = colors[0].min(colors[1]).min(colors[2]);
-        let delta = c_max - c_min;
-        
-        if delta >= 0.02 {
-            let current_sat = delta / c_max.max(0.001);
-            
-            if settings.vibrance > 0.0 {
-                // Positive vibrance: affect low saturation colors more, protect skin tones
-                let sat_mask = 1.0 - smoothstep(0.4, 0.9, current_sat);
-                
-                // Skin tone protection (hue around 25 degrees)
-                let hue = rgb_to_hue(colors);
-                let skin_center = 25.0;
-                let hue_dist = (hue - skin_center).abs().min(360.0 - (hue - skin_center).abs());
-                let is_skin = smoothstep(35.0, 10.0, hue_dist);
-                let skin_dampener = 1.0 - is_skin * 0.4; // mix(1.0, 0.6, is_skin)
-                
-                let amount = settings.vibrance * sat_mask * skin_dampener * 3.0;
-                let vib_mix = 1.0 + amount;
-                colors[0] = luma + (colors[0] - luma) * vib_mix;
-                colors[1] = luma + (colors[1] - luma) * vib_mix;
-                colors[2] = luma + (colors[2] - luma) * vib_mix;
-            } else {
-                // Negative vibrance: desaturate already saturated colors
-                let desat_mask = 1.0 - smoothstep(0.2, 0.8, current_sat);
-                let amount = settings.vibrance * desat_mask;
-                let vib_mix = 1.0 + amount;
-                colors[0] = luma + (colors[0] - luma) * vib_mix;
-                colors[1] = luma + (colors[1] - luma) * vib_mix;
-                colors[2] = luma + (colors[2] - luma) * vib_mix;
-            }
-        }
-    }
-
-    // Clarity, Dehaze, Structure, and Centré adjustments
-    let clarity_gain = settings.clarity / 100.0 * 0.15;
-    let dehaze_gain = settings.dehaze / 500.0;
-    let structure_gain = settings.structure / 200.0 * 0.1;
-    let centre_gain = settings.centre / 200.0 * 0.08;
-    let detail_mask = ((luma - 0.5) * 2.0).clamp(-1.0, 1.0);
-    
-    for channel in colors.iter_mut() {
-        *channel += clarity_gain * detail_mask;
-        *channel += dehaze_gain * (luma - 0.5);
-        *channel += structure_gain * detail_mask;
-        *channel += centre_gain * detail_mask.abs();
-    }
-
-    // Sharpness (basic local contrast enhancement)
-    let sharpness_gain = settings.sharpness / 100.0 * 0.12;
-    for channel in colors.iter_mut() {
-        *channel += sharpness_gain * detail_mask;
-    }
+    colors = apply_creative_color(colors, settings.saturation, settings.vibrance);
     
     // Keep HDR headroom for tone mapping later, but clamp for safety to avoid NaNs/inf and
     // runaway values on extreme slider settings.
@@ -2004,6 +2294,47 @@ fn apply_color_adjustments(mut colors: [f32; 3], settings: &AdjustmentValues) ->
         *channel = channel.clamp(0.0, MAX_HDR);
     }
 
+    colors
+}
+
+fn apply_local_contrast_stack(
+    mut colors: [f32; 3],
+    idx: usize,
+    centre_mask: f32,
+    settings: &AdjustmentValues,
+    blurs: &DetailBlurLuma,
+) -> [f32; 3] {
+    if settings.sharpness.abs() > 0.00001 {
+        if let Some(blurred) = blurs.sharpness.as_ref() {
+            if let Some(luma) = blurred.get(idx) {
+                colors = apply_local_contrast_from_luma(colors, *luma, settings.sharpness);
+            }
+        }
+    }
+    if settings.clarity.abs() > 0.00001 {
+        if let Some(blurred) = blurs.clarity.as_ref() {
+            if let Some(luma) = blurred.get(idx) {
+                colors = apply_local_contrast_from_luma(colors, *luma, settings.clarity);
+            }
+        }
+    }
+    if settings.structure.abs() > 0.00001 {
+        if let Some(blurred) = blurs.structure.as_ref() {
+            if let Some(luma) = blurred.get(idx) {
+                colors = apply_local_contrast_from_luma(colors, *luma, settings.structure);
+            }
+        }
+    }
+    if settings.centre.abs() > 0.00001 {
+        if let Some(blurred) = blurs.clarity.as_ref() {
+            if let Some(luma) = blurred.get(idx) {
+                let clarity_strength = settings.centre * (2.0 * centre_mask - 1.0) * 0.9;
+                if clarity_strength.abs() > 0.001 {
+                    colors = apply_local_contrast_from_luma(colors, *luma, clarity_strength);
+                }
+            }
+        }
+    }
     colors
 }
 
@@ -2374,6 +2705,28 @@ fn render_linear_with_payload(
     let linear = linear_buffer.as_raw();
     debug_assert_eq!(linear.len(), (width as usize) * (height as usize) * 4);
 
+    let need_sharpness =
+        adjustment_values.sharpness.abs() > 0.00001 ||
+            mask_runtimes.iter().any(|m| m.adjustments.sharpness.abs() > 0.00001);
+    let need_clarity =
+        adjustment_values.clarity.abs() > 0.00001 ||
+            adjustment_values.centre.abs() > 0.00001 ||
+            mask_runtimes.iter().any(|m| {
+                m.adjustments.clarity.abs() > 0.00001 || m.adjustments.centre.abs() > 0.00001
+            });
+    let need_structure =
+        adjustment_values.structure.abs() > 0.00001 ||
+            mask_runtimes.iter().any(|m| m.adjustments.structure.abs() > 0.00001);
+    let need_centre_mask =
+        adjustment_values.centre.abs() > 0.00001 ||
+            mask_runtimes.iter().any(|m| m.adjustments.centre.abs() > 0.00001);
+
+    let detail_blurs = build_detail_blurs(linear, width, height, need_sharpness, need_clarity, need_structure);
+
+    let ca_rc = adjustment_values.chromatic_aberration_red_cyan;
+    let ca_by = adjustment_values.chromatic_aberration_blue_yellow;
+    let ca_active = ca_rc.abs() > 0.000001 || ca_by.abs() > 0.000001;
+
     let len = (width as usize)
         .checked_mul(height as usize)
         .and_then(|v| v.checked_mul(3))
@@ -2382,16 +2735,28 @@ fn render_linear_with_payload(
 
     for (idx, out) in rgb.chunks_exact_mut(3).enumerate() {
         let base = idx * 4;
+        let x = (idx as u32) % width;
+        let y = (idx as u32) / width;
 
         // Start with linear RAW pixel data
-        let mut colors = [linear[base], linear[base + 1], linear[base + 2]];
+        let mut colors =
+            if ca_active {
+                sample_ca_corrected_color(linear, width, height, x, y, ca_rc, ca_by)
+            } else {
+                [linear[base], linear[base + 1], linear[base + 2]]
+            };
 
         // Apply default RAW processing (brightness + contrast boost for Basic tone mapper)
         colors = apply_default_raw_processing(colors, use_basic_tone_mapper);
 
+        let centre_mask = if need_centre_mask { compute_centre_mask(x, y, width, height) } else { 0.0 };
+        if let Some(blurs) = detail_blurs.as_ref() {
+            colors = apply_local_contrast_stack(colors, idx, centre_mask, &adjustment_values, blurs);
+        }
+
         // RapidRAW-like mask compositing: apply globals once, then for each mask
         // mix toward a separately-adjusted result by mask influence.
-        let mut composite = apply_color_adjustments(colors, &adjustment_values);
+        let mut composite = apply_color_adjustments(colors, &adjustment_values, centre_mask);
         for mask in mask_runtimes {
             let mut selection = if let Some(bitmap) = &mask.bitmap {
                 bitmap.get(idx).copied().unwrap_or(0) as f32 / 255.0
@@ -2406,7 +2771,11 @@ fn render_linear_with_payload(
                 continue;
             }
 
-            let mask_adjusted = apply_color_adjustments(composite, &mask.adjustments);
+            let mut mask_base = composite;
+            if let Some(blurs) = detail_blurs.as_ref() {
+                mask_base = apply_local_contrast_stack(mask_base, idx, centre_mask, &mask.adjustments, blurs);
+            }
+            let mask_adjusted = apply_color_adjustments(mask_base, &mask.adjustments, centre_mask);
             composite = [
                 composite[0] + (mask_adjusted[0] - composite[0]) * influence,
                 composite[1] + (mask_adjusted[1] - composite[1]) * influence,
@@ -2527,6 +2896,28 @@ fn render_linear_roi_with_payload(
     let linear = linear_buffer.as_raw();
     debug_assert_eq!(linear.len(), (width as usize) * (height as usize) * 4);
 
+    let need_sharpness =
+        adjustment_values.sharpness.abs() > 0.00001 ||
+            mask_runtimes.iter().any(|m| m.adjustments.sharpness.abs() > 0.00001);
+    let need_clarity =
+        adjustment_values.clarity.abs() > 0.00001 ||
+            adjustment_values.centre.abs() > 0.00001 ||
+            mask_runtimes.iter().any(|m| {
+                m.adjustments.clarity.abs() > 0.00001 || m.adjustments.centre.abs() > 0.00001
+            });
+    let need_structure =
+        adjustment_values.structure.abs() > 0.00001 ||
+            mask_runtimes.iter().any(|m| m.adjustments.structure.abs() > 0.00001);
+    let need_centre_mask =
+        adjustment_values.centre.abs() > 0.00001 ||
+            mask_runtimes.iter().any(|m| m.adjustments.centre.abs() > 0.00001);
+
+    let detail_blurs = build_detail_blurs(linear, width, height, need_sharpness, need_clarity, need_structure);
+
+    let ca_rc = adjustment_values.chromatic_aberration_red_cyan;
+    let ca_by = adjustment_values.chromatic_aberration_blue_yellow;
+    let ca_active = ca_rc.abs() > 0.000001 || ca_by.abs() > 0.000001;
+
     let len = (roi_w as usize)
         .checked_mul(roi_h as usize)
         .and_then(|v| v.checked_mul(3))
@@ -2541,14 +2932,25 @@ fn render_linear_roi_with_payload(
             let base = idx_full * 4;
 
             // Start with linear RAW pixel data
-            let mut colors = [linear[base], linear[base + 1], linear[base + 2]];
+            let mut colors =
+                if ca_active {
+                    sample_ca_corrected_color(linear, width, height, full_x, full_y, ca_rc, ca_by)
+                } else {
+                    [linear[base], linear[base + 1], linear[base + 2]]
+                };
 
             // Apply default RAW processing (brightness + contrast boost for Basic tone mapper)
             colors = apply_default_raw_processing(colors, use_basic_tone_mapper);
 
+            let centre_mask =
+                if need_centre_mask { compute_centre_mask(full_x, full_y, width, height) } else { 0.0 };
+            if let Some(blurs) = detail_blurs.as_ref() {
+                colors = apply_local_contrast_stack(colors, idx_full, centre_mask, &adjustment_values, blurs);
+            }
+
             // RapidRAW-like mask compositing: apply globals once, then for each mask
             // mix toward a separately-adjusted result by mask influence.
-            let mut composite = apply_color_adjustments(colors, &adjustment_values);
+            let mut composite = apply_color_adjustments(colors, &adjustment_values, centre_mask);
             for mask in mask_runtimes {
                 let mut selection = if let Some(bitmap) = &mask.bitmap {
                     bitmap.get(idx_full).copied().unwrap_or(0) as f32 / 255.0
@@ -2563,7 +2965,11 @@ fn render_linear_roi_with_payload(
                     continue;
                 }
 
-                let mask_adjusted = apply_color_adjustments(composite, &mask.adjustments);
+                let mut mask_base = composite;
+                if let Some(blurs) = detail_blurs.as_ref() {
+                    mask_base = apply_local_contrast_stack(mask_base, idx_full, centre_mask, &mask.adjustments, blurs);
+                }
+                let mask_adjusted = apply_color_adjustments(mask_base, &mask.adjustments, centre_mask);
                 composite = [
                     composite[0] + (mask_adjusted[0] - composite[0]) * influence,
                     composite[1] + (mask_adjusted[1] - composite[1]) * influence,
