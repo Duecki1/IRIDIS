@@ -5,11 +5,27 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.io.File
 import java.util.UUID
+
+private const val MAX_EDIT_HISTORY_ENTRIES = 200
+
 class ProjectStorage(private val context: Context) {
     private val gson = Gson()
 
     private val projectsDir = File(context.filesDir, "projects")
     private val projectsIndexFile = File(context.filesDir, "projects.json")
+
+    enum class EditHistorySource {
+        Local,
+        Immich
+    }
+
+    data class EditHistoryEntry(
+        val id: String,
+        val source: EditHistorySource,
+        val updatedAtMs: Long,
+        val editsJson: String,
+        val parentId: String? = null
+    )
 
     init {
         projectsDir.mkdirs()
@@ -128,6 +144,34 @@ class ProjectStorage(private val context: Context) {
             )
         saveProjectIndex(projects)
     }
+
+    fun loadEditHistory(projectId: String): List<EditHistoryEntry> {
+        val file = editHistoryFile(projectId)
+        if (!file.exists()) return emptyList()
+        return runCatching {
+            val json = file.readText()
+            val type = object : TypeToken<List<EditHistoryEntry>>() {}.type
+            gson.fromJson<List<EditHistoryEntry>>(json, type) ?: emptyList()
+        }.getOrDefault(emptyList())
+    }
+
+    fun appendEditHistory(projectId: String, entry: EditHistoryEntry) {
+        appendEditHistoryEntries(projectId, listOf(entry))
+    }
+
+    fun appendEditHistoryEntries(projectId: String, entries: List<EditHistoryEntry>) {
+        if (entries.isEmpty()) return
+        val projectDir = File(projectsDir, projectId)
+        if (!projectDir.exists()) return
+        val file = editHistoryFile(projectId)
+        val current = loadEditHistory(projectId)
+        val merged =
+            (current + entries)
+                .distinctBy { it.id }
+                .sortedBy { it.updatedAtMs }
+                .takeLast(MAX_EDIT_HISTORY_ENTRIES)
+        file.writeText(gson.toJson(merged))
+    }
     
     fun getAllProjects(): List<ProjectMetadata> {
         if (!projectsIndexFile.exists()) return emptyList()
@@ -218,6 +262,10 @@ class ProjectStorage(private val context: Context) {
     private fun saveProjectIndex(projects: List<ProjectMetadata>) {
         val json = gson.toJson(projects)
         projectsIndexFile.writeText(json)
+    }
+
+    private fun editHistoryFile(projectId: String): File {
+        return File(projectsDir, "$projectId/edits_history.json")
     }
     
     fun saveThumbnail(projectId: String, thumbnailBytes: ByteArray) {

@@ -20,6 +20,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -33,6 +34,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -50,6 +52,7 @@ import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.automirrored.rounded.Redo
 import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -59,6 +62,7 @@ import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -184,11 +188,16 @@ internal fun EditorScreen(
     val context = LocalContext.current
     val storage = remember { ProjectStorage(context) }
     val appPreferences = remember(context) { AppPreferences(context) }
-    data class ImmichSidecarSyncRequest(val updatedAtMs: Long, val editsJson: String)
+    data class ImmichSidecarSyncRequest(
+        val updatedAtMs: Long,
+        val editsJson: String,
+        val parentRevisionId: String?
+    )
     val immichSidecarSyncRequests =
         remember(galleryItem.projectId) { Channel<ImmichSidecarSyncRequest>(capacity = Channel.CONFLATED) }
     var lastImmichSidecarSyncRequest by remember(galleryItem.projectId) { mutableStateOf<ImmichSidecarSyncRequest?>(null) }
     var isImmichSidecarSyncing by remember(galleryItem.projectId) { mutableStateOf(false) }
+    val immichSyncIdleMs = 30_000L
 
     fun resolveImmichConfigOrNull(): ImmichConfig? {
         val server = appPreferences.getImmichServerUrl().trim()
@@ -201,10 +210,13 @@ internal fun EditorScreen(
         return ImmichConfig(serverUrl = server, authMode = authMode, apiKey = apiKey, accessToken = accessToken)
     }
 
-    suspend fun fetchRemoteIridisSidecarFromAsset(config: ImmichConfig, assetId: String): com.dueckis.kawaiiraweditor.data.immich.IridisSidecar? {
-        val info = fetchImmichAssetInfo(config, assetId) ?: return null
-        val parsed = IridisSidecarDescription.parse(info.description) ?: return null
-        return parsed.sidecar
+    suspend fun fetchRemoteIridisSidecarHistory(
+        config: ImmichConfig,
+        assetId: String
+    ): List<IridisSidecarDescription.IridisSidecarHistoryEntry> {
+        val info = fetchImmichAssetInfo(config, assetId) ?: return emptyList()
+        val parsed = IridisSidecarDescription.parseHistory(info.description)
+        return parsed?.entries.orEmpty()
     }
 
     suspend fun uploadIridisSidecarToImmich(
@@ -223,15 +235,55 @@ internal fun EditorScreen(
             withContext(Dispatchers.IO) { storage.getImmichSidecarUpdatedAtMs(galleryItem.projectId) }
         if (!force && request.updatedAtMs <= alreadySyncedAtMs) return true
 
+        val revisionId = IridisSidecarDescription.buildRevisionId(request.updatedAtMs, request.editsJson)
+        withContext(Dispatchers.IO) {
+            storage.appendEditHistory(
+                projectId = galleryItem.projectId,
+                entry = ProjectStorage.EditHistoryEntry(
+                    id = revisionId,
+                    source = ProjectStorage.EditHistorySource.Local,
+                    updatedAtMs = request.updatedAtMs,
+                    editsJson = request.editsJson,
+                    parentId = request.parentRevisionId
+                )
+            )
+        }
+
         isImmichSidecarSyncing = true
         val info = fetchImmichAssetInfo(config, originImmichAssetId)
-        val remoteParsed = IridisSidecarDescription.parse(info?.description)
-        val remoteUpdatedAtMs = remoteParsed?.sidecar?.updatedAtMs ?: 0L
-        if (!force && remoteUpdatedAtMs > request.updatedAtMs) {
+        val remoteHistory = IridisSidecarDescription.parseHistory(info?.description)
+        val remoteEntries = remoteHistory?.entries.orEmpty()
+        if (remoteEntries.isNotEmpty()) {
+            withContext(Dispatchers.IO) {
+                storage.appendEditHistoryEntries(
+                    projectId = galleryItem.projectId,
+                    entries = remoteEntries.map {
+                        ProjectStorage.EditHistoryEntry(
+                            id = it.revisionId,
+                            source = ProjectStorage.EditHistorySource.Immich,
+                            updatedAtMs = it.updatedAtMs,
+                            editsJson = it.editsJson,
+                            parentId = it.parentRevisionId
+                        )
+                    }
+                )
+            }
+        }
+        if (remoteEntries.any { it.revisionId == revisionId }) {
             isImmichSidecarSyncing = false
+            withContext(Dispatchers.IO) {
+                storage.setImmichSidecarInfo(galleryItem.projectId, originImmichAssetId, request.updatedAtMs)
+            }
             return true
         }
-        val newDescription = IridisSidecarDescription.upsert(info?.description, request.editsJson, request.updatedAtMs)
+
+        val newDescription =
+            IridisSidecarDescription.appendHistory(
+                info?.description,
+                request.editsJson,
+                request.updatedAtMs,
+                parentRevisionId = request.parentRevisionId
+            )
         val result = updateImmichAssetDescription(config, originImmichAssetId, newDescription)
         isImmichSidecarSyncing = false
 
@@ -258,6 +310,12 @@ internal fun EditorScreen(
     }
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
+    var showEditTimelineDialog by remember(galleryItem.projectId) { mutableStateOf(false) }
+    var editTimelineEntries by remember(galleryItem.projectId) {
+        mutableStateOf<List<ProjectStorage.EditHistoryEntry>>(emptyList())
+    }
+    var lastSavedEditsJson by remember(galleryItem.projectId) { mutableStateOf<String?>(null) }
+    var currentRevisionId by remember(galleryItem.projectId) { mutableStateOf<String?>(null) }
     val configuration = LocalConfiguration.current
     val isTablet = configuration.screenWidthDp >= 600
 
@@ -265,6 +323,342 @@ internal fun EditorScreen(
     var adjustments by remember { mutableStateOf(AdjustmentState()) }
     var masks by remember { mutableStateOf<List<MaskState>>(emptyList()) }
     val maskNumbers = remember { mutableStateMapOf<String, Int>() }
+
+    data class ParsedEdits(
+        val adjustments: AdjustmentState,
+        val masks: List<MaskState>,
+        val detectedAiEnvironmentCategories: List<AiEnvironmentCategory>?
+    )
+
+    fun parseEditsJson(raw: String): ParsedEdits? {
+        if (raw.isBlank() || raw == "{}") return null
+        return runCatching {
+            val json = JSONObject(raw)
+            val savedDetected = json.optJSONArray("aiEnvironmentDetectedCategories")
+            val detected =
+                savedDetected?.let { arr ->
+                    (0 until arr.length()).mapNotNull { i ->
+                        val rawId = arr.optString(i).orEmpty().trim()
+                        if (rawId.isBlank()) null else AiEnvironmentCategory.fromId(rawId)
+                    }.distinct()
+                }?.takeIf { it.isNotEmpty() }
+
+            fun parseCurvePoints(curvesObj: JSONObject?, key: String): List<CurvePointState> {
+                val arr = curvesObj?.optJSONArray(key) ?: return com.dueckis.kawaiiraweditor.data.model.defaultCurvePoints()
+                val points =
+                    (0 until arr.length()).mapNotNull { idx ->
+                        val pObj = arr.optJSONObject(idx) ?: return@mapNotNull null
+                        CurvePointState(x = pObj.optDouble("x", 0.0).toFloat(), y = pObj.optDouble("y", 0.0).toFloat())
+                    }
+                return if (points.size >= 2) points else com.dueckis.kawaiiraweditor.data.model.defaultCurvePoints()
+            }
+
+            fun parseCurves(curvesObj: JSONObject?): CurvesState {
+                return CurvesState(
+                    luma = parseCurvePoints(curvesObj, "luma"),
+                    red = parseCurvePoints(curvesObj, "red"),
+                    green = parseCurvePoints(curvesObj, "green"),
+                    blue = parseCurvePoints(curvesObj, "blue")
+                )
+            }
+
+            fun parseHsl(obj: JSONObject?): HslState {
+                if (obj == null) return HslState()
+                fun parseHueSatLum(parent: JSONObject?, key: String): com.dueckis.kawaiiraweditor.data.model.HueSatLumState {
+                    val o = parent?.optJSONObject(key) ?: return com.dueckis.kawaiiraweditor.data.model.HueSatLumState()
+                    return com.dueckis.kawaiiraweditor.data.model.HueSatLumState(
+                        hue = o.optDouble("hue", 0.0).toFloat(),
+                        saturation = o.optDouble("saturation", 0.0).toFloat(),
+                        luminance = o.optDouble("luminance", 0.0).toFloat()
+                    )
+                }
+                return HslState(
+                    reds = parseHueSatLum(obj, "reds"),
+                    oranges = parseHueSatLum(obj, "oranges"),
+                    yellows = parseHueSatLum(obj, "yellows"),
+                    greens = parseHueSatLum(obj, "greens"),
+                    aquas = parseHueSatLum(obj, "aquas"),
+                    blues = parseHueSatLum(obj, "blues"),
+                    purples = parseHueSatLum(obj, "purples"),
+                    magentas = parseHueSatLum(obj, "magentas")
+                )
+            }
+
+            fun parseColorGrading(obj: JSONObject?): com.dueckis.kawaiiraweditor.data.model.ColorGradingState {
+                if (obj == null) return com.dueckis.kawaiiraweditor.data.model.ColorGradingState()
+                fun parseHueSatLum(parent: JSONObject?, key: String): com.dueckis.kawaiiraweditor.data.model.HueSatLumState {
+                    val o = parent?.optJSONObject(key) ?: return com.dueckis.kawaiiraweditor.data.model.HueSatLumState()
+                    return com.dueckis.kawaiiraweditor.data.model.HueSatLumState(
+                        hue = o.optDouble("hue", 0.0).toFloat(),
+                        saturation = o.optDouble("saturation", 0.0).toFloat(),
+                        luminance = o.optDouble("luminance", 0.0).toFloat()
+                    )
+                }
+                return com.dueckis.kawaiiraweditor.data.model.ColorGradingState(
+                    shadows = parseHueSatLum(obj, "shadows"),
+                    midtones = parseHueSatLum(obj, "midtones"),
+                    highlights = parseHueSatLum(obj, "highlights"),
+                    blending = obj.optDouble("blending", 50.0).toFloat(),
+                    balance = obj.optDouble("balance", 0.0).toFloat()
+                )
+            }
+
+            val parsedCurves = parseCurves(json.optJSONObject("curves"))
+            val parsedColorGrading = parseColorGrading(json.optJSONObject("colorGrading"))
+            val parsedHsl = parseHsl(json.optJSONObject("hsl"))
+            val parsedAspectRatio =
+                if (json.has("aspectRatio") && !json.isNull("aspectRatio")) json.optDouble("aspectRatio", 0.0).toFloat() else null
+            val parsedCrop =
+                json.optJSONObject("crop")?.let { cropObj ->
+                    CropState(
+                        x = cropObj.optDouble("x", 0.0).toFloat(),
+                        y = cropObj.optDouble("y", 0.0).toFloat(),
+                        width = cropObj.optDouble("width", 1.0).toFloat(),
+                        height = cropObj.optDouble("height", 1.0).toFloat()
+                    ).normalized()
+                }
+            val parsedAdjustments =
+                AdjustmentState(
+                    rotation = json.optDouble("rotation", 0.0).toFloat(),
+                    flipHorizontal = json.optBoolean("flipHorizontal", false),
+                    flipVertical = json.optBoolean("flipVertical", false),
+                    orientationSteps = json.optInt("orientationSteps", 0),
+                    aspectRatio = parsedAspectRatio,
+                    crop = parsedCrop,
+                    exposure = json.optDouble("exposure", 0.0).toFloat(),
+                    brightness = json.optDouble("brightness", 0.0).toFloat(),
+                    contrast = json.optDouble("contrast", 0.0).toFloat(),
+                    highlights = json.optDouble("highlights", 0.0).toFloat(),
+                    shadows = json.optDouble("shadows", 0.0).toFloat(),
+                    whites = json.optDouble("whites", 0.0).toFloat(),
+                    blacks = json.optDouble("blacks", 0.0).toFloat(),
+                    saturation = json.optDouble("saturation", 0.0).toFloat(),
+                    temperature = json.optDouble("temperature", 0.0).toFloat(),
+                    tint = json.optDouble("tint", 0.0).toFloat(),
+                    vibrance = json.optDouble("vibrance", 0.0).toFloat(),
+                    clarity = json.optDouble("clarity", 0.0).toFloat(),
+                    dehaze = json.optDouble("dehaze", 0.0).toFloat(),
+                    structure = json.optDouble("structure", 0.0).toFloat(),
+                    centre = json.optDouble("centre", 0.0).toFloat(),
+                    vignetteAmount = json.optDouble("vignetteAmount", 0.0).toFloat(),
+                    vignetteMidpoint = json.optDouble("vignetteMidpoint", 50.0).toFloat(),
+                    vignetteRoundness = json.optDouble("vignetteRoundness", 0.0).toFloat(),
+                    vignetteFeather = json.optDouble("vignetteFeather", 50.0).toFloat(),
+                    sharpness = json.optDouble("sharpness", 0.0).toFloat(),
+                    lumaNoiseReduction = json.optDouble("lumaNoiseReduction", 0.0).toFloat(),
+                    colorNoiseReduction = json.optDouble("colorNoiseReduction", 0.0).toFloat(),
+                    chromaticAberrationRedCyan = json.optDouble("chromaticAberrationRedCyan", 0.0).toFloat(),
+                    chromaticAberrationBlueYellow = json.optDouble("chromaticAberrationBlueYellow", 0.0).toFloat(),
+                    toneMapper = json.optString("toneMapper", "basic"),
+                    curves = parsedCurves,
+                    colorGrading = parsedColorGrading,
+                    hsl = parsedHsl
+                )
+
+            fun parseMaskTransform(obj: JSONObject?): MaskTransformState? {
+                if (obj == null) return null
+                val crop =
+                    obj.optJSONObject("crop")?.let { cropObj ->
+                        CropState(
+                            x = cropObj.optDouble("x", 0.0).toFloat(),
+                            y = cropObj.optDouble("y", 0.0).toFloat(),
+                            width = cropObj.optDouble("width", 1.0).toFloat(),
+                            height = cropObj.optDouble("height", 1.0).toFloat()
+                        ).normalized()
+                    }
+                return MaskTransformState(
+                    rotation = obj.optDouble("rotation", 0.0).toFloat(),
+                    flipHorizontal = obj.optBoolean("flipHorizontal", false),
+                    flipVertical = obj.optBoolean("flipVertical", false),
+                    orientationSteps = obj.optInt("orientationSteps", 0),
+                    crop = crop
+                )
+            }
+
+            val masksArr = json.optJSONArray("masks") ?: JSONArray()
+            val defaultTransform = parsedAdjustments.toMaskTransformState()
+            val parsedMasks =
+                (0 until masksArr.length()).mapNotNull { idx ->
+                    val maskObj = masksArr.optJSONObject(idx) ?: return@mapNotNull null
+                    val maskId = maskObj.optString("id").takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString()
+                    val maskAdjustmentsObj = maskObj.optJSONObject("adjustments") ?: JSONObject()
+                    val maskCurves = parseCurves(maskAdjustmentsObj.optJSONObject("curves"))
+                    val maskColorGrading = parseColorGrading(maskAdjustmentsObj.optJSONObject("colorGrading"))
+                    val maskHsl = parseHsl(maskAdjustmentsObj.optJSONObject("hsl"))
+                    val maskAdjustments =
+                        AdjustmentState(
+                            exposure = maskAdjustmentsObj.optDouble("exposure", 0.0).toFloat(),
+                            brightness = maskAdjustmentsObj.optDouble("brightness", 0.0).toFloat(),
+                            contrast = maskAdjustmentsObj.optDouble("contrast", 0.0).toFloat(),
+                            highlights = maskAdjustmentsObj.optDouble("highlights", 0.0).toFloat(),
+                            shadows = maskAdjustmentsObj.optDouble("shadows", 0.0).toFloat(),
+                            whites = maskAdjustmentsObj.optDouble("whites", 0.0).toFloat(),
+                            blacks = maskAdjustmentsObj.optDouble("blacks", 0.0).toFloat(),
+                            saturation = maskAdjustmentsObj.optDouble("saturation", 0.0).toFloat(),
+                            temperature = maskAdjustmentsObj.optDouble("temperature", 0.0).toFloat(),
+                            tint = maskAdjustmentsObj.optDouble("tint", 0.0).toFloat(),
+                            vibrance = maskAdjustmentsObj.optDouble("vibrance", 0.0).toFloat(),
+                            clarity = maskAdjustmentsObj.optDouble("clarity", 0.0).toFloat(),
+                            dehaze = maskAdjustmentsObj.optDouble("dehaze", 0.0).toFloat(),
+                            structure = maskAdjustmentsObj.optDouble("structure", 0.0).toFloat(),
+                            centre = maskAdjustmentsObj.optDouble("centre", 0.0).toFloat(),
+                            vignetteAmount = maskAdjustmentsObj.optDouble("vignetteAmount", 0.0).toFloat(),
+                            vignetteMidpoint = maskAdjustmentsObj.optDouble("vignetteMidpoint", 50.0).toFloat(),
+                            vignetteRoundness = maskAdjustmentsObj.optDouble("vignetteRoundness", 0.0).toFloat(),
+                            vignetteFeather = maskAdjustmentsObj.optDouble("vignetteFeather", 50.0).toFloat(),
+                            sharpness = maskAdjustmentsObj.optDouble("sharpness", 0.0).toFloat(),
+                            lumaNoiseReduction = maskAdjustmentsObj.optDouble("lumaNoiseReduction", 0.0).toFloat(),
+                            colorNoiseReduction = maskAdjustmentsObj.optDouble("colorNoiseReduction", 0.0).toFloat(),
+                            chromaticAberrationRedCyan = maskAdjustmentsObj.optDouble("chromaticAberrationRedCyan", 0.0).toFloat(),
+                            chromaticAberrationBlueYellow = maskAdjustmentsObj.optDouble("chromaticAberrationBlueYellow", 0.0).toFloat(),
+                            toneMapper = parsedAdjustments.toneMapper,
+                            curves = maskCurves,
+                            colorGrading = maskColorGrading,
+                            hsl = maskHsl
+                        )
+
+                    val subMasksArr = maskObj.optJSONArray("subMasks") ?: JSONArray()
+                    val subMasks =
+                        (0 until subMasksArr.length()).mapNotNull { sIdx ->
+                            val subObj = subMasksArr.optJSONObject(sIdx) ?: return@mapNotNull null
+                            val subId = subObj.optString("id").takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString()
+                            val subType = subObj.optString("type", SubMaskType.Brush.id).lowercase(Locale.US)
+                            val modeStr = subObj.optString("mode", "additive").lowercase(Locale.US)
+                            val mode = if (modeStr == "subtractive") SubMaskMode.Subtractive else SubMaskMode.Additive
+                            val paramsObj = subObj.optJSONObject("parameters") ?: JSONObject()
+                            val visible = subObj.optBoolean("visible", true)
+
+                            when (subType) {
+                                SubMaskType.Radial.id ->
+                                    SubMaskState(
+                                        id = subId,
+                                        type = SubMaskType.Radial.id,
+                                        visible = visible,
+                                        mode = mode,
+                                        radial =
+                                            RadialMaskParametersState(
+                                                centerX = paramsObj.optDouble("centerX", 0.5).toFloat(),
+                                                centerY = paramsObj.optDouble("centerY", 0.5).toFloat(),
+                                                radiusX = paramsObj.optDouble("radiusX", 0.35).toFloat(),
+                                                radiusY = paramsObj.optDouble("radiusY", 0.35).toFloat(),
+                                                rotation = paramsObj.optDouble("rotation", 0.0).toFloat(),
+                                                feather = paramsObj.optDouble("feather", 0.5).toFloat()
+                                            )
+                                    )
+
+                                SubMaskType.AiSubject.id ->
+                                    SubMaskState(
+                                        id = subId,
+                                        type = SubMaskType.AiSubject.id,
+                                        visible = visible,
+                                        mode = mode,
+                                        aiSubject =
+                                            com.dueckis.kawaiiraweditor.data.model.AiSubjectMaskParametersState(
+                                                maskDataBase64 = paramsObj.optString("maskDataBase64").takeIf { it.isNotBlank() },
+                                                softness = paramsObj.optDouble("softness", 0.25).toFloat().coerceIn(0f, 1f),
+                                                baseTransform = parseMaskTransform(paramsObj.optJSONObject("baseTransform")) ?: defaultTransform,
+                                                baseWidthPx = paramsObj.optInt("baseWidthPx", 0).takeIf { it > 0 },
+                                                baseHeightPx = paramsObj.optInt("baseHeightPx", 0).takeIf { it > 0 }
+                                            )
+                                    )
+
+                                SubMaskType.AiEnvironment.id ->
+                                    SubMaskState(
+                                        id = subId,
+                                        type = SubMaskType.AiEnvironment.id,
+                                        visible = visible,
+                                        mode = mode,
+                                        aiEnvironment =
+                                            com.dueckis.kawaiiraweditor.data.model.AiEnvironmentMaskParametersState(
+                                                category = paramsObj.optString("category", "sky"),
+                                                maskDataBase64 = paramsObj.optString("maskDataBase64").takeIf { it.isNotBlank() },
+                                                softness = paramsObj.optDouble("softness", 0.25).toFloat().coerceIn(0f, 1f),
+                                                baseTransform = parseMaskTransform(paramsObj.optJSONObject("baseTransform")) ?: defaultTransform,
+                                                baseWidthPx = paramsObj.optInt("baseWidthPx", 0).takeIf { it > 0 },
+                                                baseHeightPx = paramsObj.optInt("baseHeightPx", 0).takeIf { it > 0 }
+                                            )
+                                    )
+
+                                SubMaskType.Linear.id ->
+                                    SubMaskState(
+                                        id = subId,
+                                        type = SubMaskType.Linear.id,
+                                        visible = visible,
+                                        mode = mode,
+                                        linear =
+                                            com.dueckis.kawaiiraweditor.data.model.LinearMaskParametersState(
+                                                startX = paramsObj.optDouble("startX", 0.5).toFloat(),
+                                                startY = paramsObj.optDouble("startY", 0.2).toFloat(),
+                                                endX = paramsObj.optDouble("endX", 0.5).toFloat(),
+                                                endY = paramsObj.optDouble("endY", 0.8).toFloat(),
+                                                range = paramsObj.optDouble("range", 0.25).toFloat()
+                                            )
+                                    )
+
+                                else -> {
+                                    val linesArr = paramsObj.optJSONArray("lines") ?: JSONArray()
+                                    val lines =
+                                        (0 until linesArr.length()).mapNotNull { lIdx ->
+                                            val lineObj = linesArr.optJSONObject(lIdx) ?: return@mapNotNull null
+                                            val pointsArr = lineObj.optJSONArray("points") ?: JSONArray()
+                                            val points =
+                                                (0 until pointsArr.length()).mapNotNull { pIdx ->
+                                                    val pObj = pointsArr.optJSONObject(pIdx) ?: return@mapNotNull null
+                                                    MaskPoint(
+                                                        x = pObj.optDouble("x", 0.0).toFloat(),
+                                                        y = pObj.optDouble("y", 0.0).toFloat(),
+                                                        pressure = pObj.optDouble("pressure", 1.0).toFloat().coerceIn(0f, 1f)
+                                                    )
+                                                }
+                                            BrushLineState(
+                                                tool = lineObj.optString("tool", "brush"),
+                                                brushSize = lineObj.optDouble("brushSize", 50.0).toFloat(),
+                                                feather = lineObj.optDouble("feather", 0.5).toFloat(),
+                                                order = lineObj.optLong("order", 0L),
+                                                points = points
+                                            )
+                                        }
+                                    SubMaskState(
+                                        id = subId,
+                                        type = SubMaskType.Brush.id,
+                                        visible = visible,
+                                        mode = mode,
+                                        lines = lines
+                                    )
+                                }
+                            }
+                        }
+
+                    MaskState(
+                        id = maskId,
+                        name = maskObj.optString("name", ""),
+                        visible = maskObj.optBoolean("visible", true),
+                        invert = maskObj.optBoolean("invert", false),
+                        opacity = maskObj.optDouble("opacity", 100.0).toFloat(),
+                        adjustments = maskAdjustments,
+                        subMasks = subMasks
+                    )
+                }
+
+            ParsedEdits(adjustments = parsedAdjustments, masks = parsedMasks, detectedAiEnvironmentCategories = detected)
+        }.getOrNull()
+    }
+
+    suspend fun buildCurrentEditsJson(): String {
+        return withContext(Dispatchers.Default) {
+            val base = adjustments.toJson(masks)
+            val obj = JSONObject(base)
+            val detected = detectedAiEnvironmentCategories.orEmpty()
+            if (detected.isEmpty()) {
+                obj.remove("aiEnvironmentDetectedCategories")
+            } else {
+                val arr = JSONArray()
+                detected.forEach { arr.put(it.id) }
+                obj.put("aiEnvironmentDetectedCategories", arr)
+            }
+            obj.toString()
+        }
+    }
     val currentMaskTransform = adjustments.toMaskTransformState()
 
     fun assignNumber(maskId: String) {
@@ -352,7 +746,7 @@ internal fun EditorScreen(
         if (originImmichAssetId.isBlank()) return@LaunchedEffect
         immichSidecarSyncRequests
             .receiveAsFlow()
-            .debounce(1750)
+            .debounce(immichSyncIdleMs)
             .collect { request ->
                 uploadIridisSidecarToImmich(request, force = false, showToastOnFailure = false)
             }
@@ -953,6 +1347,122 @@ internal fun EditorScreen(
         }
     }
 
+    fun applyParsedEdits(parsed: ParsedEdits, resetHistory: Boolean) {
+        isRestoringEditHistory = true
+        adjustments = parsed.adjustments
+        masks = parsed.masks
+        detectedAiEnvironmentCategories = parsed.detectedAiEnvironmentCategories
+        val maxOrder = parsed.masks.flatMap { it.subMasks }.flatMap { it.lines }.maxOfOrNull { it.order } ?: 0L
+        strokeOrder.set(maxOf(strokeOrder.get(), maxOrder))
+        parsed.masks.forEach { assignNumber(it.id) }
+        if (parsed.masks.isNotEmpty() && selectedMaskId == null) {
+            selectedMaskId = parsed.masks.first().id
+            selectedSubMaskId = parsed.masks.first().subMasks.firstOrNull()?.id
+        }
+        normalizeMaskSelectionForCurrentState()
+        if (resetHistory) {
+            editHistory.clear()
+            editHistory.add(EditorHistoryEntry(adjustments = adjustments, masks = masks))
+            editHistoryIndex = 0
+        }
+        isRestoringEditHistory = false
+    }
+
+    fun openEditTimeline() {
+        coroutineScope.launch {
+            editTimelineEntries = withContext(Dispatchers.IO) { storage.loadEditHistory(galleryItem.projectId) }
+            showEditTimelineDialog = true
+        }
+    }
+
+    fun applyVersionEntry(entry: ProjectStorage.EditHistoryEntry) {
+        coroutineScope.launch {
+            val parsed = parseEditsJson(entry.editsJson)
+            if (parsed == null) {
+                Toast.makeText(context, "Could not load this edit.", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            if (entry.source == ProjectStorage.EditHistorySource.Immich) {
+                val backupJson = buildCurrentEditsJson()
+                val backupAt = System.currentTimeMillis()
+                val backupId = IridisSidecarDescription.buildRevisionId(backupAt, backupJson)
+                withContext(Dispatchers.IO) {
+                    storage.appendEditHistory(
+                        projectId = galleryItem.projectId,
+                        entry = ProjectStorage.EditHistoryEntry(
+                            id = backupId,
+                            source = ProjectStorage.EditHistorySource.Local,
+                            updatedAtMs = backupAt,
+                            editsJson = backupJson,
+                            parentId = currentRevisionId
+                        )
+                    )
+                }
+            }
+            lastSavedEditsJson = entry.editsJson
+            currentRevisionId = entry.id
+            applyParsedEdits(parsed, resetHistory = true)
+            withContext(Dispatchers.IO) {
+                storage.saveAdjustments(
+                    projectId = galleryItem.projectId,
+                    adjustmentsJson = entry.editsJson,
+                    updatedAtMs = entry.updatedAtMs
+                )
+                if (entry.source == ProjectStorage.EditHistorySource.Immich) {
+                    val assetId = galleryItem.immichAssetId
+                    if (!assetId.isNullOrBlank()) {
+                        storage.setImmichSidecarInfo(
+                            projectId = galleryItem.projectId,
+                            assetId = assetId,
+                            updatedAtMs = entry.updatedAtMs
+                        )
+                    }
+                }
+            }
+            showEditTimelineDialog = false
+        }
+    }
+
+    data class VersionTreeItem(
+        val entry: ProjectStorage.EditHistoryEntry,
+        val depth: Int,
+        val guides: List<Boolean>,
+        val isLast: Boolean
+    )
+
+    fun buildVersionTreeItems(entries: List<ProjectStorage.EditHistoryEntry>): List<VersionTreeItem> {
+        if (entries.isEmpty()) return emptyList()
+        val byId = entries.associateBy { it.id }
+        val childrenByParent = mutableMapOf<String?, MutableList<ProjectStorage.EditHistoryEntry>>()
+        entries.forEach { entry ->
+            val parentId = entry.parentId?.takeIf { byId.containsKey(it) }
+            childrenByParent.getOrPut(parentId) { mutableListOf() }.add(entry)
+        }
+        childrenByParent.values.forEach { list -> list.sortBy { it.updatedAtMs } }
+        val roots = childrenByParent[null].orEmpty().sortedBy { it.updatedAtMs }
+        val items = mutableListOf<VersionTreeItem>()
+
+        fun walk(
+            node: ProjectStorage.EditHistoryEntry,
+            depth: Int,
+            guides: List<Boolean>,
+            isLast: Boolean
+        ) {
+            items.add(VersionTreeItem(entry = node, depth = depth, guides = guides, isLast = isLast))
+            val children = childrenByParent[node.id].orEmpty()
+            children.forEachIndexed { index, child ->
+                val childIsLast = index == children.lastIndex
+                val nextGuides = guides + !isLast
+                walk(child, depth + 1, nextGuides, childIsLast)
+            }
+        }
+
+        roots.forEachIndexed { index, root ->
+            walk(root, 0, emptyList(), index == roots.lastIndex)
+        }
+        return items
+    }
+
     fun applyEditHistoryEntry(entry: EditorHistoryEntry) {
         isRestoringEditHistory = true
         adjustments = entry.adjustments
@@ -1098,361 +1608,111 @@ internal fun EditorScreen(
             return@LaunchedEffect
         }
 
+        val savedAdjustmentsJson = withContext(Dispatchers.IO) { storage.loadAdjustments(galleryItem.projectId) }
+        lastSavedEditsJson = savedAdjustmentsJson
+        var appliedFromRemote = false
+
         if (immichDescriptionSyncEnabled) {
             val immichConfig = resolveImmichConfigOrNull()
             val originImmichAssetId = galleryItem.immichAssetId?.trim().takeUnless { it.isNullOrBlank() }
             if (immichConfig != null && originImmichAssetId != null) {
                 runCatching {
-                    val localEditsUpdatedAtMs =
-                        withContext(Dispatchers.IO) { storage.getEditsUpdatedAtMs(galleryItem.projectId) }
-                    val remote = fetchRemoteIridisSidecarFromAsset(immichConfig, originImmichAssetId)
-                    if (remote != null) {
-                        val remoteUpdatedAtMs = remote.updatedAtMs
+                    val remoteEntries = fetchRemoteIridisSidecarHistory(immichConfig, originImmichAssetId)
+                    if (remoteEntries.isNotEmpty()) {
                         withContext(Dispatchers.IO) {
-                            storage.setImmichSidecarInfo(
+                            storage.appendEditHistoryEntries(
                                 projectId = galleryItem.projectId,
-                                assetId = originImmichAssetId,
-                                updatedAtMs = remoteUpdatedAtMs
+                                entries = remoteEntries.map {
+                                    ProjectStorage.EditHistoryEntry(
+                                        id = it.revisionId,
+                                        source = ProjectStorage.EditHistorySource.Immich,
+                                        updatedAtMs = it.updatedAtMs,
+                                        editsJson = it.editsJson,
+                                        parentId = it.parentRevisionId
+                                    )
+                                }
                             )
-                            if (remoteUpdatedAtMs > localEditsUpdatedAtMs && remote.editsJson.isNotBlank()) {
-                                storage.saveAdjustments(
+                        }
+                    }
+
+                    val latestRemote = remoteEntries.maxByOrNull { it.updatedAtMs }
+                    val localUpdatedAtMs =
+                        if (savedAdjustmentsJson.isBlank() || savedAdjustmentsJson == "{}") {
+                            0L
+                        } else {
+                            withContext(Dispatchers.IO) { storage.getEditsUpdatedAtMs(galleryItem.projectId) }
+                        }
+                    val localRevisionId =
+                        if (localUpdatedAtMs > 0L && savedAdjustmentsJson.isNotBlank() && savedAdjustmentsJson != "{}") {
+                            IridisSidecarDescription.buildRevisionId(localUpdatedAtMs, savedAdjustmentsJson)
+                        } else {
+                            null
+                        }
+                    if (latestRemote != null && latestRemote.updatedAtMs > localUpdatedAtMs && latestRemote.editsJson.isNotBlank()) {
+                        if (savedAdjustmentsJson.isNotBlank() && savedAdjustmentsJson != "{}") {
+                            val backupId = IridisSidecarDescription.buildRevisionId(localUpdatedAtMs, savedAdjustmentsJson)
+                            withContext(Dispatchers.IO) {
+                                storage.appendEditHistory(
                                     projectId = galleryItem.projectId,
-                                    adjustmentsJson = remote.editsJson,
-                                    updatedAtMs = remoteUpdatedAtMs
+                                    entry = ProjectStorage.EditHistoryEntry(
+                                        id = backupId,
+                                        source = ProjectStorage.EditHistorySource.Local,
+                                        updatedAtMs = localUpdatedAtMs,
+                                        editsJson = savedAdjustmentsJson,
+                                        parentId = localRevisionId
+                                    )
                                 )
                             }
                         }
+
+                        val parsedRemote = parseEditsJson(latestRemote.editsJson)
+                        if (parsedRemote != null) {
+                            applyParsedEdits(parsedRemote, resetHistory = true)
+                            withContext(Dispatchers.IO) {
+                                storage.saveAdjustments(
+                                    projectId = galleryItem.projectId,
+                                    adjustmentsJson = latestRemote.editsJson,
+                                    updatedAtMs = latestRemote.updatedAtMs
+                                )
+                                storage.setImmichSidecarInfo(
+                                    projectId = galleryItem.projectId,
+                                    assetId = originImmichAssetId,
+                                    updatedAtMs = latestRemote.updatedAtMs
+                                )
+                            }
+                            lastSavedEditsJson = latestRemote.editsJson
+                            appliedFromRemote = true
+                            currentRevisionId = latestRemote.revisionId
+                        }
+                    }
+                    if (!appliedFromRemote && localRevisionId != null) {
+                        currentRevisionId = localRevisionId
                     }
                 }.onFailure { error ->
-                    Log.w(logTag, "Failed to sync edits from Immich", error)
+                    Log.w(logTag, "Failed to ingest Immich edit history", error)
                 }
             }
         }
 
-        val savedAdjustmentsJson = withContext(Dispatchers.IO) { storage.loadAdjustments(galleryItem.projectId) }
-        if (savedAdjustmentsJson != "{}") {
-            try {
-                val json = JSONObject(savedAdjustmentsJson)
-
-                val savedDetected = json.optJSONArray("aiEnvironmentDetectedCategories")
-                if (savedDetected != null) {
-                    val parsed =
-                        (0 until savedDetected.length()).mapNotNull { i ->
-                            val rawId = savedDetected.optString(i).orEmpty().trim()
-                            if (rawId.isBlank()) null else AiEnvironmentCategory.fromId(rawId)
-                        }.distinct()
-                    detectedAiEnvironmentCategories = parsed.takeIf { it.isNotEmpty() }
-                }
-
-                fun parseCurvePoints(curvesObj: JSONObject?, key: String): List<CurvePointState> {
-                    val arr = curvesObj?.optJSONArray(key) ?: return com.dueckis.kawaiiraweditor.data.model.defaultCurvePoints()
-                    val points =
-                        (0 until arr.length()).mapNotNull { idx ->
-                            val pObj = arr.optJSONObject(idx) ?: return@mapNotNull null
-                            CurvePointState(x = pObj.optDouble("x", 0.0).toFloat(), y = pObj.optDouble("y", 0.0).toFloat())
-                        }
-                    return if (points.size >= 2) points else com.dueckis.kawaiiraweditor.data.model.defaultCurvePoints()
-                }
-
-                fun parseCurves(curvesObj: JSONObject?): CurvesState {
-                    return CurvesState(
-                        luma = parseCurvePoints(curvesObj, "luma"),
-                        red = parseCurvePoints(curvesObj, "red"),
-                        green = parseCurvePoints(curvesObj, "green"),
-                        blue = parseCurvePoints(curvesObj, "blue")
-                    )
-                }
-
-                fun parseHsl(obj: JSONObject?): HslState {
-                    if (obj == null) return HslState()
-                    fun parseHueSatLum(parent: JSONObject?, key: String): com.dueckis.kawaiiraweditor.data.model.HueSatLumState {
-                        val o = parent?.optJSONObject(key) ?: return com.dueckis.kawaiiraweditor.data.model.HueSatLumState()
-                        return com.dueckis.kawaiiraweditor.data.model.HueSatLumState(
-                            hue = o.optDouble("hue", 0.0).toFloat(),
-                            saturation = o.optDouble("saturation", 0.0).toFloat(),
-                            luminance = o.optDouble("luminance", 0.0).toFloat()
-                        )
-                    }
-                    return HslState(
-                        reds = parseHueSatLum(obj, "reds"),
-                        oranges = parseHueSatLum(obj, "oranges"),
-                        yellows = parseHueSatLum(obj, "yellows"),
-                        greens = parseHueSatLum(obj, "greens"),
-                        aquas = parseHueSatLum(obj, "aquas"),
-                        blues = parseHueSatLum(obj, "blues"),
-                        purples = parseHueSatLum(obj, "purples"),
-                        magentas = parseHueSatLum(obj, "magentas")
-                    )
-                }
-
-                fun parseColorGrading(obj: JSONObject?): com.dueckis.kawaiiraweditor.data.model.ColorGradingState {
-                    if (obj == null) return com.dueckis.kawaiiraweditor.data.model.ColorGradingState()
-                    fun parseHueSatLum(parent: JSONObject?, key: String): com.dueckis.kawaiiraweditor.data.model.HueSatLumState {
-                        val o = parent?.optJSONObject(key) ?: return com.dueckis.kawaiiraweditor.data.model.HueSatLumState()
-                        return com.dueckis.kawaiiraweditor.data.model.HueSatLumState(
-                            hue = o.optDouble("hue", 0.0).toFloat(),
-                            saturation = o.optDouble("saturation", 0.0).toFloat(),
-                            luminance = o.optDouble("luminance", 0.0).toFloat()
-                        )
-                    }
-                    return com.dueckis.kawaiiraweditor.data.model.ColorGradingState(
-                        shadows = parseHueSatLum(obj, "shadows"),
-                        midtones = parseHueSatLum(obj, "midtones"),
-                        highlights = parseHueSatLum(obj, "highlights"),
-                        blending = obj.optDouble("blending", 50.0).toFloat(),
-                        balance = obj.optDouble("balance", 0.0).toFloat()
-                    )
-                }
-
-                fun parseMaskTransform(obj: JSONObject?): MaskTransformState? {
-                    if (obj == null) return null
-                    val crop =
-                        obj.optJSONObject("crop")?.let { cropObj ->
-                            CropState(
-                                x = cropObj.optDouble("x", 0.0).toFloat(),
-                                y = cropObj.optDouble("y", 0.0).toFloat(),
-                                width = cropObj.optDouble("width", 1.0).toFloat(),
-                                height = cropObj.optDouble("height", 1.0).toFloat()
-                            ).normalized()
-                        }
-                    return MaskTransformState(
-                        rotation = obj.optDouble("rotation", 0.0).toFloat(),
-                        flipHorizontal = obj.optBoolean("flipHorizontal", false),
-                        flipVertical = obj.optBoolean("flipVertical", false),
-                        orientationSteps = obj.optInt("orientationSteps", 0),
-                        crop = crop
-                    )
-                }
-
-                val parsedCurves = parseCurves(json.optJSONObject("curves"))
-                val parsedColorGrading = parseColorGrading(json.optJSONObject("colorGrading"))
-                val parsedHsl = parseHsl(json.optJSONObject("hsl"))
-
-                val parsedAspectRatio =
-                    if (json.has("aspectRatio") && !json.isNull("aspectRatio")) json.optDouble("aspectRatio", 0.0).toFloat() else null
-                val parsedCrop =
-                    json.optJSONObject("crop")?.let { cropObj ->
-                        CropState(
-                            x = cropObj.optDouble("x", 0.0).toFloat(),
-                            y = cropObj.optDouble("y", 0.0).toFloat(),
-                            width = cropObj.optDouble("width", 1.0).toFloat(),
-                            height = cropObj.optDouble("height", 1.0).toFloat()
-                        ).normalized()
-                    }
-
-                adjustments =
-                    AdjustmentState(
-                        rotation = json.optDouble("rotation", 0.0).toFloat(),
-                        flipHorizontal = json.optBoolean("flipHorizontal", false),
-                        flipVertical = json.optBoolean("flipVertical", false),
-                        orientationSteps = json.optInt("orientationSteps", 0),
-                        aspectRatio = parsedAspectRatio,
-                        crop = parsedCrop,
-                        exposure = json.optDouble("exposure", 0.0).toFloat(),
-                        brightness = json.optDouble("brightness", 0.0).toFloat(),
-                        contrast = json.optDouble("contrast", 0.0).toFloat(),
-                        highlights = json.optDouble("highlights", 0.0).toFloat(),
-                        shadows = json.optDouble("shadows", 0.0).toFloat(),
-                        whites = json.optDouble("whites", 0.0).toFloat(),
-                        blacks = json.optDouble("blacks", 0.0).toFloat(),
-                        saturation = json.optDouble("saturation", 0.0).toFloat(),
-                        temperature = json.optDouble("temperature", 0.0).toFloat(),
-                        tint = json.optDouble("tint", 0.0).toFloat(),
-                        vibrance = json.optDouble("vibrance", 0.0).toFloat(),
-                        clarity = json.optDouble("clarity", 0.0).toFloat(),
-                        dehaze = json.optDouble("dehaze", 0.0).toFloat(),
-                        structure = json.optDouble("structure", 0.0).toFloat(),
-                        centre = json.optDouble("centre", 0.0).toFloat(),
-                        vignetteAmount = json.optDouble("vignetteAmount", 0.0).toFloat(),
-                        vignetteMidpoint = json.optDouble("vignetteMidpoint", 50.0).toFloat(),
-                        vignetteRoundness = json.optDouble("vignetteRoundness", 0.0).toFloat(),
-                        vignetteFeather = json.optDouble("vignetteFeather", 50.0).toFloat(),
-                        sharpness = json.optDouble("sharpness", 0.0).toFloat(),
-                        lumaNoiseReduction = json.optDouble("lumaNoiseReduction", 0.0).toFloat(),
-                        colorNoiseReduction = json.optDouble("colorNoiseReduction", 0.0).toFloat(),
-                        chromaticAberrationRedCyan = json.optDouble("chromaticAberrationRedCyan", 0.0).toFloat(),
-                        chromaticAberrationBlueYellow = json.optDouble("chromaticAberrationBlueYellow", 0.0).toFloat(),
-                        toneMapper = json.optString("toneMapper", "basic"),
-                        curves = parsedCurves,
-                        colorGrading = parsedColorGrading,
-                        hsl = parsedHsl
-                    )
-
-                val masksArr = json.optJSONArray("masks") ?: JSONArray()
-                val parsedMasks =
-                    (0 until masksArr.length()).mapNotNull { idx ->
-                        val maskObj = masksArr.optJSONObject(idx) ?: return@mapNotNull null
-                        val maskId = maskObj.optString("id").takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString()
-                        val maskAdjustmentsObj = maskObj.optJSONObject("adjustments") ?: JSONObject()
-                        val maskCurves = parseCurves(maskAdjustmentsObj.optJSONObject("curves"))
-                        val maskColorGrading = parseColorGrading(maskAdjustmentsObj.optJSONObject("colorGrading"))
-                        val maskHsl = parseHsl(maskAdjustmentsObj.optJSONObject("hsl"))
-                        val maskAdjustments =
-                            AdjustmentState(
-                                exposure = maskAdjustmentsObj.optDouble("exposure", 0.0).toFloat(),
-                                brightness = maskAdjustmentsObj.optDouble("brightness", 0.0).toFloat(),
-                                contrast = maskAdjustmentsObj.optDouble("contrast", 0.0).toFloat(),
-                                highlights = maskAdjustmentsObj.optDouble("highlights", 0.0).toFloat(),
-                                shadows = maskAdjustmentsObj.optDouble("shadows", 0.0).toFloat(),
-                                whites = maskAdjustmentsObj.optDouble("whites", 0.0).toFloat(),
-                                blacks = maskAdjustmentsObj.optDouble("blacks", 0.0).toFloat(),
-                                saturation = maskAdjustmentsObj.optDouble("saturation", 0.0).toFloat(),
-                                temperature = maskAdjustmentsObj.optDouble("temperature", 0.0).toFloat(),
-                                tint = maskAdjustmentsObj.optDouble("tint", 0.0).toFloat(),
-                                vibrance = maskAdjustmentsObj.optDouble("vibrance", 0.0).toFloat(),
-                                clarity = maskAdjustmentsObj.optDouble("clarity", 0.0).toFloat(),
-                                dehaze = maskAdjustmentsObj.optDouble("dehaze", 0.0).toFloat(),
-                                structure = maskAdjustmentsObj.optDouble("structure", 0.0).toFloat(),
-                                centre = maskAdjustmentsObj.optDouble("centre", 0.0).toFloat(),
-                                vignetteAmount = maskAdjustmentsObj.optDouble("vignetteAmount", 0.0).toFloat(),
-                                vignetteMidpoint = maskAdjustmentsObj.optDouble("vignetteMidpoint", 50.0).toFloat(),
-                                vignetteRoundness = maskAdjustmentsObj.optDouble("vignetteRoundness", 0.0).toFloat(),
-                                vignetteFeather = maskAdjustmentsObj.optDouble("vignetteFeather", 50.0).toFloat(),
-                                sharpness = maskAdjustmentsObj.optDouble("sharpness", 0.0).toFloat(),
-                                lumaNoiseReduction = maskAdjustmentsObj.optDouble("lumaNoiseReduction", 0.0).toFloat(),
-                                colorNoiseReduction = maskAdjustmentsObj.optDouble("colorNoiseReduction", 0.0).toFloat(),
-                                chromaticAberrationRedCyan = maskAdjustmentsObj.optDouble("chromaticAberrationRedCyan", 0.0).toFloat(),
-                                chromaticAberrationBlueYellow = maskAdjustmentsObj.optDouble("chromaticAberrationBlueYellow", 0.0).toFloat(),
-                                toneMapper = adjustments.toneMapper,
-                                curves = maskCurves,
-                                colorGrading = maskColorGrading,
-                                hsl = maskHsl
-                            )
-
-                        val subMasksArr = maskObj.optJSONArray("subMasks") ?: JSONArray()
-                        val subMasks =
-                            (0 until subMasksArr.length()).mapNotNull { sIdx ->
-                                val subObj = subMasksArr.optJSONObject(sIdx) ?: return@mapNotNull null
-                                val subId = subObj.optString("id").takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString()
-                                val subType = subObj.optString("type", SubMaskType.Brush.id).lowercase(Locale.US)
-                                val modeStr = subObj.optString("mode", "additive").lowercase(Locale.US)
-                                val mode = if (modeStr == "subtractive") SubMaskMode.Subtractive else SubMaskMode.Additive
-                                val paramsObj = subObj.optJSONObject("parameters") ?: JSONObject()
-                                val visible = subObj.optBoolean("visible", true)
-
-                                when (subType) {
-                                    SubMaskType.Radial.id ->
-                                        SubMaskState(
-                                            id = subId,
-                                            type = SubMaskType.Radial.id,
-                                            visible = visible,
-                                            mode = mode,
-                                            radial =
-                                                RadialMaskParametersState(
-                                                    centerX = paramsObj.optDouble("centerX", 0.5).toFloat(),
-                                                    centerY = paramsObj.optDouble("centerY", 0.5).toFloat(),
-                                                    radiusX = paramsObj.optDouble("radiusX", 0.35).toFloat(),
-                                                    radiusY = paramsObj.optDouble("radiusY", 0.35).toFloat(),
-                                                    rotation = paramsObj.optDouble("rotation", 0.0).toFloat(),
-                                                    feather = paramsObj.optDouble("feather", 0.5).toFloat()
-                                                )
-                                        )
-
-                                    SubMaskType.AiSubject.id ->
-                                        SubMaskState(
-                                            id = subId,
-                                            type = SubMaskType.AiSubject.id,
-                                            visible = visible,
-                                            mode = mode,
-                                            aiSubject =
-                                                com.dueckis.kawaiiraweditor.data.model.AiSubjectMaskParametersState(
-                                                    maskDataBase64 = paramsObj.optString("maskDataBase64").takeIf { it.isNotBlank() },
-                                                    softness = paramsObj.optDouble("softness", 0.25).toFloat().coerceIn(0f, 1f),
-                                                    baseTransform = parseMaskTransform(paramsObj.optJSONObject("baseTransform")) ?: adjustments.toMaskTransformState(),
-                                                    baseWidthPx = paramsObj.optInt("baseWidthPx", 0).takeIf { it > 0 },
-                                                    baseHeightPx = paramsObj.optInt("baseHeightPx", 0).takeIf { it > 0 }
-                                                )
-                                        )
-
-                                    SubMaskType.AiEnvironment.id ->
-                                        SubMaskState(
-                                            id = subId,
-                                            type = SubMaskType.AiEnvironment.id,
-                                            visible = visible,
-                                            mode = mode,
-                                            aiEnvironment =
-                                                com.dueckis.kawaiiraweditor.data.model.AiEnvironmentMaskParametersState(
-                                                    category = paramsObj.optString("category", "sky"),
-                                                    maskDataBase64 = paramsObj.optString("maskDataBase64").takeIf { it.isNotBlank() },
-                                                    softness = paramsObj.optDouble("softness", 0.25).toFloat().coerceIn(0f, 1f),
-                                                    baseTransform = parseMaskTransform(paramsObj.optJSONObject("baseTransform")) ?: adjustments.toMaskTransformState(),
-                                                    baseWidthPx = paramsObj.optInt("baseWidthPx", 0).takeIf { it > 0 },
-                                                    baseHeightPx = paramsObj.optInt("baseHeightPx", 0).takeIf { it > 0 }
-                                                )
-                                        )
-
-                                    SubMaskType.Linear.id ->
-                                        SubMaskState(
-                                            id = subId,
-                                            type = SubMaskType.Linear.id,
-                                            visible = visible,
-                                            mode = mode,
-                                            linear =
-                                                com.dueckis.kawaiiraweditor.data.model.LinearMaskParametersState(
-                                                    startX = paramsObj.optDouble("startX", 0.5).toFloat(),
-                                                    startY = paramsObj.optDouble("startY", 0.2).toFloat(),
-                                                    endX = paramsObj.optDouble("endX", 0.5).toFloat(),
-                                                    endY = paramsObj.optDouble("endY", 0.8).toFloat(),
-                                                    range = paramsObj.optDouble("range", 0.25).toFloat()
-                                                )
-                                        )
-
-                                    else -> {
-                                        val linesArr = paramsObj.optJSONArray("lines") ?: JSONArray()
-                                        val lines =
-                                            (0 until linesArr.length()).mapNotNull { lIdx ->
-                                                val lineObj = linesArr.optJSONObject(lIdx) ?: return@mapNotNull null
-                                                val pointsArr = lineObj.optJSONArray("points") ?: JSONArray()
-                                                val points =
-                                                    (0 until pointsArr.length()).mapNotNull { pIdx ->
-                                                        val pObj = pointsArr.optJSONObject(pIdx) ?: return@mapNotNull null
-                                                        MaskPoint(
-                                                            x = pObj.optDouble("x", 0.0).toFloat(),
-                                                            y = pObj.optDouble("y", 0.0).toFloat(),
-                                                            pressure = pObj.optDouble("pressure", 1.0).toFloat().coerceIn(0f, 1f)
-                                                        )
-                                                    }
-                                                BrushLineState(
-                                                    tool = lineObj.optString("tool", "brush"),
-                                                    brushSize = lineObj.optDouble("brushSize", 50.0).toFloat(),
-                                                    feather = lineObj.optDouble("feather", 0.5).toFloat(),
-                                                    order = lineObj.optLong("order", 0L),
-                                                    points = points
-                                                )
-                                            }
-                                        SubMaskState(id = subId, type = SubMaskType.Brush.id, visible = visible, mode = mode, lines = lines)
-                                    }
-                                }
-                            }
-
-                        MaskState(
-                            id = maskId,
-                            name = maskObj.optString("name", "Mask"),
-                            visible = maskObj.optBoolean("visible", true),
-                            invert = maskObj.optBoolean("invert", false),
-                            opacity = maskObj.optDouble("opacity", 100.0).toFloat(),
-                            adjustments = maskAdjustments,
-                            subMasks = subMasks
-                        )
-                    }
-
-                val maxOrder = parsedMasks.flatMap { it.subMasks }.flatMap { it.lines }.maxOfOrNull { it.order } ?: 0L
-                strokeOrder.set(maxOf(strokeOrder.get(), maxOrder))
-                masks = parsedMasks
-                parsedMasks.forEach { m -> assignNumber(m.id) }
-                if (selectedMaskId == null && parsedMasks.isNotEmpty()) {
-                    selectedMaskId = parsedMasks.first().id
-                    selectedSubMaskId = parsedMasks.first().subMasks.firstOrNull()?.id
-                }
-            } catch (_: Exception) {
+        if (!appliedFromRemote) {
+            val parsedEdits = parseEditsJson(savedAdjustmentsJson)
+            if (parsedEdits != null) {
+                applyParsedEdits(parsedEdits, resetHistory = true)
+            } else {
+                isRestoringEditHistory = true
+                editHistory.clear()
+                editHistory.add(EditorHistoryEntry(adjustments = adjustments, masks = masks))
+                editHistoryIndex = 0
+                isRestoringEditHistory = false
+            }
+            if (currentRevisionId == null && savedAdjustmentsJson.isNotBlank() && savedAdjustmentsJson != "{}") {
+                val localUpdatedAtMs = withContext(Dispatchers.IO) { storage.getEditsUpdatedAtMs(galleryItem.projectId) }
+                currentRevisionId = IridisSidecarDescription.buildRevisionId(localUpdatedAtMs, savedAdjustmentsJson)
             }
         }
-
-        isRestoringEditHistory = true
-        editHistory.clear()
-        editHistory.add(EditorHistoryEntry(adjustments = adjustments, masks = masks))
-        editHistoryIndex = 0
-        isRestoringEditHistory = false
+        if (lastSavedEditsJson == "{}") {
+            lastSavedEditsJson = buildCurrentEditsJson()
+        }
     }
 
     LaunchedEffect(sessionHandle) { metadataJson = null }
@@ -1559,25 +1819,35 @@ internal fun EditorScreen(
     LaunchedEffect(adjustments, masks, isDraggingMaskHandle, detectedAiEnvironmentCategories) {
         if (isDraggingMaskHandle) return@LaunchedEffect
         if (isRestoringEditHistory || editHistoryIndex < 0) return@LaunchedEffect
-        val json =
-            withContext(Dispatchers.Default) {
-                val base = adjustments.toJson(masks)
-                val obj = JSONObject(base)
-                val detected = detectedAiEnvironmentCategories.orEmpty()
-                if (detected.isEmpty()) {
-                    obj.remove("aiEnvironmentDetectedCategories")
-                } else {
-                    val arr = JSONArray()
-                    detected.forEach { arr.put(it.id) }
-                    obj.put("aiEnvironmentDetectedCategories", arr)
-                }
-                obj.toString()
-            }
+        val json = buildCurrentEditsJson()
+        if (json == lastSavedEditsJson) return@LaunchedEffect
         delay(350)
+        if (json == lastSavedEditsJson) return@LaunchedEffect
         val updatedAtMs = System.currentTimeMillis()
-        withContext(Dispatchers.IO) { storage.saveAdjustments(galleryItem.projectId, json, updatedAtMs = updatedAtMs) }
+        val parentRevisionId = currentRevisionId
+        val revisionId = IridisSidecarDescription.buildRevisionId(updatedAtMs, json)
+        withContext(Dispatchers.IO) {
+            storage.saveAdjustments(galleryItem.projectId, json, updatedAtMs = updatedAtMs)
+            storage.appendEditHistory(
+                projectId = galleryItem.projectId,
+                entry = ProjectStorage.EditHistoryEntry(
+                    id = revisionId,
+                    source = ProjectStorage.EditHistorySource.Local,
+                    updatedAtMs = updatedAtMs,
+                    editsJson = json,
+                    parentId = parentRevisionId
+                )
+            )
+        }
+        lastSavedEditsJson = json
+        currentRevisionId = revisionId
         if (!galleryItem.immichAssetId.isNullOrBlank()) {
-            val req = ImmichSidecarSyncRequest(updatedAtMs = updatedAtMs, editsJson = json)
+            val req =
+                ImmichSidecarSyncRequest(
+                    updatedAtMs = updatedAtMs,
+                    editsJson = json,
+                    parentRevisionId = parentRevisionId
+                )
             lastImmichSidecarSyncRequest = req
             immichSidecarSyncRequests.trySend(req)
         }
@@ -2112,17 +2382,39 @@ internal fun EditorScreen(
                             }
                             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
                                 Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f), shape = CircleShape) {
-                                    Text(
-                                        text = galleryItem.fileName,
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                                    )
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = galleryItem.fileName,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        if (immichDescriptionSyncEnabled && isImmichSidecarSyncing) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            LoadingIndicator(
+                                                modifier = Modifier.size(12.dp),
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
                                 }
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (immichDescriptionSyncEnabled) {
+                                    IconButton(
+                                        onClick = { openEditTimeline() },
+                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+                                        )
+                                    ) {
+                                        Icon(Icons.Filled.History, contentDescription = "Edit timeline", tint = MaterialTheme.colorScheme.onSurface)
+                                    }
+                                }
                                 IconButton(
                                     enabled = sessionHandle != 0L,
                                     onClick = { showMetadataDialog = true },
@@ -2457,6 +2749,126 @@ internal fun EditorScreen(
                 ) {}
             }
         }
+    }
+
+    if (showEditTimelineDialog) {
+        val formatter = remember { java.text.DateFormat.getDateTimeInstance() }
+        val treeItems =
+            remember(editTimelineEntries) {
+                buildVersionTreeItems(editTimelineEntries)
+            }
+        val lineColor = MaterialTheme.colorScheme.outlineVariant
+        AlertDialog(
+            onDismissRequest = { showEditTimelineDialog = false },
+            confirmButton = { TextButton(onClick = { showEditTimelineDialog = false }) { Text("Close") } },
+            title = { Text("Version tree") },
+            text = {
+                if (treeItems.isEmpty()) {
+                    Text("No synced edits yet.")
+                } else {
+                    Column(
+                        modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "Tap a node to apply it.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        treeItems.forEach { node ->
+                            val entry = node.entry
+                            val isCurrent = entry.id == currentRevisionId
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(IntrinsicSize.Min)
+                                    .clickable(enabled = !isCurrent) { applyVersionEntry(entry) },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                node.guides.forEach { hasLine ->
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .width(12.dp)
+                                    ) {
+                                        if (hasLine) {
+                                            androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                                                val centerX = size.width / 2f
+                                                drawLine(
+                                                    color = lineColor,
+                                                    start = androidx.compose.ui.geometry.Offset(centerX, 0f),
+                                                    end = androidx.compose.ui.geometry.Offset(centerX, size.height),
+                                                    strokeWidth = 2f
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                val sourceColor =
+                                    if (entry.source == ProjectStorage.EditHistorySource.Immich) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.tertiary
+                                    }
+                                val currentColor = MaterialTheme.colorScheme.primary
+                                val currentInnerColor = MaterialTheme.colorScheme.onPrimary
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .width(18.dp)
+                                ) {
+                                    androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                                        val centerX = size.width / 2f
+                                        val centerY = size.height / 2f
+                                        val endY = if (node.isLast) centerY else size.height
+                                        drawLine(
+                                            color = lineColor,
+                                            start = androidx.compose.ui.geometry.Offset(centerX, 0f),
+                                            end = androidx.compose.ui.geometry.Offset(centerX, endY),
+                                            strokeWidth = 2f
+                                        )
+                                        drawLine(
+                                            color = lineColor,
+                                            start = androidx.compose.ui.geometry.Offset(centerX, centerY),
+                                            end = androidx.compose.ui.geometry.Offset(size.width, centerY),
+                                            strokeWidth = 2f
+                                        )
+                                        val radius = size.minDimension * 0.22f
+                                        drawCircle(
+                                            color = if (isCurrent) currentColor else sourceColor,
+                                            radius = radius,
+                                            center = androidx.compose.ui.geometry.Offset(centerX, centerY)
+                                        )
+                                        if (isCurrent) {
+                                            drawCircle(
+                                                color = currentInnerColor,
+                                                radius = radius * 0.5f,
+                                                center = androidx.compose.ui.geometry.Offset(centerX, centerY)
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    val sourceLabel =
+                                        if (entry.source == ProjectStorage.EditHistorySource.Immich) "Immich" else "Local"
+                                    val title =
+                                        if (isCurrent) "$sourceLabel edit (current)" else "$sourceLabel edit"
+                                    Text(title, style = MaterialTheme.typography.labelLarge)
+                                    Text(
+                                        formatter.format(java.util.Date(entry.updatedAtMs)),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                        }
+                    }
+                }
+            }
+        )
     }
 
     if (showMetadataDialog) {

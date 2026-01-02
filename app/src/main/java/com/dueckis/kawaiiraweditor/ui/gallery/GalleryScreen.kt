@@ -1,4 +1,5 @@
 @file:OptIn(
+    androidx.compose.material.ExperimentalMaterialApi::class,
     androidx.compose.material3.ExperimentalMaterial3Api::class,
     androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
 )
@@ -47,6 +48,9 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -171,6 +175,7 @@ internal fun GalleryScreen(
     val coroutineScope = rememberCoroutineScope()
     val configuration = LocalConfiguration.current
     val screenWidthDp = configuration.screenWidthDp
+    var isPullRefreshing by remember { mutableStateOf(false) }
 
     val notificationPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -356,6 +361,30 @@ internal fun GalleryScreen(
     val immichDownloadInFlight = remember { mutableStateMapOf<String, Boolean>() }
     val immichThumbs = remember { mutableStateMapOf<String, Bitmap>() }
     val immichThumbInFlight = remember { mutableStateMapOf<String, Boolean>() }
+
+    suspend fun loadImmichGallery() {
+        immichError = null
+        if (!immichConfigured) {
+            immichLoading = false
+            return
+        }
+        immichLoading = true
+        if (immichSelectedAlbum == null) {
+            val loaded = fetchImmichAlbums(immichConfig)
+            immichAlbums = loaded ?: emptyList()
+            if (loaded == null) {
+                immichError = "Could not load Immich albums."
+            }
+        } else {
+            immichAlbumAssets = emptyList()
+            val loaded = fetchImmichAlbumAssets(immichConfig, immichSelectedAlbum!!.id)
+            immichAlbumAssets = loaded ?: emptyList()
+            if (loaded == null) {
+                immichError = "Could not load Immich album."
+            }
+        }
+        immichLoading = false
+    }
 
     var queryText by rememberSaveable { mutableStateOf("") }
     val queryLower = remember(queryText) { queryText.trim().lowercase(Locale.US) }
@@ -684,6 +713,36 @@ internal fun GalleryScreen(
         }
     }
 
+    suspend fun refreshLocalPreviews() {
+        val projectIds = items.map { it.projectId }
+        for (projectId in projectIds) {
+            val rawBytes = withContext(Dispatchers.IO) { storage.loadRawBytes(projectId) } ?: continue
+            val adjustmentsJson = withContext(Dispatchers.IO) { storage.loadAdjustments(projectId) }
+            val previewBytes = withContext(Dispatchers.Default) {
+                runCatching { LibRawDecoder.decode(rawBytes, adjustmentsJson) }.getOrNull()
+            }
+            val previewBitmap = previewBytes?.decodeToBitmap() ?: continue
+
+            val maxSize = 1024
+            val scale = min(maxSize.toFloat() / previewBitmap.width, maxSize.toFloat() / previewBitmap.height)
+            val scaledWidth = (previewBitmap.width * scale).toInt().coerceAtLeast(1)
+            val scaledHeight = (previewBitmap.height * scale).toInt().coerceAtLeast(1)
+            val thumbnail =
+                if (previewBitmap.width == scaledWidth && previewBitmap.height == scaledHeight) previewBitmap
+                else Bitmap.createScaledBitmap(previewBitmap, scaledWidth, scaledHeight, true)
+
+            withContext(Dispatchers.IO) {
+                val outputStream = ByteArrayOutputStream()
+                thumbnail.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                storage.saveThumbnail(projectId, outputStream.toByteArray())
+            }
+            onThumbnailReady(projectId, thumbnail)
+            if (thumbnail != previewBitmap) thumbnail.recycle()
+            previewBitmap.recycle()
+        }
+        onRequestRefresh()
+    }
+
     suspend fun ensureImmichThumbnail(assetId: String) {
         if (!immichConfigured) return
         if (immichThumbs.containsKey(assetId) || immichThumbInFlight[assetId] == true) return
@@ -782,27 +841,7 @@ internal fun GalleryScreen(
         immichRefreshTrigger
     ) {
         if (gallerySource != GallerySource.Immich) return@LaunchedEffect
-        immichError = null
-        if (!immichConfigured) {
-            immichLoading = false
-            return@LaunchedEffect
-        }
-        immichLoading = true
-        if (immichSelectedAlbum == null) {
-            val loaded = fetchImmichAlbums(immichConfig)
-            immichAlbums = loaded ?: emptyList()
-            if (loaded == null) {
-                immichError = "Could not load Immich albums."
-            }
-        } else {
-            immichAlbumAssets = emptyList()
-            val loaded = fetchImmichAlbumAssets(immichConfig, immichSelectedAlbum!!.id)
-            immichAlbumAssets = loaded ?: emptyList()
-            if (loaded == null) {
-                immichError = "Could not load Immich album."
-            }
-        }
-        immichLoading = false
+        loadImmichGallery()
     }
 
     val topTags = remember(items) {
@@ -832,6 +871,28 @@ internal fun GalleryScreen(
         immichSelectedAlbum = null
         immichAlbumAssets = emptyList()
         immichError = null
+    }
+
+    val pullRefreshState = rememberPullRefreshState(
+        refreshing = isPullRefreshing,
+        onRefresh = {
+            if (isPullRefreshing) return@rememberPullRefreshState
+            if (gallerySource != GallerySource.Immich) return@rememberPullRefreshState
+            coroutineScope.launch {
+                isPullRefreshing = true
+                try {
+                    loadImmichGallery()
+                } finally {
+                    isPullRefreshing = false
+                }
+            }
+        }
+    )
+
+    LaunchedEffect(gallerySource) {
+        if (gallerySource != GallerySource.Immich && isPullRefreshing) {
+            isPullRefreshing = false
+        }
     }
 
     Scaffold(
@@ -1148,6 +1209,7 @@ internal fun GalleryScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .then(if (gallerySource == GallerySource.Immich) Modifier.pullRefresh(pullRefreshState) else Modifier)
         ) {
             val gridBottomPadding = if (selectedIds.isNotEmpty()) 128.dp else 88.dp
 
@@ -1379,6 +1441,15 @@ internal fun GalleryScreen(
                         }
                     }
                 }
+            }
+
+            if (gallerySource == GallerySource.Immich) {
+                PullRefreshIndicator(
+                    refreshing = isPullRefreshing,
+                    state = pullRefreshState,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    contentColor = MaterialTheme.colorScheme.primary
+                )
             }
 
             AnimatedVisibility(
