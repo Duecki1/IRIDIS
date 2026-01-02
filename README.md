@@ -54,6 +54,7 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Widget showing all edits
 - Tab for cropping and rotating the image
 - Tag system for mask names
+- [Immich](https://github.com/immich-app/immich) intergration (download, edit sync via desc, export & upload to immich)
   
 ## Planned/Issues:
 
