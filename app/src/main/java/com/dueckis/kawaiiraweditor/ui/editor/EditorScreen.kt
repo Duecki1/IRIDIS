@@ -116,7 +116,12 @@ import com.dueckis.kawaiiraweditor.data.model.SubMaskType
 import com.dueckis.kawaiiraweditor.data.model.toAdjustmentState
 import com.dueckis.kawaiiraweditor.data.model.toMaskTransformState
 import com.dueckis.kawaiiraweditor.data.media.decodeToBitmap
+import com.dueckis.kawaiiraweditor.data.immich.ImmichConfig
+import com.dueckis.kawaiiraweditor.data.immich.IridisSidecarDescription
+import com.dueckis.kawaiiraweditor.data.immich.fetchImmichAssetInfo
+import com.dueckis.kawaiiraweditor.data.immich.updateImmichAssetDescription
 import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
+import com.dueckis.kawaiiraweditor.data.preferences.AppPreferences
 import com.dueckis.kawaiiraweditor.data.storage.ProjectStorage
 import com.dueckis.kawaiiraweditor.domain.HistogramData
 import com.dueckis.kawaiiraweditor.domain.HistogramUtils
@@ -136,6 +141,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
@@ -176,6 +182,71 @@ internal fun EditorScreen(
 
     val context = LocalContext.current
     val storage = remember { ProjectStorage(context) }
+    val appPreferences = remember(context) { AppPreferences(context) }
+    data class ImmichSidecarSyncRequest(val updatedAtMs: Long, val editsJson: String)
+    val immichSidecarSyncRequests =
+        remember(galleryItem.projectId) { Channel<ImmichSidecarSyncRequest>(capacity = Channel.CONFLATED) }
+    var lastImmichSidecarSyncRequest by remember(galleryItem.projectId) { mutableStateOf<ImmichSidecarSyncRequest?>(null) }
+    var isImmichSidecarSyncing by remember(galleryItem.projectId) { mutableStateOf(false) }
+
+    fun resolveImmichConfigOrNull(): ImmichConfig? {
+        val server = appPreferences.getImmichServerUrl().trim()
+        if (server.isBlank()) return null
+        val authMode = appPreferences.getImmichAuthMode()
+        val apiKey = appPreferences.getImmichApiKey().trim()
+        val accessToken = appPreferences.getImmichAccessToken().trim()
+        if (authMode == com.dueckis.kawaiiraweditor.data.immich.ImmichAuthMode.ApiKey && apiKey.isBlank()) return null
+        if (authMode == com.dueckis.kawaiiraweditor.data.immich.ImmichAuthMode.Login && accessToken.isBlank()) return null
+        return ImmichConfig(serverUrl = server, authMode = authMode, apiKey = apiKey, accessToken = accessToken)
+    }
+
+    suspend fun fetchRemoteIridisSidecarFromAsset(config: ImmichConfig, assetId: String): com.dueckis.kawaiiraweditor.data.immich.IridisSidecar? {
+        val info = fetchImmichAssetInfo(config, assetId) ?: return null
+        val parsed = IridisSidecarDescription.parse(info.description) ?: return null
+        return parsed.sidecar
+    }
+
+    suspend fun uploadIridisSidecarToImmich(
+        request: ImmichSidecarSyncRequest,
+        force: Boolean,
+        showToastOnFailure: Boolean
+    ): Boolean {
+        if (isImmichSidecarSyncing) return false
+        val config = resolveImmichConfigOrNull() ?: return false
+        val originImmichAssetId = galleryItem.immichAssetId?.trim().takeUnless { it.isNullOrBlank() } ?: return false
+        if (request.editsJson.isBlank()) return false
+        if (request.updatedAtMs <= 0L) return false
+
+        val alreadySyncedAtMs =
+            withContext(Dispatchers.IO) { storage.getImmichSidecarUpdatedAtMs(galleryItem.projectId) }
+        if (!force && request.updatedAtMs <= alreadySyncedAtMs) return true
+
+        isImmichSidecarSyncing = true
+        val info = fetchImmichAssetInfo(config, originImmichAssetId)
+        val remoteParsed = IridisSidecarDescription.parse(info?.description)
+        val remoteUpdatedAtMs = remoteParsed?.sidecar?.updatedAtMs ?: 0L
+        if (!force && remoteUpdatedAtMs > request.updatedAtMs) {
+            isImmichSidecarSyncing = false
+            return true
+        }
+        val newDescription = IridisSidecarDescription.upsert(info?.description, request.editsJson, request.updatedAtMs)
+        val result = updateImmichAssetDescription(config, originImmichAssetId, newDescription)
+        isImmichSidecarSyncing = false
+
+        if (result.assetId.isNullOrBlank()) {
+            val msg = result.errorMessage ?: "Immich sidecar sync failed."
+            Log.w(logTag, "Immich sidecar sync failed: $msg")
+            if (showToastOnFailure) {
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            }
+            return false
+        }
+
+        withContext(Dispatchers.IO) {
+            storage.setImmichSidecarInfo(galleryItem.projectId, originImmichAssetId, request.updatedAtMs)
+        }
+        return true
+    }
 
     var detectedAiEnvironmentCategories by remember { mutableStateOf<List<AiEnvironmentCategory>?>(null) }
     var isDetectingAiEnvironmentCategories by remember { mutableStateOf(false) }
@@ -260,11 +331,28 @@ internal fun EditorScreen(
                     showMetadataDialog = false
                 }
 
-                else -> onPredictiveBackCommitted()
+                else -> {
+                    val req = lastImmichSidecarSyncRequest
+                    if (req != null) {
+                        uploadIridisSidecarToImmich(req, force = true, showToastOnFailure = true)
+                    }
+                    onPredictiveBackCommitted()
+                }
             }
         } catch (_: CancellationException) {
             onPredictiveBackCancelled()
         }
+    }
+
+    LaunchedEffect(galleryItem.projectId, galleryItem.immichAssetId) {
+        val originImmichAssetId = galleryItem.immichAssetId?.trim().takeUnless { it.isNullOrBlank() } ?: return@LaunchedEffect
+        if (originImmichAssetId.isBlank()) return@LaunchedEffect
+        immichSidecarSyncRequests
+            .receiveAsFlow()
+            .debounce(1750)
+            .collect { request ->
+                uploadIridisSidecarToImmich(request, force = false, showToastOnFailure = false)
+            }
     }
 
     var panelTab by remember { mutableStateOf(EditorPanelTab.Adjustments) }
@@ -1015,6 +1103,26 @@ internal fun EditorScreen(
             return@LaunchedEffect
         }
 
+        val immichConfig = resolveImmichConfigOrNull()
+        val originImmichAssetId = galleryItem.immichAssetId?.trim().takeUnless { it.isNullOrBlank() }
+        if (immichConfig != null && originImmichAssetId != null) {
+            runCatching {
+                val localEditsUpdatedAtMs = withContext(Dispatchers.IO) { storage.getEditsUpdatedAtMs(galleryItem.projectId) }
+                val remote = fetchRemoteIridisSidecarFromAsset(immichConfig, originImmichAssetId)
+                if (remote != null) {
+                    val remoteUpdatedAtMs = remote.updatedAtMs
+                    withContext(Dispatchers.IO) {
+                        storage.setImmichSidecarInfo(projectId = galleryItem.projectId, assetId = originImmichAssetId, updatedAtMs = remoteUpdatedAtMs)
+                        if (remoteUpdatedAtMs > localEditsUpdatedAtMs && remote.editsJson.isNotBlank()) {
+                            storage.saveAdjustments(projectId = galleryItem.projectId, adjustmentsJson = remote.editsJson, updatedAtMs = remoteUpdatedAtMs)
+                        }
+                    }
+                }
+            }.onFailure { error ->
+                Log.w(logTag, "Failed to sync edits from Immich", error)
+            }
+        }
+
         val savedAdjustmentsJson = withContext(Dispatchers.IO) { storage.loadAdjustments(galleryItem.projectId) }
         if (savedAdjustmentsJson != "{}") {
             try {
@@ -1461,7 +1569,13 @@ internal fun EditorScreen(
                 obj.toString()
             }
         delay(350)
-        withContext(Dispatchers.IO) { storage.saveAdjustments(galleryItem.projectId, json) }
+        val updatedAtMs = System.currentTimeMillis()
+        withContext(Dispatchers.IO) { storage.saveAdjustments(galleryItem.projectId, json, updatedAtMs = updatedAtMs) }
+        if (!galleryItem.immichAssetId.isNullOrBlank()) {
+            val req = ImmichSidecarSyncRequest(updatedAtMs = updatedAtMs, editsJson = json)
+            lastImmichSidecarSyncRequest = req
+            immichSidecarSyncRequests.trySend(req)
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -1979,7 +2093,18 @@ internal fun EditorScreen(
                                 .windowInsetsPadding(WindowInsets.statusBars),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            IconButton(onClick = onBackClick, colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))) {
+                            IconButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        val req = lastImmichSidecarSyncRequest
+                                        if (req != null) {
+                                            uploadIridisSidecarToImmich(req, force = true, showToastOnFailure = true)
+                                        }
+                                        onBackClick()
+                                    }
+                                },
+                                colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))
+                            ) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurface)
                             }
                             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
@@ -2296,6 +2421,9 @@ internal fun EditorScreen(
                                                 sessionHandle = sessionHandle,
                                                 adjustments = adjustments,
                                                 masks = exportMasks,
+                                                originImmichAssetId = galleryItem.immichAssetId,
+                                                originImmichAlbumId = galleryItem.immichAlbumId,
+                                                sourceFileName = galleryItem.fileName,
                                                 isExporting = isExporting,
                                                 nativeDispatcher = renderDispatcher,
                                                 context = context,

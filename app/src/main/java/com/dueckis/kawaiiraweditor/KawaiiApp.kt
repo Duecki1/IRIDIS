@@ -7,7 +7,6 @@ package com.dueckis.kawaiiraweditor
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -43,8 +42,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.core.content.ContextCompat
 import com.dueckis.kawaiiraweditor.data.decoding.decodePreviewBytesForTagging
-import com.dueckis.kawaiiraweditor.data.immich.IMMICH_OAUTH_APP_REDIRECT_URI
-import com.dueckis.kawaiiraweditor.data.immich.ImmichAuthMode
 import com.dueckis.kawaiiraweditor.data.immich.ImmichLoginResult
 import com.dueckis.kawaiiraweditor.data.immich.buildImmichMobileRedirectUri
 import com.dueckis.kawaiiraweditor.data.immich.completeImmichOAuth
@@ -102,7 +99,6 @@ fun KawaiiApp(
     var immichLoginEmail by remember { mutableStateOf(appPreferences.getImmichLoginEmail()) }
     var immichAccessToken by remember { mutableStateOf(appPreferences.getImmichAccessToken()) }
     var immichApiKey by remember { mutableStateOf(appPreferences.getImmichApiKey()) }
-    var immichOAuthDebug by remember { mutableStateOf(appPreferences.getImmichOAuthDebug()) }
 
     appPreferences.ensureDefaultMaskRenameTagsSeeded()
     var maskRenameTags by remember { mutableStateOf(appPreferences.getMaskRenameTags()) }
@@ -118,7 +114,7 @@ fun KawaiiApp(
         if (Build.VERSION.SDK_INT < 33) return
         val granted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-                PackageManager.PERMISSION_GRANTED
+                    PackageManager.PERMISSION_GRANTED
         if (!granted) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -162,11 +158,6 @@ fun KawaiiApp(
 
     fun isMetadataInFlight(projectId: String): Boolean = metadataBackfillInFlight[projectId] == true
 
-    fun setImmichOAuthDebug(value: String) {
-        immichOAuthDebug = value
-        appPreferences.setImmichOAuthDebug(value)
-    }
-
     data class ImmichOAuthParams(
         val code: String?,
         val state: String?,
@@ -179,10 +170,12 @@ fun KawaiiApp(
         if (trimmed.isBlank()) return ImmichOAuthParams(null, null, null, null)
         val parsed = runCatching { Uri.parse(trimmed) }.getOrNull()
             ?: return ImmichOAuthParams(null, null, null, null)
+
         val fragmentParams =
             parsed.fragment?.takeIf { it.isNotBlank() }?.let { fragment ->
-                runCatching { Uri.parse("kawaiiraweditor://oauth/?$fragment") }.getOrNull()
+                runCatching { Uri.parse("dummy://oauth/?$fragment") }.getOrNull()
             }
+
         fun pickParam(name: String): String? {
             return parsed.getQueryParameter(name)?.takeIf { it.isNotBlank() }
                 ?: fragmentParams?.getQueryParameter(name)?.takeIf { it.isNotBlank() }
@@ -196,37 +189,36 @@ fun KawaiiApp(
     }
 
     fun buildImmichCallbackUrl(serverUrl: String, redirectUrl: String): String {
-        val trimmed = redirectUrl.trim()
-        if (trimmed.isBlank()) return trimmed
-        val parsed = runCatching { Uri.parse(trimmed) }.getOrNull() ?: return trimmed
-        val scheme = parsed.scheme?.lowercase()
-        if (scheme == "http" || scheme == "https") return trimmed
-        val mobileRedirect = buildImmichMobileRedirectUri(serverUrl).ifBlank { return trimmed }
-        val baseUri = Uri.parse(mobileRedirect)
-        val builder =
-            Uri.Builder()
-                .scheme(baseUri.scheme)
-                .authority(baseUri.authority)
-                .path(baseUri.path)
-        val existingNames = mutableSetOf<String>()
-        parsed.queryParameterNames.forEach { name ->
-            existingNames.add(name)
-            parsed.getQueryParameters(name).forEach { value ->
-                builder.appendQueryParameter(name, value)
-            }
-        }
-        val fragment = parsed.fragment.orEmpty()
-        if (fragment.isNotBlank()) {
-            val fragmentParams = runCatching { Uri.parse("kawaiiraweditor://oauth/?$fragment") }.getOrNull()
-            fragmentParams?.queryParameterNames?.forEach { name ->
-                if (existingNames.add(name)) {
-                    fragmentParams.getQueryParameters(name).forEach { value ->
-                        builder.appendQueryParameter(name, value)
-                    }
+        // 1. We must use the 'mobile-redirect' endpoint as the base, because that is what
+        //    we registered with the server in startOAuth.
+        val baseUriString = "${serverUrl.trimEnd('/')}/api/oauth/mobile-redirect"
+        val baseBuilder = Uri.parse(baseUriString).buildUpon()
+
+        // 2. We must extract the 'code' and 'state' (and other params) from the
+        //    'app.immich://' URL that the app intercepted.
+        val intercepted = Uri.parse(redirectUrl)
+
+        // Helper to add params from a Uri source
+        fun copyParams(source: Uri) {
+            source.queryParameterNames?.forEach { key ->
+                source.getQueryParameters(key)?.forEach { value ->
+                    baseBuilder.appendQueryParameter(key, value)
                 }
             }
         }
-        return builder.build().toString()
+
+        // Copy params from Query (Standard OAuth)
+        copyParams(intercepted)
+
+        // Copy params from Fragment (Some providers use hash routing)
+        if (!intercepted.fragment.isNullOrBlank()) {
+            val fragmentUri = Uri.parse("dummy://?${intercepted.fragment}")
+            copyParams(fragmentUri)
+        }
+
+        // 3. The result is: https://server.com/api/oauth/mobile-redirect?code=XYZ&state=ABC
+        //    This satisfies the server's validation (base matches) AND provides the code.
+        return baseBuilder.build().toString()
     }
 
     suspend fun computeAndPersistRawMetadata(projectId: String, rawBytes: ByteArray) {
@@ -300,8 +292,6 @@ fun KawaiiApp(
         }
     }
 
-    // This LaunchedEffect monitors the pendingProjectToOpen.
-    // When a new project ID is set (e.g., from a widget click), it triggers navigation to the editor.
     LaunchedEffect(pendingProjectToOpen, galleryItems) {
         if (pendingProjectToOpen != null && galleryItems.isNotEmpty()) {
             val target = galleryItems.firstOrNull { it.projectId == pendingProjectToOpen }
@@ -361,22 +351,6 @@ fun KawaiiApp(
 
         appPreferences.clearImmichOAuthPending()
         onImmichOAuthHandled()
-        setImmichOAuthDebug(
-            buildString {
-                append("OAuth redirect\n")
-                append("server=").append(server).append('\n')
-                append("redirect=").append(redirectUrl).append('\n')
-                if (callbackUrl.isNotBlank()) {
-                    append("callback=").append(callbackUrl).append('\n')
-                }
-                append("code=").append(if (params.code.isNullOrBlank()) "missing" else "present").append('\n')
-                append("state=").append(params.state.orEmpty()).append('\n')
-                append("error=").append((params.errorDescription ?: params.error).orEmpty()).append('\n')
-                append("resultStatus=").append(result?.statusCode?.toString().orEmpty()).append('\n')
-                append("resultError=").append(result?.errorMessage.orEmpty()).append('\n')
-                append("token=").append(if (result?.accessToken.isNullOrBlank()) "missing" else "present")
-            }
-        )
         if (errorMessage != null) {
             Toast.makeText(context, errorMessage, Toast.LENGTH_LONG).show()
         }
@@ -398,7 +372,11 @@ fun KawaiiApp(
                     tags = metadata.tags ?: emptyList(),
                     rawMetadata = metadata.rawMetadata ?: emptyMap(),
                     createdAt = metadata.createdAt,
-                    modifiedAt = metadata.modifiedAt
+                    modifiedAt = metadata.modifiedAt,
+                    immichAssetId = metadata.immichAssetId,
+                    immichAlbumId = metadata.immichAlbumId,
+                    editsUpdatedAtMs = metadata.editsUpdatedAtMs ?: metadata.modifiedAt,
+                    immichSidecarUpdatedAtMs = metadata.immichSidecarUpdatedAtMs ?: 0L
                 )
             }
         }
@@ -606,7 +584,6 @@ fun KawaiiApp(
                         immichLoginEmail = immichLoginEmail,
                         immichAccessToken = immichAccessToken,
                         immichApiKey = immichApiKey,
-                        immichOAuthDebug = immichOAuthDebug,
                         onImmichServerUrlChange = { url ->
                             immichServerUrl = url
                             appPreferences.setImmichServerUrl(url)
@@ -628,21 +605,14 @@ fun KawaiiApp(
                         },
                         onImmichOAuthStart = { serverUrl ->
                             appPreferences.clearImmichOAuthPending()
-                            val redirectUri =
-                                buildImmichMobileRedirectUri(serverUrl).ifBlank { IMMICH_OAUTH_APP_REDIRECT_URI }
-                            val result = startImmichOAuth(serverUrl, redirectUri)
+                            val usedRedirect = if (serverUrl.isNotBlank()) {
+                                "${serverUrl.trimEnd('/')}/api/oauth/mobile-redirect"
+                            } else {
+                                buildImmichMobileRedirectUri(serverUrl)
+                            }
+                            val result = startImmichOAuth(serverUrl, usedRedirect)
                             val state = result?.state
                             val verifier = result?.codeVerifier
-                            setImmichOAuthDebug(
-                                buildString {
-                                    append("OAuth start\n")
-                                    append("server=").append(serverUrl.trim()).append('\n')
-                                    append("redirect=").append(redirectUri).append('\n')
-                                    append("status=").append(result?.statusCode?.toString().orEmpty()).append('\n')
-                                    append("error=").append(result?.errorMessage.orEmpty()).append('\n')
-                                    append("authUrl=").append(result?.authorizationUrl.orEmpty())
-                                }
-                            )
                             if (!result?.authorizationUrl.isNullOrBlank() && !state.isNullOrBlank() && !verifier.isNullOrBlank()) {
                                 appPreferences.setImmichOAuthPending(state, verifier)
                             }
@@ -651,10 +621,6 @@ fun KawaiiApp(
                         onImmichApiKeyChange = { key ->
                             immichApiKey = key
                             appPreferences.setImmichApiKey(key)
-                        },
-                        onImmichOAuthDebugClear = {
-                            immichOAuthDebug = ""
-                            appPreferences.clearImmichOAuthDebug()
                         },
                         onBackClick = { currentScreen = Screen.Gallery }
                     )

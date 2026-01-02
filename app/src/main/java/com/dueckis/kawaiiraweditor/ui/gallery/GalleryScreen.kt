@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -203,9 +204,20 @@ internal fun GalleryScreen(
     }
 
     // --- 1. REUSABLE IMPORT LOGIC ---
-    suspend fun importBytes(name: String, bytes: ByteArray, openAfterImport: Boolean) {
+    suspend fun importBytes(
+        name: String,
+        bytes: ByteArray,
+        openAfterImport: Boolean,
+        immichAssetId: String? = null,
+        immichAlbumId: String? = null
+    ) {
         val projectId = withContext(Dispatchers.IO) {
-            storage.importRawFile(name, bytes)
+            storage.importRawFile(
+                name,
+                bytes,
+                immichAssetId = immichAssetId,
+                immichAlbumId = immichAlbumId
+            )
         }
         val now = System.currentTimeMillis()
         val item = GalleryItem(
@@ -215,7 +227,11 @@ internal fun GalleryScreen(
             tags = emptyList(),
             rawMetadata = emptyMap(),
             createdAt = now,
-            modifiedAt = now
+            modifiedAt = now,
+            immichAssetId = immichAssetId,
+            immichAlbumId = immichAlbumId,
+            editsUpdatedAtMs = now,
+            immichSidecarUpdatedAtMs = 0L
         )
         onAddClick(item)
         if (openAfterImport) {
@@ -520,6 +536,12 @@ internal fun GalleryScreen(
         selectedItems.map { it.rating }.distinct().singleOrNull()
     }
 
+    val localItemByImmichAssetId = remember(items) {
+        items.asSequence()
+            .mapNotNull { item -> item.immichAssetId?.let { it to item } }
+            .toMap()
+    }
+
     var showSelectionInfo by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var selectionInfoMetadataJson by remember { mutableStateOf<String?>(null) }
@@ -713,6 +735,27 @@ internal fun GalleryScreen(
             Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
             return
         }
+        val existing =
+            items.firstOrNull { it.immichAssetId == asset.id }
+                ?: storage.findProjectByImmichAssetId(asset.id)?.let { meta ->
+                    GalleryItem(
+                        projectId = meta.id,
+                        fileName = meta.fileName,
+                        createdAt = meta.createdAt,
+                        modifiedAt = meta.modifiedAt,
+                        rating = meta.rating,
+                        tags = meta.tags ?: emptyList(),
+                        rawMetadata = meta.rawMetadata ?: emptyMap(),
+                        immichAssetId = meta.immichAssetId,
+                        immichAlbumId = meta.immichAlbumId,
+                        editsUpdatedAtMs = meta.editsUpdatedAtMs ?: meta.modifiedAt,
+                        immichSidecarUpdatedAtMs = meta.immichSidecarUpdatedAtMs ?: 0L
+                    )
+                }
+        if (existing != null) {
+            onOpenItem(existing)
+            return
+        }
         if (immichDownloadInFlight[asset.id] == true) return
         immichDownloadInFlight[asset.id] = true
         coroutineScope.launch {
@@ -722,7 +765,13 @@ internal fun GalleryScreen(
                     Toast.makeText(context, "Immich download failed.", Toast.LENGTH_SHORT).show()
                     return@launch
                 }
-                importBytes(asset.fileName, bytes, openAfterImport = true)
+                importBytes(
+                    asset.fileName,
+                    bytes,
+                    openAfterImport = true,
+                    immichAssetId = asset.id,
+                    immichAlbumId = immichSelectedAlbum?.id
+                )
             } finally {
                 immichDownloadInFlight.remove(asset.id)
             }
@@ -795,6 +844,11 @@ internal fun GalleryScreen(
             .take(5)
             .map { it.key }
     }
+    val anyImmichSyncPending = remember(items) {
+        items.any { item ->
+            !item.immichAssetId.isNullOrBlank() && item.editsUpdatedAtMs > item.immichSidecarUpdatedAtMs
+        }
+    }
     var searchActive by rememberSaveable { mutableStateOf(false) }
     var isExecutingSearch by remember { mutableStateOf(false) }
 
@@ -831,7 +885,7 @@ internal fun GalleryScreen(
                     ) {
                         DockedSearchBar(
                             modifier = Modifier
-                                .fillMaxWidth()
+                                .weight(1f)
                                 .semantics { traversalIndex = 0f },
                             inputField = {
                                 SearchBarDefaults.InputField(
@@ -995,6 +1049,30 @@ internal fun GalleryScreen(
                                         "Start typing to search",
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+
+                        AnimatedVisibility(visible = anyImmichSyncPending && gallerySource == GallerySource.Local) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.padding(start = 10.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    LoadingIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Syncing",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
                                 }
                             }
@@ -1170,12 +1248,16 @@ internal fun GalleryScreen(
                             items(sortedLocalItems.size) { index ->
                                 val item = sortedLocalItems[index]
                                 val isSelected = item.projectId in selectedIds
+                                val needsImmichSync =
+                                    !item.immichAssetId.isNullOrBlank() &&
+                                        item.editsUpdatedAtMs > item.immichSidecarUpdatedAtMs
                                 GalleryItemCard(
                                     item = item,
                                     selected = isSelected,
                                     isProcessing = isTaggingInFlight(item.projectId),
                                     automaticTaggingEnabled = automaticTaggingEnabled,
                                     processingProgress = tagProgressFor(item.projectId),
+                                    needsImmichSync = needsImmichSync,
                                     onClick = {
                                         if (isBulkExporting) return@GalleryItemCard
                                         if (selectedIds.isEmpty()) {
@@ -1319,7 +1401,9 @@ internal fun GalleryScreen(
                                     items(sortedImmichAlbums.size) { index ->
                                         val album = sortedImmichAlbums[index]
                                         val thumbId = album.thumbnailAssetId
-                                        val thumbnail = thumbId?.let { immichThumbs[it] }
+                                        val thumbnail =
+                                            thumbId?.let { localItemByImmichAssetId[it]?.thumbnail }
+                                                ?: thumbId?.let { immichThumbs[it] }
                                         LaunchedEffect(thumbId, immichConfigured) {
                                             if (immichConfigured && thumbId != null) ensureImmichThumbnail(thumbId)
                                         }
@@ -1333,7 +1417,7 @@ internal fun GalleryScreen(
                                 } else {
                                     items(sortedImmichAssets.size) { index ->
                                         val asset = sortedImmichAssets[index]
-                                        val thumbnail = immichThumbs[asset.id]
+                                        val thumbnail = localItemByImmichAssetId[asset.id]?.thumbnail ?: immichThumbs[asset.id]
                                         LaunchedEffect(asset.id, immichConfigured) {
                                             if (immichConfigured) ensureImmichThumbnail(asset.id)
                                         }

@@ -36,9 +36,14 @@ class ProjectStorage(private val context: Context) {
         val fileName: String,
         val createdAt: Long,
         val modifiedAt: Long,
+        val editsUpdatedAtMs: Long? = null,
         val rating: Int = 0,
         val tags: List<String>? = null,
-        val rawMetadata: Map<String, String>? = null
+        val rawMetadata: Map<String, String>? = null,
+        val immichAssetId: String? = null,
+        val immichAlbumId: String? = null,
+        val immichSidecarAssetId: String? = null,
+        val immichSidecarUpdatedAtMs: Long? = null
     )
     
     data class ProjectData(
@@ -49,7 +54,12 @@ class ProjectStorage(private val context: Context) {
     /**
      * Import a RAW file and create a new project
      */
-    fun importRawFile(fileName: String, rawBytes: ByteArray): String {
+    fun importRawFile(
+        fileName: String,
+        rawBytes: ByteArray,
+        immichAssetId: String? = null,
+        immichAlbumId: String? = null,
+    ): String {
         val projectId = UUID.randomUUID().toString()
         val projectDir = File(projectsDir, projectId)
         projectDir.mkdirs()
@@ -69,7 +79,9 @@ class ProjectStorage(private val context: Context) {
             createdAt = System.currentTimeMillis(),
             modifiedAt = System.currentTimeMillis(),
             tags = emptyList(),
-            rawMetadata = emptyMap()
+            rawMetadata = emptyMap(),
+            immichAssetId = immichAssetId,
+            immichAlbumId = immichAlbumId
         )
         addToProjectIndex(metadata)
         
@@ -110,15 +122,42 @@ class ProjectStorage(private val context: Context) {
     /**
      * Save adjustments for a project
      */
-    fun saveAdjustments(projectId: String, adjustmentsJson: String) {
+    fun saveAdjustments(projectId: String, adjustmentsJson: String, updatedAtMs: Long = System.currentTimeMillis()) {
         val projectDir = File(projectsDir, projectId)
         if (!projectDir.exists()) return
         
         val adjustmentsFile = File(projectDir, "adjustments.json")
+        val existing = runCatching { if (adjustmentsFile.exists()) adjustmentsFile.readText() else null }.getOrNull()
+        if (existing == adjustmentsJson) return
         adjustmentsFile.writeText(adjustmentsJson)
         
-        // Update modified time
-        updateProjectModifiedTime(projectId)
+        updateProjectEditsTime(projectId, updatedAtMs)
+    }
+
+    fun getEditsUpdatedAtMs(projectId: String): Long {
+        val meta = getAllProjects().firstOrNull { it.id == projectId } ?: return 0L
+        return meta.editsUpdatedAtMs ?: meta.modifiedAt
+    }
+
+    fun getImmichSidecarUpdatedAtMs(projectId: String): Long {
+        val meta = getAllProjects().firstOrNull { it.id == projectId } ?: return 0L
+        return meta.immichSidecarUpdatedAtMs ?: 0L
+    }
+
+    fun setImmichSidecarInfo(projectId: String, assetId: String?, updatedAtMs: Long?) {
+        val projects = getAllProjects().toMutableList()
+        val index = projects.indexOfFirst { it.id == projectId }
+        if (index < 0) return
+        val normalizedAssetId = assetId?.trim().takeUnless { it.isNullOrBlank() }
+        val normalizedUpdatedAt = updatedAtMs?.takeIf { it > 0L }
+        val now = System.currentTimeMillis()
+        projects[index] =
+            projects[index].copy(
+                modifiedAt = now,
+                immichSidecarAssetId = normalizedAssetId,
+                immichSidecarUpdatedAtMs = normalizedUpdatedAt
+            )
+        saveProjectIndex(projects)
     }
     
     /**
@@ -134,6 +173,11 @@ class ProjectStorage(private val context: Context) {
         } catch (e: Exception) {
             emptyList()
         }
+    }
+
+    fun findProjectByImmichAssetId(assetId: String): ProjectMetadata? {
+        if (assetId.isBlank()) return null
+        return getAllProjects().firstOrNull { it.immichAssetId == assetId }
     }
     
     /**
@@ -173,6 +217,19 @@ class ProjectStorage(private val context: Context) {
             projects[index] = projects[index].copy(modifiedAt = System.currentTimeMillis())
             saveProjectIndex(projects)
         }
+    }
+
+    private fun updateProjectEditsTime(projectId: String, editsUpdatedAtMs: Long) {
+        val projects = getAllProjects().toMutableList()
+        val index = projects.indexOfFirst { it.id == projectId }
+        if (index < 0) return
+        val now = System.currentTimeMillis()
+        projects[index] =
+            projects[index].copy(
+                modifiedAt = maxOf(now, editsUpdatedAtMs),
+                editsUpdatedAtMs = editsUpdatedAtMs
+            )
+        saveProjectIndex(projects)
     }
 
     fun setRawMetadata(projectId: String, rawMetadata: Map<String, String>) {

@@ -65,7 +65,6 @@ internal fun SettingsScreen(
     immichLoginEmail: String,
     immichAccessToken: String,
     immichApiKey: String,
-    immichOAuthDebug: String,
     onLowQualityPreviewEnabledChange: (Boolean) -> Unit,
     onAutomaticTaggingEnabledChange: (Boolean) -> Unit,
     onEnvironmentMaskingEnabledChange: (Boolean) -> Unit,
@@ -78,7 +77,6 @@ internal fun SettingsScreen(
     onImmichLogin: suspend (String, String, String) -> ImmichLoginResult?,
     onImmichOAuthStart: suspend (String) -> ImmichOAuthStartResult?,
     onImmichApiKeyChange: (String) -> Unit,
-    onImmichOAuthDebugClear: () -> Unit,
     onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -281,21 +279,7 @@ internal fun SettingsScreen(
                 )
             }
 
-            ListItem(
-                headlineContent = { Text("Immich OAuth debug") },
-                supportingContent = {
-                    Text(
-                        text = if (immichOAuthDebug.isNotBlank()) immichOAuthDebug else "No debug info yet.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                },
-                trailingContent = {
-                    if (immichOAuthDebug.isNotBlank()) {
-                        TextButton(onClick = onImmichOAuthDebugClear) { Text("Clear") }
-                    }
-                }
-            )
+            // No Immich "export defaults" here; destination is chosen per-export.
             var showMaskTagsDialog by remember { mutableStateOf(false) }
             var maskTagsDraft by remember { mutableStateOf("") }
 

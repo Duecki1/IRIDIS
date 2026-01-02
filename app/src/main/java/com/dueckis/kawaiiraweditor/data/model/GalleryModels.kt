@@ -10,7 +10,11 @@ internal data class GalleryItem(
     val tags: List<String> = emptyList(),
     val rawMetadata: Map<String, String> = emptyMap(),
     val createdAt: Long = 0L,
-    val modifiedAt: Long = 0L
+    val modifiedAt: Long = 0L,
+    val immichAssetId: String? = null,
+    val immichAlbumId: String? = null,
+    val editsUpdatedAtMs: Long = 0L,
+    val immichSidecarUpdatedAtMs: Long = 0L
 )
 
 internal enum class Screen {

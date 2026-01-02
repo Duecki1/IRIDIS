@@ -31,13 +31,17 @@ internal fun displayNameForUri(context: Context, uri: Uri): String {
         } ?: uri.lastPathSegment ?: "Imported RAW"
 }
 
-internal fun saveJpegToPictures(context: Context, jpegBytes: ByteArray): Uri? {
+internal fun saveJpegToPictures(
+    context: Context,
+    jpegBytes: ByteArray,
+    relativePath: String? = null
+): Uri? {
     val filename = "IRIDIS_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.jpg"
     val contentValues = ContentValues().apply {
         put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
         put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/IRIDIS")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath?.trim().takeIf { !it.isNullOrBlank() } ?: "Pictures/IRIDIS")
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
     }
@@ -63,14 +67,15 @@ internal fun saveBitmapToPictures(
     context: Context,
     bitmap: Bitmap,
     format: ExportImageFormat,
-    quality: Int
+    quality: Int,
+    relativePath: String? = null
 ): Uri? {
     val filename = "IRIDIS_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.${format.extension}"
     val contentValues = ContentValues().apply {
         put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
         put(MediaStore.MediaColumns.MIME_TYPE, format.mimeType)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/IRIDIS")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath?.trim().takeIf { !it.isNullOrBlank() } ?: "Pictures/IRIDIS")
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
     }

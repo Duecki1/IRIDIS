@@ -88,14 +88,31 @@ internal class AppPreferences(context: Context) {
             .apply()
     }
 
-    fun getImmichOAuthDebug(): String = prefs.getString(KEY_IMMICH_OAUTH_DEBUG, "").orEmpty()
-
-    fun setImmichOAuthDebug(value: String) {
-        prefs.edit().putString(KEY_IMMICH_OAUTH_DEBUG, value).apply()
+    enum class ImmichWorkMode {
+        Local,
+        Immich
     }
 
-    fun clearImmichOAuthDebug() {
-        prefs.edit().remove(KEY_IMMICH_OAUTH_DEBUG).apply()
+    fun getImmichWorkMode(): ImmichWorkMode {
+        val raw = prefs.getString(KEY_IMMICH_WORK_MODE, null)?.trim().orEmpty()
+        if (raw.equals("immich", ignoreCase = true)) return ImmichWorkMode.Immich
+        if (raw.equals("local", ignoreCase = true)) return ImmichWorkMode.Local
+
+        // Back-compat with the older toggle (if present).
+        val legacy = prefs.getBoolean(KEY_IMMICH_AUTO_UPLOAD_EDITS_ENABLED_LEGACY, false)
+        return if (legacy) ImmichWorkMode.Immich else ImmichWorkMode.Local
+    }
+
+    fun setImmichWorkMode(mode: ImmichWorkMode) {
+        val raw = if (mode == ImmichWorkMode.Immich) "immich" else "local"
+        prefs.edit().putString(KEY_IMMICH_WORK_MODE, raw).apply()
+    }
+
+    fun getImmichLocalExportRelativePath(): String =
+        prefs.getString(KEY_IMMICH_LOCAL_EXPORT_RELATIVE_PATH, DEFAULT_IMMICH_LOCAL_EXPORT_RELATIVE_PATH).orEmpty()
+
+    fun setImmichLocalExportRelativePath(relativePath: String) {
+        prefs.edit().putString(KEY_IMMICH_LOCAL_EXPORT_RELATIVE_PATH, relativePath.trim()).apply()
     }
     fun getMaskRenameTags(): List<String> {
         val raw = prefs.getString(KEY_MASK_RENAME_TAGS, null) ?: return emptyList()
@@ -136,7 +153,10 @@ internal class AppPreferences(context: Context) {
         private const val KEY_IMMICH_ACCESS_TOKEN = "immich_access_token"
         private const val KEY_IMMICH_OAUTH_STATE = "immich_oauth_state"
         private const val KEY_IMMICH_OAUTH_VERIFIER = "immich_oauth_verifier"
-        private const val KEY_IMMICH_OAUTH_DEBUG = "immich_oauth_debug"
+        private const val KEY_IMMICH_WORK_MODE = "immich_work_mode"
+        private const val KEY_IMMICH_AUTO_UPLOAD_EDITS_ENABLED_LEGACY = "immich_auto_upload_edits_enabled"
+        private const val KEY_IMMICH_LOCAL_EXPORT_RELATIVE_PATH = "immich_local_export_relative_path"
+        private const val DEFAULT_IMMICH_LOCAL_EXPORT_RELATIVE_PATH = "Pictures/IRIDIS/Immich"
         private val DEFAULT_MASK_RENAME_TAGS = listOf(
             "Subject",
             "Face",

@@ -51,6 +51,13 @@ internal data class ImmichAsset(
     val type: String = "IMAGE"
 )
 
+internal data class ImmichAssetInfo(
+    val id: String,
+    val originalFileName: String,
+    val description: String? = null,
+    val updatedAt: String? = null
+)
+
 internal data class ImmichAlbum(
     val id: String,
     val name: String,
@@ -75,6 +82,13 @@ internal data class ImmichOAuthStartResult(
     val codeVerifier: String? = null,
     val errorMessage: String? = null,
     val statusCode: Int? = null
+)
+
+internal data class ImmichUploadResult(
+    val assetId: String?,
+    val errorMessage: String? = null,
+    val statusCode: Int? = null,
+    val responseBody: String? = null
 )
 
 internal data class ImmichAssetPage(
@@ -238,26 +252,115 @@ internal suspend fun downloadImmichOriginal(
     }
 }
 
+internal suspend fun fetchImmichAssetInfo(
+    config: ImmichConfig,
+    assetId: String
+): ImmichAssetInfo? {
+    if (assetId.isBlank()) return null
+    return withContext(Dispatchers.IO) {
+        runCatching {
+            val baseUrl = config.apiBaseUrl()
+            if (baseUrl.isBlank()) return@runCatching null
+            val url = "$baseUrl/assets/$assetId"
+            val connection = openJsonConnection(url, "GET", config)
+            val status = connection.responseCode
+            if (status !in 200..299) return@runCatching null
+            val body = BufferedReader(InputStreamReader(connection.inputStream)).use { it.readText() }
+            val json = JSONObject(body)
+            val id = json.optString("id").trim().ifBlank { assetId }
+            val fileName = json.optString("originalFileName").trim().ifBlank { id }
+            val updatedAt = json.optString("updatedAt").ifBlank { null }
+            val description =
+                json.optString("description").takeIf { it.isNotBlank() }
+                    ?: json.optJSONObject("exifInfo")?.optString("description")?.takeIf { it.isNotBlank() }
+            ImmichAssetInfo(id = id, originalFileName = fileName, description = description, updatedAt = updatedAt)
+        }.getOrNull()
+    }
+}
+
+internal suspend fun updateImmichAssetDescription(
+    config: ImmichConfig,
+    assetId: String,
+    description: String
+): ImmichUploadResult {
+    if (assetId.isBlank()) {
+        return ImmichUploadResult(assetId = null, errorMessage = "Missing asset id.")
+    }
+    return withContext(Dispatchers.IO) {
+        runCatching {
+            val baseUrl = config.apiBaseUrl()
+            if (baseUrl.isBlank()) {
+                return@runCatching ImmichUploadResult(assetId = null, errorMessage = "Immich server URL is missing.")
+            }
+            val payload = JSONObject().put("description", description)
+            val url = "$baseUrl/assets/$assetId"
+            val methodsToTry = listOf("PUT", "PATCH")
+            var lastStatus: Int? = null
+            var lastBody: String? = null
+            for (method in methodsToTry) {
+                val connection = openJsonConnection(url, method, config)
+                connection.doOutput = true
+                connection.outputStream.use { stream ->
+                    stream.write(payload.toString().toByteArray())
+                }
+                val status = connection.responseCode
+                lastStatus = status
+                val body =
+                    BufferedReader(InputStreamReader(connection.errorStream ?: connection.inputStream)).use {
+                        it.readText()
+                    }
+                lastBody = body
+                if (status in 200..299) {
+                    return@runCatching ImmichUploadResult(assetId = assetId, statusCode = status, responseBody = body)
+                }
+            }
+            val parsed = parseImmichError(lastBody.orEmpty())
+            ImmichUploadResult(
+                assetId = null,
+                errorMessage = parsed ?: "Failed to update description (HTTP ${lastStatus ?: "?"}).",
+                statusCode = lastStatus,
+                responseBody = lastBody?.takeIf { it.isNotBlank() }
+            )
+        }.getOrElse { error ->
+            ImmichUploadResult(assetId = null, errorMessage = "Failed to update description: ${error.message ?: "Network error"}")
+        }
+    }
+}
+
 internal suspend fun uploadImmichAsset(
     config: ImmichConfig,
     bytes: ByteArray,
     fileName: String,
     mimeType: String
-): Boolean {
+): ImmichUploadResult {
     return withContext(Dispatchers.IO) {
         runCatching {
             val baseUrl = config.apiBaseUrl()
-            if (baseUrl.isBlank()) return@runCatching false
+            if (baseUrl.isBlank()) return@runCatching ImmichUploadResult(
+                assetId = null,
+                errorMessage = "Immich server URL is missing.",
+                statusCode = null
+            )
 
             val boundary = "----KawaiiRawEditor${System.currentTimeMillis()}"
             val url = "$baseUrl/assets"
+            val safeFileName =
+                fileName
+                    .replace("\"", "_")
+                    .replace("\r", "")
+                    .replace("\n", "")
+                    .trim()
+                    .ifBlank { "upload" }
             val connection = (URL(url).openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = true
                 connectTimeout = 15_000
                 readTimeout = 30_000
                 requestMethod = "POST"
                 doOutput = true
+                useCaches = false
                 setRequestProperty("Accept", "application/json")
+                setRequestProperty("Connection", "close")
+                setRequestProperty("User-Agent", "KawaiiRawEditor")
                 setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
                 applyAuthHeader(this, config)
             }
@@ -266,34 +369,123 @@ internal suspend fun uploadImmichAsset(
             val boundaryPrefix = "--$boundary"
             val nowIso = formatIsoUtcNow()
 
+            fun fieldPart(name: String, value: String): ByteArray =
+                buildString {
+                    append(boundaryPrefix).append(lineBreak)
+                    append("Content-Disposition: form-data; name=\"").append(name).append('"')
+                    append(lineBreak).append(lineBreak)
+                    append(value)
+                    append(lineBreak)
+                }.toByteArray(Charsets.UTF_8)
+
+            fun fileHeaderPart(name: String, filename: String, type: String): ByteArray =
+                buildString {
+                    append(boundaryPrefix).append(lineBreak)
+                    append("Content-Disposition: form-data; name=\"").append(name).append("\"; filename=\"")
+                    append(filename).append('"').append(lineBreak)
+                    append("Content-Type: ").append(type).append(lineBreak).append(lineBreak)
+                }.toByteArray(Charsets.UTF_8)
+
+            fun fileFooterPart(): ByteArray = lineBreak.toByteArray(Charsets.UTF_8)
+
+            val closing = "$boundaryPrefix--$lineBreak".toByteArray(Charsets.UTF_8)
+
+            val parts =
+                listOf(
+                    fieldPart("deviceId", "kawaiiraweditor-android"),
+                    fieldPart("deviceAssetId", UUID.randomUUID().toString()),
+                    fieldPart("fileCreatedAt", nowIso),
+                    fieldPart("fileModifiedAt", nowIso),
+                    fieldPart("filename", safeFileName),
+                    fieldPart("metadata", "[]"),
+                    fileHeaderPart("assetData", safeFileName, mimeType)
+                )
+
+            val totalLength =
+                parts.sumOf { it.size.toLong() } +
+                    bytes.size.toLong() +
+                    fileFooterPart().size.toLong() +
+                    closing.size.toLong()
+
+            // Avoid chunked transfer encoding; some servers/proxies can mishandle it and corrupt uploads.
+            connection.setFixedLengthStreamingMode(totalLength)
+            connection.setRequestProperty("Content-Length", totalLength.toString())
+
             connection.outputStream.use { stream ->
-                fun writeField(name: String, value: String) {
-                    stream.write("$boundaryPrefix$lineBreak".toByteArray())
-                    stream.write("Content-Disposition: form-data; name=\"$name\"$lineBreak$lineBreak".toByteArray())
-                    stream.write(value.toByteArray())
-                    stream.write(lineBreak.toByteArray())
-                }
-
-                fun writeFile(name: String, filename: String, type: String, data: ByteArray) {
-                    stream.write("$boundaryPrefix$lineBreak".toByteArray())
-                    stream.write(
-                        "Content-Disposition: form-data; name=\"$name\"; filename=\"$filename\"$lineBreak".toByteArray()
-                    )
-                    stream.write("Content-Type: $type$lineBreak$lineBreak".toByteArray())
-                    stream.write(data)
-                    stream.write(lineBreak.toByteArray())
-                }
-
-                writeField("deviceId", "kawaiiraweditor-android")
-                writeField("deviceAssetId", UUID.randomUUID().toString())
-                writeField("fileCreatedAt", nowIso)
-                writeField("fileModifiedAt", nowIso)
-                writeField("filename", fileName)
-                writeField("metadata", "[]")
-                writeFile("assetData", fileName, mimeType, bytes)
-                stream.write("$boundaryPrefix--$lineBreak".toByteArray())
+                parts.forEach { stream.write(it) }
+                stream.write(bytes)
+                stream.write(fileFooterPart())
+                stream.write(closing)
             }
 
+            val status = connection.responseCode
+            val body =
+                if (status in 200..299) {
+                    BufferedReader(InputStreamReader(connection.inputStream)).use { it.readText() }
+                } else {
+                    BufferedReader(InputStreamReader(connection.errorStream ?: connection.inputStream)).use {
+                        it.readText()
+                    }
+                }.trim()
+
+            if (status !in 200..299) {
+                val error = parseImmichError(body)
+                return@runCatching ImmichUploadResult(
+                    assetId = null,
+                    errorMessage = error ?: "Immich upload failed (HTTP $status).",
+                    statusCode = status,
+                    responseBody = body.takeIf { it.isNotBlank() }
+                )
+            }
+
+            val assetId =
+                runCatching {
+                    val obj = JSONObject(body)
+                    obj.optString("id").ifBlank { obj.optString("assetId") }.trim()
+                }.getOrElse {
+                    runCatching {
+                        val arr = JSONArray(body)
+                        val first = arr.optJSONObject(0)
+                        first?.optString("id")?.trim().orEmpty()
+                    }.getOrDefault("")
+                }.ifBlank { null }
+
+            ImmichUploadResult(
+                assetId = assetId,
+                errorMessage = if (assetId == null) "Immich upload succeeded but returned no asset id." else null,
+                statusCode = status,
+                responseBody = body.takeIf { it.isNotBlank() }
+            )
+        }.getOrElse { error ->
+            ImmichUploadResult(
+                assetId = null,
+                errorMessage = "Immich upload failed: ${error.message ?: "Network error"}",
+                statusCode = null
+            )
+        }
+    }
+}
+
+internal suspend fun addImmichAssetsToAlbum(
+    config: ImmichConfig,
+    albumId: String,
+    assetIds: List<String>
+): Boolean {
+    if (albumId.isBlank()) return false
+    val ids = assetIds.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+    if (ids.isEmpty()) return false
+    return withContext(Dispatchers.IO) {
+        runCatching {
+            val baseUrl = config.apiBaseUrl()
+            if (baseUrl.isBlank()) return@runCatching false
+
+            val payload = JSONObject().put("ids", JSONArray(ids))
+            val url = "$baseUrl/albums/$albumId/assets"
+            val connection = openJsonConnection(url, "PUT", config)
+            connection.doOutput = true
+            connection.outputStream.use { stream ->
+                stream.write(payload.toString().toByteArray())
+            }
             val status = connection.responseCode
             status in 200..299
         }.getOrDefault(false)

@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -50,6 +51,7 @@ internal fun GalleryItemCard(
     isProcessing: Boolean,
     automaticTaggingEnabled: Boolean,
     processingProgress: Float?,
+    needsImmichSync: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -116,6 +118,34 @@ internal fun GalleryItemCard(
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
                 )
+            }
+
+            if (!selected && needsImmichSync) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f),
+                    shape = CircleShape,
+                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
+                ) {
+                    Box(modifier = Modifier.padding(6.dp), contentAlignment = Alignment.Center) {
+                        LoadingIndicator(
+                            modifier = Modifier.size(14.dp),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            } else if (selected && needsImmichSync) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f),
+                    shape = CircleShape,
+                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
+                ) {
+                    androidx.compose.material3.Icon(
+                        Icons.Default.CloudUpload,
+                        contentDescription = "Immich sync pending",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(6.dp).size(14.dp)
+                    )
+                }
             }
 
             if (isProcessing && automaticTaggingEnabled) {
