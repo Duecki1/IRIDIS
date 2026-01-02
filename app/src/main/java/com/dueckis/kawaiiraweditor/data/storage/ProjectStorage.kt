@@ -167,7 +167,14 @@ class ProjectStorage(private val context: Context) {
         val current = loadEditHistory(projectId)
         val merged =
             (current + entries)
-                .distinctBy { it.id }
+                .fold(mutableMapOf<String, EditHistoryEntry>()) { acc, entry ->
+                    val existing = acc[entry.id]
+                    if (existing == null || entry.updatedAtMs >= existing.updatedAtMs) {
+                        acc[entry.id] = entry
+                    }
+                    acc
+                }
+                .values
                 .sortedBy { it.updatedAtMs }
                 .takeLast(MAX_EDIT_HISTORY_ENTRIES)
         file.writeText(gson.toJson(merged))
