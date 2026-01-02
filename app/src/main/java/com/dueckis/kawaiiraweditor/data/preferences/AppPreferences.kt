@@ -113,6 +113,13 @@ internal class AppPreferences(context: Context) {
     fun setImmichLocalExportRelativePath(relativePath: String) {
         prefs.edit().putString(KEY_IMMICH_LOCAL_EXPORT_RELATIVE_PATH, relativePath.trim()).apply()
     }
+
+    fun isImmichDescriptionSyncEnabled(): Boolean =
+        prefs.getBoolean(KEY_IMMICH_DESCRIPTION_SYNC_ENABLED, false)
+
+    fun setImmichDescriptionSyncEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_IMMICH_DESCRIPTION_SYNC_ENABLED, enabled).apply()
+    }
     fun getMaskRenameTags(): List<String> {
         val raw = prefs.getString(KEY_MASK_RENAME_TAGS, null) ?: return emptyList()
         return runCatching {
@@ -154,6 +161,7 @@ internal class AppPreferences(context: Context) {
         private const val KEY_IMMICH_WORK_MODE = "immich_work_mode"
         private const val KEY_IMMICH_AUTO_UPLOAD_EDITS_ENABLED_LEGACY = "immich_auto_upload_edits_enabled"
         private const val KEY_IMMICH_LOCAL_EXPORT_RELATIVE_PATH = "immich_local_export_relative_path"
+        private const val KEY_IMMICH_DESCRIPTION_SYNC_ENABLED = "immich_description_sync_enabled"
         private const val DEFAULT_IMMICH_LOCAL_EXPORT_RELATIVE_PATH = "Pictures/IRIDIS/Immich"
         private val DEFAULT_MASK_RENAME_TAGS = listOf(
             "Subject",

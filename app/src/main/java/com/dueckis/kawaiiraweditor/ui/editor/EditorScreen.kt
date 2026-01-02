@@ -168,6 +168,7 @@ internal fun EditorScreen(
     galleryItem: GalleryItem?,
     lowQualityPreviewEnabled: Boolean,
     environmentMaskingEnabled: Boolean,
+    immichDescriptionSyncEnabled: Boolean,
     maskRenameTags: List<String> = emptyList(),
     onBackClick: () -> Unit,
     onPredictiveBackProgress: (Float) -> Unit,
@@ -211,6 +212,7 @@ internal fun EditorScreen(
         force: Boolean,
         showToastOnFailure: Boolean
     ): Boolean {
+        if (!immichDescriptionSyncEnabled) return false
         if (isImmichSidecarSyncing) return false
         val config = resolveImmichConfigOrNull() ?: return false
         val originImmichAssetId = galleryItem.immichAssetId?.trim().takeUnless { it.isNullOrBlank() } ?: return false
@@ -345,6 +347,7 @@ internal fun EditorScreen(
     }
 
     LaunchedEffect(galleryItem.projectId, galleryItem.immichAssetId) {
+        if (!immichDescriptionSyncEnabled) return@LaunchedEffect
         val originImmichAssetId = galleryItem.immichAssetId?.trim().takeUnless { it.isNullOrBlank() } ?: return@LaunchedEffect
         if (originImmichAssetId.isBlank()) return@LaunchedEffect
         immichSidecarSyncRequests
@@ -1095,23 +1098,34 @@ internal fun EditorScreen(
             return@LaunchedEffect
         }
 
-        val immichConfig = resolveImmichConfigOrNull()
-        val originImmichAssetId = galleryItem.immichAssetId?.trim().takeUnless { it.isNullOrBlank() }
-        if (immichConfig != null && originImmichAssetId != null) {
-            runCatching {
-                val localEditsUpdatedAtMs = withContext(Dispatchers.IO) { storage.getEditsUpdatedAtMs(galleryItem.projectId) }
-                val remote = fetchRemoteIridisSidecarFromAsset(immichConfig, originImmichAssetId)
-                if (remote != null) {
-                    val remoteUpdatedAtMs = remote.updatedAtMs
-                    withContext(Dispatchers.IO) {
-                        storage.setImmichSidecarInfo(projectId = galleryItem.projectId, assetId = originImmichAssetId, updatedAtMs = remoteUpdatedAtMs)
-                        if (remoteUpdatedAtMs > localEditsUpdatedAtMs && remote.editsJson.isNotBlank()) {
-                            storage.saveAdjustments(projectId = galleryItem.projectId, adjustmentsJson = remote.editsJson, updatedAtMs = remoteUpdatedAtMs)
+        if (immichDescriptionSyncEnabled) {
+            val immichConfig = resolveImmichConfigOrNull()
+            val originImmichAssetId = galleryItem.immichAssetId?.trim().takeUnless { it.isNullOrBlank() }
+            if (immichConfig != null && originImmichAssetId != null) {
+                runCatching {
+                    val localEditsUpdatedAtMs =
+                        withContext(Dispatchers.IO) { storage.getEditsUpdatedAtMs(galleryItem.projectId) }
+                    val remote = fetchRemoteIridisSidecarFromAsset(immichConfig, originImmichAssetId)
+                    if (remote != null) {
+                        val remoteUpdatedAtMs = remote.updatedAtMs
+                        withContext(Dispatchers.IO) {
+                            storage.setImmichSidecarInfo(
+                                projectId = galleryItem.projectId,
+                                assetId = originImmichAssetId,
+                                updatedAtMs = remoteUpdatedAtMs
+                            )
+                            if (remoteUpdatedAtMs > localEditsUpdatedAtMs && remote.editsJson.isNotBlank()) {
+                                storage.saveAdjustments(
+                                    projectId = galleryItem.projectId,
+                                    adjustmentsJson = remote.editsJson,
+                                    updatedAtMs = remoteUpdatedAtMs
+                                )
+                            }
                         }
                     }
+                }.onFailure { error ->
+                    Log.w(logTag, "Failed to sync edits from Immich", error)
                 }
-            }.onFailure { error ->
-                Log.w(logTag, "Failed to sync edits from Immich", error)
             }
         }
 

@@ -60,6 +60,7 @@ internal fun SettingsScreen(
     environmentMaskingEnabled: Boolean,
     openEditorOnImportEnabled: Boolean,
     maskRenameTags: List<String>,
+    immichDescriptionSyncEnabled: Boolean,
     immichServerUrl: String,
     immichAuthMode: ImmichAuthMode,
     immichLoginEmail: String,
@@ -70,6 +71,7 @@ internal fun SettingsScreen(
     onEnvironmentMaskingEnabledChange: (Boolean) -> Unit,
     onOpenEditorOnImportEnabledChange: (Boolean) -> Unit,
     onMaskRenameTagsChange: (List<String>) -> Unit,
+    onImmichDescriptionSyncEnabledChange: (Boolean) -> Unit,
     onImmichServerUrlChange: (String) -> Unit,
     onImmichAuthModeChange: (ImmichAuthMode) -> Unit,
     onImmichLoginEmailChange: (String) -> Unit,
@@ -227,6 +229,26 @@ internal fun SettingsScreen(
                     )
                 )
             }
+
+            ListItem(
+                headlineContent = { Text("Immich description sync") },
+                supportingContent = {
+                    Text(
+                        "Store IRIDIS edits in the Immich photo description for syncing across devices.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                trailingContent = {
+                    Switch(
+                        checked = immichDescriptionSyncEnabled,
+                        onCheckedChange = onImmichDescriptionSyncEnabledChange
+                    )
+                },
+                modifier = Modifier.clickable {
+                    onImmichDescriptionSyncEnabledChange(!immichDescriptionSyncEnabled)
+                }
+            )
 
             if (immichAuthMode == ImmichAuthMode.Login) {
                 val loginSupporting = when {

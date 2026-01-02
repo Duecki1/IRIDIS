@@ -99,6 +99,9 @@ fun KawaiiApp(
     var immichLoginEmail by remember { mutableStateOf(appPreferences.getImmichLoginEmail()) }
     var immichAccessToken by remember { mutableStateOf(appPreferences.getImmichAccessToken()) }
     var immichApiKey by remember { mutableStateOf(appPreferences.getImmichApiKey()) }
+    var immichDescriptionSyncEnabled by remember {
+        mutableStateOf(appPreferences.isImmichDescriptionSyncEnabled())
+    }
 
     appPreferences.ensureDefaultMaskRenameTagsSeeded()
     var maskRenameTags by remember { mutableStateOf(appPreferences.getMaskRenameTags()) }
@@ -366,16 +369,17 @@ fun KawaiiApp(
             val editorTranslationPx = dismissProgress * widthPx
 
             Box(modifier = Modifier.fillMaxSize()) {
-                GalleryScreen(
-                    items = galleryItems,
-                    tagger = tagger,
-                    lowQualityPreviewEnabled = lowQualityPreviewEnabled,
-                    automaticTaggingEnabled = automaticTaggingEnabled,
-                    openEditorOnImportEnabled = openEditorOnImportEnabled,
-                    immichServerUrl = immichServerUrl,
-                    immichAuthMode = immichAuthMode,
-                    immichAccessToken = immichAccessToken,
-                    immichApiKey = immichApiKey,
+                    GalleryScreen(
+                        items = galleryItems,
+                        tagger = tagger,
+                        lowQualityPreviewEnabled = lowQualityPreviewEnabled,
+                        automaticTaggingEnabled = automaticTaggingEnabled,
+                        openEditorOnImportEnabled = openEditorOnImportEnabled,
+                        immichDescriptionSyncEnabled = immichDescriptionSyncEnabled,
+                        immichServerUrl = immichServerUrl,
+                        immichAuthMode = immichAuthMode,
+                        immichAccessToken = immichAccessToken,
+                        immichApiKey = immichApiKey,
                     isTaggingInFlight = ::isTaggingInFlight,
                     onTaggingInFlightChange = ::setTaggingInFlight,
                     tagProgressFor = ::tagProgressFor,
@@ -458,6 +462,7 @@ fun KawaiiApp(
                             galleryItem = selectedItem,
                             lowQualityPreviewEnabled = lowQualityPreviewEnabled,
                             environmentMaskingEnabled = environmentMaskingEnabled,
+                            immichDescriptionSyncEnabled = immichDescriptionSyncEnabled,
                             maskRenameTags = maskRenameTags,
                             onBackClick = { requestExitEditor(animated = true) },
                             onPredictiveBackProgress = { progress ->
@@ -506,6 +511,11 @@ fun KawaiiApp(
                         onOpenEditorOnImportEnabledChange = { enabled ->
                             openEditorOnImportEnabled = enabled
                             appPreferences.setOpenEditorOnImportEnabled(enabled)
+                        },
+                        immichDescriptionSyncEnabled = immichDescriptionSyncEnabled,
+                        onImmichDescriptionSyncEnabledChange = { enabled ->
+                            immichDescriptionSyncEnabled = enabled
+                            appPreferences.setImmichDescriptionSyncEnabled(enabled)
                         },
                         immichServerUrl = immichServerUrl,
                         immichAuthMode = immichAuthMode,

@@ -146,6 +146,7 @@ internal fun GalleryScreen(
     lowQualityPreviewEnabled: Boolean,
     automaticTaggingEnabled: Boolean,
     openEditorOnImportEnabled: Boolean,
+    immichDescriptionSyncEnabled: Boolean,
     immichServerUrl: String,
     immichAuthMode: ImmichAuthMode,
     immichAccessToken: String,
@@ -813,11 +814,6 @@ internal fun GalleryScreen(
             .take(5)
             .map { it.key }
     }
-    val anyImmichSyncPending = remember(items) {
-        items.any { item ->
-            !item.immichAssetId.isNullOrBlank() && item.editsUpdatedAtMs > item.immichSidecarUpdatedAtMs
-        }
-    }
     var searchActive by rememberSaveable { mutableStateOf(false) }
     var isExecutingSearch by remember { mutableStateOf(false) }
 
@@ -1023,29 +1019,6 @@ internal fun GalleryScreen(
                             }
                         }
 
-                        AnimatedVisibility(visible = anyImmichSyncPending && gallerySource == GallerySource.Local) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                shape = RoundedCornerShape(14.dp),
-                                modifier = Modifier.padding(start = 10.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    LoadingIndicator(
-                                        modifier = Modifier.size(18.dp),
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "Syncing",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-                            }
-                        }
                     }
                 }
 
@@ -1218,8 +1191,11 @@ internal fun GalleryScreen(
                                 val item = sortedLocalItems[index]
                                 val isSelected = item.projectId in selectedIds
                                 val needsImmichSync =
-                                    !item.immichAssetId.isNullOrBlank() &&
+                                    immichDescriptionSyncEnabled &&
+                                        !item.immichAssetId.isNullOrBlank() &&
                                         item.editsUpdatedAtMs > item.immichSidecarUpdatedAtMs
+                                val showImmichOriginIcon =
+                                    immichDescriptionSyncEnabled && !item.immichAssetId.isNullOrBlank()
                                 GalleryItemCard(
                                     item = item,
                                     selected = isSelected,
@@ -1227,6 +1203,7 @@ internal fun GalleryScreen(
                                     automaticTaggingEnabled = automaticTaggingEnabled,
                                     processingProgress = tagProgressFor(item.projectId),
                                     needsImmichSync = needsImmichSync,
+                                    showImmichOriginIcon = showImmichOriginIcon && !needsImmichSync,
                                     onClick = {
                                         if (isBulkExporting) return@GalleryItemCard
                                         if (selectedIds.isEmpty()) {
