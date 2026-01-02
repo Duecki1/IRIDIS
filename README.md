@@ -60,14 +60,9 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Clarity and such slider need to actually work
 - Highlight recovery needs to be better for the highlight slider. (use the exposure slider for now)
 - Use a more intuitive rating system
-- Rename files
-- Subject masks should be stored
 - Save calculated AI Masks
 - Tablet UI design
-- add support for immich
-- add ios support (maybe)
 - app should only open once
-- delete all kawaiirawapp references, make immich sync work smoothly, more feedback on downloading ml models, immich sync should save every devices last edit so it never gets lost accidentally
   
 ## Info
 Downloading the app will automatically install a Subject selection ML Model.
