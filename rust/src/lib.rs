@@ -10,7 +10,6 @@ use image::{
     imageops::FilterType,
     ExtendedColorType,
     ImageBuffer,
-    Rgba,
 };
 use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{jbyteArray, jlong, jstring, jint, jboolean};
@@ -25,7 +24,6 @@ use serde::Deserialize;
 use serde_json::json;
 use serde_json::from_str;
 use serde_json::Value;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::AddAssign;
 use std::panic;
@@ -2249,7 +2247,7 @@ fn build_luma_buffer_region(
                 continue;
             }
             let idx = (full_y * full_width + full_x) as usize;
-            let base = idx * 4;
+            let base = idx * 3;
             let color = [linear[base], linear[base + 1], linear[base + 2]];
             luma.push(get_luma(color));
         }
@@ -2378,7 +2376,7 @@ fn sample_linear_color(linear: &[f32], width: u32, height: u32, x: u32, y: u32) 
     }
     let clamped_x = x.min(width.saturating_sub(1));
     let clamped_y = y.min(height.saturating_sub(1));
-    let idx = (clamped_y * width + clamped_x) as usize * 4;
+    let idx = (clamped_y * width + clamped_x) as usize * 3;
     [linear[idx], linear[idx + 1], linear[idx + 2]]
 }
 
@@ -3193,7 +3191,182 @@ fn apply_default_raw_processing(colors: [f32; 3], use_basic_tone_mapper: bool) -
     ]
 }
 
-type LinearImage = ImageBuffer<Rgba<f32>, Vec<f32>>;
+type LinearImage = ImageBuffer<image::Rgb<f32>, Vec<f32>>;
+
+// Compact u16 storage for RAM efficiency (144MB vs 288MB for 24MP image)
+type CompactImage = ImageBuffer<image::Rgb<u16>, Vec<u16>>;
+
+// Convert f32 linear image to u16 compact format (50% memory reduction)
+fn compact_image(input: &LinearImage) -> CompactImage {
+    let (w, h) = input.dimensions();
+    let raw_f32 = input.as_raw();
+    let mut raw_u16 = Vec::with_capacity((w * h * 3) as usize);
+
+    for chunk in raw_f32.chunks_exact(3) {
+        let r = (chunk[0] * 65535.0).clamp(0.0, 65535.0) as u16;
+        let g = (chunk[1] * 65535.0).clamp(0.0, 65535.0) as u16;
+        let b = (chunk[2] * 65535.0).clamp(0.0, 65535.0) as u16;
+        raw_u16.extend_from_slice(&[r, g, b]);
+    }
+
+    ImageBuffer::from_vec(w, h, raw_u16).unwrap()
+}
+
+// Virtual transformation state - no physical rotation needed
+struct TransformState {
+    source_w: u32,
+    source_h: u32,
+    output_w: u32,
+    output_h: u32,
+    orientation_steps: u8,
+    flip_h: bool,
+    flip_v: bool,
+    rotation_rad: f32,
+    crop: Option<CropPayload>,
+    center_x: f32,
+    center_y: f32,
+}
+
+impl TransformState {
+    fn new(w: u32, h: u32, payload: &AdjustmentsPayload) -> Self {
+        let steps = payload.orientation_steps % 4;
+        
+        // Calculate dimensions after 90 degree turns
+        let (mut final_w, mut final_h) = if steps % 2 == 1 { (h, w) } else { (w, h) };
+        
+        // Apply crop dimensions if present
+        if let Some(crop) = &payload.crop {
+            let (_, _, cw, ch) = crop_rect_pixels(final_w, final_h, crop);
+            final_w = cw;
+            final_h = ch;
+        }
+
+        Self {
+            source_w: w,
+            source_h: h,
+            output_w: final_w,
+            output_h: final_h,
+            orientation_steps: steps,
+            flip_h: payload.flip_horizontal,
+            flip_v: payload.flip_vertical,
+            rotation_rad: payload.rotation.to_radians(),
+            crop: payload.crop.clone(),
+            center_x: (final_w as f32 - 1.0) / 2.0,
+            center_y: (final_h as f32 - 1.0) / 2.0,
+        }
+    }
+
+    // Maps output (x,y) to source (sx,sy) coordinates - the magic of virtual rotation
+    #[inline(always)]
+    fn map_coord(&self, x: u32, y: u32) -> Option<(f32, f32)> {
+        let mut fx = x as f32;
+        let mut fy = y as f32;
+
+        // 1. Inverse Crop (Add offset)
+        if let Some(crop) = &self.crop {
+            let (oriented_w, oriented_h) = if self.orientation_steps % 2 == 1 { 
+                (self.source_h, self.source_w) 
+            } else { 
+                (self.source_w, self.source_h) 
+            };
+            let (cx, cy, _, _) = crop_rect_pixels(oriented_w, oriented_h, crop);
+            fx += cx as f32;
+            fy += cy as f32;
+        }
+
+        // 2. Inverse Arbitrary Rotation (Rotate about center)
+        if self.rotation_rad.abs() > 0.0001 {
+            let dx = fx - self.center_x;
+            let dy = fy - self.center_y;
+            let cos_a = self.rotation_rad.cos();
+            let sin_a = self.rotation_rad.sin();
+            // Inverse rotation: -angle
+            fx = dx * cos_a + dy * sin_a + self.center_x;
+            fy = -dx * sin_a + dy * cos_a + self.center_y;
+        }
+
+        // 3. Inverse Flips
+        let (cur_w, cur_h) = if self.orientation_steps % 2 == 1 {
+            (self.source_h, self.source_w)
+        } else {
+            (self.source_w, self.source_h)
+        };
+
+        if self.flip_h { fx = cur_w as f32 - 1.0 - fx; }
+        if self.flip_v { fy = cur_h as f32 - 1.0 - fy; }
+
+        // 4. Inverse Orientation (Swap/Flip coords to match source)
+        let (sx, sy) = match self.orientation_steps {
+            0 => (fx, fy),
+            1 => (fy, (self.source_w as f32 - 1.0) - fx), // 90 deg CW
+            2 => ((self.source_w as f32 - 1.0) - fx, (self.source_h as f32 - 1.0) - fy), // 180
+            3 => ((self.source_h as f32 - 1.0) - fy, fx), // 270 deg CW
+            _ => (fx, fy),
+        };
+
+        // Bounds check
+        if sx < 0.0 || sy < 0.0 || sx >= self.source_w as f32 || sy >= self.source_h as f32 {
+            return None;
+        }
+
+        Some((sx, sy))
+    }
+}
+
+// Sample from u16 image using bilinear interpolation, return f32
+fn sample_virtual(img: &CompactImage, x: f32, y: f32) -> [f32; 3] {
+    let w = img.width();
+    let h = img.height();
+    
+    let x0 = x.floor() as u32;
+    let y0 = y.floor() as u32;
+    let x1 = (x0 + 1).min(w - 1);
+    let y1 = (y0 + 1).min(h - 1);
+    
+    let wx = x - x0 as f32;
+    let wy = y - y0 as f32;
+    
+    let get_p = |xx, yy| {
+        let p = img.get_pixel(xx, yy);
+        [p[0] as f32 / 65535.0, p[1] as f32 / 65535.0, p[2] as f32 / 65535.0]
+    };
+    
+    let p00 = get_p(x0, y0);
+    let p10 = get_p(x1, y0);
+    let p01 = get_p(x0, y1);
+    let p11 = get_p(x1, y1);
+    
+    let mut out = [0.0; 3];
+    for i in 0..3 {
+        let top = p00[i] * (1.0 - wx) + p10[i] * wx;
+        let bot = p01[i] * (1.0 - wx) + p11[i] * wx;
+        out[i] = top * (1.0 - wy) + bot * wy;
+    }
+    out
+}
+
+// Helper to extract a small f32 tile for detail blur calculations
+fn extract_tile_f32(
+    source: &CompactImage, 
+    transform: &TransformState, 
+    tx: u32, 
+    ty: u32, 
+    tw: u32, 
+    th: u32
+) -> Vec<f32> {
+    let mut tile = Vec::with_capacity((tw * th * 3) as usize);
+    for y in 0..th {
+        for x in 0..tw {
+            if let Some((sx, sy)) = transform.map_coord(tx + x, ty + y) {
+                let c = sample_virtual(source, sx, sy);
+                tile.extend_from_slice(&c);
+            } else {
+                tile.extend_from_slice(&[0.0, 0.0, 0.0]);
+            }
+        }
+    }
+    tile
+}
 
 fn develop_preview_linear(
     raw_bytes: &[u8],
@@ -3220,10 +3393,10 @@ fn develop_preview_linear(
         }
     }
 
-    Ok(dynamic_image.to_rgba32f())
+    Ok(dynamic_image.to_rgb32f())
 }
 
-fn rotate_about_center_rgba32f(image: &LinearImage, rotation_degrees: f32) -> LinearImage {
+fn rotate_about_center_rgb32f(image: &LinearImage, rotation_degrees: f32) -> LinearImage {
     let angle = rotation_degrees % 360.0;
     if !angle.is_finite() || angle.abs() <= 0.0001 {
         return image.clone();
@@ -3244,7 +3417,7 @@ fn rotate_about_center_rgba32f(image: &LinearImage, rotation_degrees: f32) -> Li
     let src = image.as_raw();
     let len = match (width as usize)
         .checked_mul(height as usize)
-        .and_then(|v| v.checked_mul(4))
+        .and_then(|v| v.checked_mul(3))
     {
         Some(v) => v,
         None => {
@@ -3260,19 +3433,19 @@ fn rotate_about_center_rgba32f(image: &LinearImage, rotation_degrees: f32) -> Li
         }
     };
 
-    fn get_pixel(src: &[f32], width: u32, x: u32, y: u32) -> [f32; 4] {
-        let idx = ((y as usize) * (width as usize) + (x as usize)) * 4;
-        [src[idx], src[idx + 1], src[idx + 2], src[idx + 3]]
+    fn get_pixel(src: &[f32], width: u32, x: u32, y: u32) -> [f32; 3] {
+        let idx = ((y as usize) * (width as usize) + (x as usize)) * 3;
+        [src[idx], src[idx + 1], src[idx + 2]]
     }
 
-    fn bilinear(src: &[f32], width: u32, height: u32, x: f32, y: f32) -> [f32; 4] {
+    fn bilinear(src: &[f32], width: u32, height: u32, x: f32, y: f32) -> [f32; 3] {
         if !x.is_finite() || !y.is_finite() {
-            return [0.0, 0.0, 0.0, 0.0];
+            return [0.0, 0.0, 0.0];
         }
         let max_x = width.saturating_sub(1) as f32;
         let max_y = height.saturating_sub(1) as f32;
         if x < 0.0 || y < 0.0 || x > max_x || y > max_y {
-            return [0.0, 0.0, 0.0, 0.0];
+            return [0.0, 0.0, 0.0];
         }
 
         let x0 = x.floor() as u32;
@@ -3288,8 +3461,8 @@ fn rotate_about_center_rgba32f(image: &LinearImage, rotation_degrees: f32) -> Li
         let p01 = get_pixel(src, width, x0, y1);
         let p11 = get_pixel(src, width, x1, y1);
 
-        let mut out = [0.0f32; 4];
-        for c in 0..4 {
+        let mut out = [0.0f32; 3];
+        for c in 0..3 {
             let a = p00[c] + (p10[c] - p00[c]) * tx;
             let b = p01[c] + (p11[c] - p01[c]) * tx;
             out[c] = a + (b - a) * ty;
@@ -3305,9 +3478,9 @@ fn rotate_about_center_rgba32f(image: &LinearImage, rotation_degrees: f32) -> Li
             let src_x = cos_a * dx + sin_a * dy + cx;
             let src_y = -sin_a * dx + cos_a * dy + cy;
 
-            let rgba = bilinear(src, width, height, src_x, src_y);
-            let idx = ((y as usize) * (width as usize) + (x as usize)) * 4;
-            out[idx..idx + 4].copy_from_slice(&rgba);
+            let rgb = bilinear(src, width, height, src_x, src_y);
+            let idx = ((y as usize) * (width as usize) + (x as usize)) * 3;
+            out[idx..idx + 3].copy_from_slice(&rgb);
         }
     }
 
@@ -3390,7 +3563,7 @@ fn crop_rect_pixels(img_w: u32, img_h: u32, crop: &CropPayload) -> (u32, u32, u3
     (x_u, y_u, w_u, h_u)
 }
 
-fn apply_transformations<'a>(linear: &'a LinearImage, payload: &AdjustmentsPayload) -> Cow<'a, LinearImage> {
+fn apply_transformations(mut linear: LinearImage, payload: &AdjustmentsPayload) -> LinearImage {
     let steps = payload.orientation_steps % 4;
     let flip_h = payload.flip_horizontal;
     let flip_v = payload.flip_vertical;
@@ -3399,33 +3572,32 @@ fn apply_transformations<'a>(linear: &'a LinearImage, payload: &AdjustmentsPaylo
 
     let has_transform = steps != 0 || flip_h || flip_v || rotation.abs() > 0.0001 || has_crop;
     if !has_transform {
-        return Cow::Borrowed(linear);
+        return linear;
     }
 
-    let mut img = linear.clone();
-    img = match steps {
-        1 => image::imageops::rotate90(&img),
-        2 => image::imageops::rotate180(&img),
-        3 => image::imageops::rotate270(&img),
-        _ => img,
+    linear = match steps {
+        1 => image::imageops::rotate90(&linear),
+        2 => image::imageops::rotate180(&linear),
+        3 => image::imageops::rotate270(&linear),
+        _ => linear,
     };
 
     if flip_h {
-        img = image::imageops::flip_horizontal(&img);
+        linear = image::imageops::flip_horizontal(&linear);
     }
     if flip_v {
-        img = image::imageops::flip_vertical(&img);
+        linear = image::imageops::flip_vertical(&linear);
     }
 
     if rotation.abs() > 0.0001 {
-        img = rotate_about_center_rgba32f(&img, rotation);
+        linear = rotate_about_center_rgb32f(&linear, rotation);
     }
 
     if let Some(crop) = payload.crop.as_ref() {
-        img = apply_crop_linear(&img, crop);
+        linear = apply_crop_linear(&linear, crop);
     }
 
-    Cow::Owned(img)
+    linear
 }
 
 fn render_linear_with_payload(
@@ -3443,7 +3615,7 @@ fn render_linear_with_payload(
     let height = linear_buffer.height();
 
     let linear = linear_buffer.as_raw();
-    debug_assert_eq!(linear.len(), (width as usize) * (height as usize) * 4);
+    debug_assert_eq!(linear.len(), (width as usize) * (height as usize) * 3);
 
     let need_sharpness =
         adjustment_values.sharpness.abs() > 0.00001 ||
@@ -3474,7 +3646,7 @@ fn render_linear_with_payload(
     let mut rgb = try_alloc_vec(len, 0u8)?;
 
     for (idx, out) in rgb.chunks_exact_mut(3).enumerate() {
-        let base = idx * 4;
+        let base = idx * 3;
         let x = (idx as u32) % width;
         let y = (idx as u32) / width;
 
@@ -3626,7 +3798,7 @@ fn render_linear_roi_with_payload(
     }
 
     let linear = linear_buffer.as_raw();
-    debug_assert_eq!(linear.len(), (width as usize) * (height as usize) * 4);
+    debug_assert_eq!(linear.len(), (width as usize) * (height as usize) * 3);
 
     let need_sharpness =
         adjustment_values.sharpness.abs() > 0.00001 ||
@@ -3661,7 +3833,7 @@ fn render_linear_roi_with_payload(
         for x in 0..roi_w {
             let full_x = roi_x + x;
             let idx_full = ((full_y * width + full_x) as usize).min((width as usize * height as usize).saturating_sub(1));
-            let base = idx_full * 4;
+            let base = idx_full * 3;
 
             // Start with linear RAW pixel data
             let mut colors =
@@ -3813,7 +3985,7 @@ fn render_linear_with_payload_tiled(
     let ai_cache = build_ai_mask_cache(mask_defs, width, height);
 
     let linear = linear_buffer.as_raw();
-    debug_assert_eq!(linear.len(), (width as usize) * (height as usize) * 4);
+    debug_assert_eq!(linear.len(), (width as usize) * (height as usize) * 3);
 
     let need_sharpness =
         adjustment_values.sharpness.abs() > 0.00001 ||
@@ -3874,7 +4046,7 @@ fn render_linear_with_payload_tiled(
                 for x in 0..tile_w {
                     let full_x = tile_x + x;
                     let idx_full = (full_y * width + full_x) as usize;
-                    let base = idx_full * 4;
+                    let base = idx_full * 3;
 
                     let mut colors =
                         if ca_active {
@@ -4013,16 +4185,273 @@ fn render_raw(
     max_width: Option<u32>,
     max_height: Option<u32>,
 ) -> Result<Vec<u8>> {
-    let linear_buffer = develop_preview_linear(raw_bytes, fast_demosaic, max_width, max_height)?;
+    let mut linear_buffer = develop_preview_linear(raw_bytes, fast_demosaic, max_width, max_height)?;
     let payload = parse_adjustments_payload(adjustments_json);
-    let transformed = apply_transformations(&linear_buffer, &payload);
-    let width = transformed.width();
-    let height = transformed.height();
+    linear_buffer = apply_transformations(linear_buffer, &payload);
+    let width = linear_buffer.width();
+    let height = linear_buffer.height();
     let mask_runtimes = parse_masks(payload.masks.clone(), width, height);
-    render_linear_with_payload(transformed.as_ref(), &payload, &mask_runtimes, fast_demosaic)
+    render_linear_with_payload(&linear_buffer, &payload, &mask_runtimes, fast_demosaic)
 }
 
-// Helper to handle the specific export logic
+// Compact u16 tiled renderer with virtual transformations (no physical rotation)
+fn render_compact_tiled(
+    source: &CompactImage,
+    transform: &TransformState,
+    payload: &AdjustmentsPayload,
+    mask_defs: &[MaskRuntimeDef],
+    fast_demosaic: bool,
+    tile_size: u32,
+) -> Result<Vec<u8>> {
+    let adjustment_values = payload.to_values().normalized(&ADJUSTMENT_SCALES);
+    let use_basic_tone_mapper = matches!(adjustment_values.tone_mapper, ToneMapper::Basic);
+    let global_curves = CurvesRuntime::from_payload(&payload.curves);
+    let curves_are_active = !global_curves.is_default() || mask_defs.iter().any(|m| m.curves_are_active);
+
+    // Use OUTPUT dimensions (post-rotation/crop)
+    let width = transform.output_w;
+    let height = transform.output_h;
+    
+    if width == 0 || height == 0 { 
+        return Err(anyhow::anyhow!("Invalid output dimensions")); 
+    }
+
+    let ai_cache = build_ai_mask_cache(mask_defs, width, height);
+
+    let need_sharpness =
+        adjustment_values.sharpness.abs() > 0.00001 ||
+            mask_defs.iter().any(|m| m.adjustments.sharpness.abs() > 0.00001);
+    let need_clarity =
+        adjustment_values.clarity.abs() > 0.00001 ||
+            adjustment_values.centre.abs() > 0.00001 ||
+            mask_defs.iter().any(|m| {
+                m.adjustments.clarity.abs() > 0.00001 || m.adjustments.centre.abs() > 0.00001
+            });
+    let need_structure =
+        adjustment_values.structure.abs() > 0.00001 ||
+            mask_defs.iter().any(|m| m.adjustments.structure.abs() > 0.00001);
+    let need_centre_mask =
+        adjustment_values.centre.abs() > 0.00001 ||
+            mask_defs.iter().any(|m| m.adjustments.centre.abs() > 0.00001);
+
+    // DETERMINE REQUIRED PADDING to prevent tile seams with detail effects
+    // Based on the blur radii used by active effects
+    let mut max_radius = 0u32;
+    if need_structure { max_radius = max_radius.max(DETAIL_STRUCTURE_RADIUS as u32); } // ~40px
+    if need_clarity { max_radius = max_radius.max(DETAIL_CLARITY_RADIUS as u32); } // ~8px
+    if need_sharpness { max_radius = max_radius.max(DETAIL_SHARPNESS_RADIUS as u32); } // ~2px
+    
+    // Add safety margin - 50px is typically safe for all RapidRAW-style effects
+    let padding = if max_radius > 0 { max_radius + 10 } else { 0 };
+
+    // Prepare Output Buffer (RGB u8)
+    let len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|v| v.checked_mul(3))
+        .context("RGB buffer size overflow")?;
+    let mut rgb = try_alloc_vec(len, 0u8)?;
+
+    let tile = tile_size.max(64).min(width.max(height));
+    let mut tile_y = 0;
+    
+    while tile_y < height {
+        let tile_h = (height - tile_y).min(tile);
+        let mut tile_x = 0;
+        
+        while tile_x < width {
+            let tile_w = (width - tile_x).min(tile);
+            
+            // Calculate padding for this tile (handle edges properly)
+            let pad_left = if tile_x >= padding { padding } else { tile_x };
+            let pad_top = if tile_y >= padding { padding } else { tile_y };
+            let pad_right = padding.min(width.saturating_sub(tile_x + tile_w));
+            let pad_bottom = padding.min(height.saturating_sub(tile_y + tile_h));
+            
+            // Fetch coordinates include padding
+            let fetch_x = tile_x - pad_left;
+            let fetch_y = tile_y - pad_top;
+            let fetch_w = tile_w + pad_left + pad_right;
+            let fetch_h = tile_h + pad_top + pad_bottom;
+            
+            // Build masks for this output tile (no padding needed for masks)
+            let mask_runtimes = if mask_defs.is_empty() {
+                Vec::new()
+            } else {
+                build_mask_runtimes_for_region(mask_defs, width, height, tile_x, tile_y, tile_w, tile_h, &ai_cache)
+            };
+            
+            // Extract PADDED f32 tile for detail calculations
+            let padded_linear_tile = extract_tile_f32(source, transform, fetch_x, fetch_y, fetch_w, fetch_h);
+            
+            // Build detail blurs on the PADDED tile
+            // The blur edges will be messy, but clean in the center where our actual tile is
+            let detail_blurs = build_detail_blurs_region(
+                &padded_linear_tile,
+                fetch_w,
+                fetch_h,
+                0, // Process entire padded tile
+                0,
+                fetch_w,
+                fetch_h,
+                DETAIL_SHARPNESS_RADIUS,
+                DETAIL_CLARITY_RADIUS,
+                DETAIL_STRUCTURE_RADIUS,
+                need_sharpness,
+                need_clarity,
+                need_structure,
+            );
+
+            for y in 0..tile_h {
+                let full_y = tile_y + y;
+                // Coordinate within the PADDED tile
+                let local_y = y + pad_top;
+                
+                for x in 0..tile_w {
+                    let full_x = tile_x + x;
+                    // Coordinate within the PADDED tile
+                    let local_x = x + pad_left;
+                    
+                    // Sample from the PADDED linear tile (already extracted)
+                    // This avoids re-doing the virtual transform for every pixel
+                    let idx = (local_y * fetch_w + local_x) as usize * 3;
+                    let mut colors = if idx + 2 < padded_linear_tile.len() {
+                        [
+                            padded_linear_tile[idx],
+                            padded_linear_tile[idx + 1],
+                            padded_linear_tile[idx + 2]
+                        ]
+                    } else {
+                        [0.0, 0.0, 0.0]
+                    };
+
+                    colors = apply_default_raw_processing(colors, use_basic_tone_mapper);
+
+                    let centre_mask =
+                        if need_centre_mask { compute_centre_mask(full_x, full_y, width, height) } else { 0.0 };
+                    
+                    // Use PADDED tile coordinates (local_x, local_y) for detail blurs
+                    // This ensures we sample from the correct position in the padded blur buffers
+                    if let Some(blurs) = detail_blurs.as_ref() {
+                        colors = apply_local_contrast_stack(colors, local_x, local_y, centre_mask, &adjustment_values, blurs);
+                    }
+
+                    let mut composite = apply_color_adjustments(colors, &adjustment_values, centre_mask);
+                    
+                    for mask in &mask_runtimes {
+                        let mut selection = mask_selection_at(mask, full_x, full_y);
+                        if mask.invert {
+                            selection = 1.0 - selection;
+                        }
+                        let influence = (selection * mask.opacity_factor).clamp(0.0, 1.0);
+                        if influence <= 0.001 {
+                            continue;
+                        }
+
+                        let mut mask_base = composite;
+                        if let Some(blurs) = detail_blurs.as_ref() {
+                            mask_base = apply_local_contrast_stack(mask_base, local_x, local_y, centre_mask, &mask.adjustments, blurs);
+                        }
+                        let mask_adjusted = apply_color_adjustments(mask_base, &mask.adjustments, centre_mask);
+                        composite = [
+                            composite[0] + (mask_adjusted[0] - composite[0]) * influence,
+                            composite[1] + (mask_adjusted[1] - composite[1]) * influence,
+                            composite[2] + (mask_adjusted[2] - composite[2]) * influence,
+                        ];
+                    }
+
+                    composite = tone_map(composite, adjustment_values.tone_mapper);
+
+                    let mut srgb = [
+                        linear_to_srgb(composite[0]),
+                        linear_to_srgb(composite[1]),
+                        linear_to_srgb(composite[2]),
+                    ];
+
+                    if curves_are_active {
+                        srgb = global_curves.apply_all(srgb);
+
+                        for mask in &mask_runtimes {
+                            if !mask.curves_are_active {
+                                continue;
+                            }
+
+                            let mut selection = mask_selection_at(mask, full_x, full_y);
+                            if mask.invert {
+                                selection = 1.0 - selection;
+                            }
+                            let influence = (selection * mask.opacity_factor).clamp(0.0, 1.0);
+                            if influence <= 0.001 {
+                                continue;
+                            }
+
+                            let mask_curved = mask.curves.apply_all(srgb);
+                            srgb = [
+                                srgb[0] + (mask_curved[0] - srgb[0]) * influence,
+                                srgb[1] + (mask_curved[1] - srgb[1]) * influence,
+                                srgb[2] + (mask_curved[2] - srgb[2]) * influence,
+                            ];
+                        }
+                    }
+
+                    if adjustment_values.vignette_amount.abs() > 0.00001 {
+                        let v_amount = adjustment_values.vignette_amount.clamp(-1.0, 1.0);
+                        let v_mid = adjustment_values.vignette_midpoint.clamp(0.0, 1.0);
+                        let v_round = (1.0 - adjustment_values.vignette_roundness).clamp(0.01, 4.0);
+                        let v_feather = adjustment_values.vignette_feather.clamp(0.0, 1.0) * 0.5;
+
+                        let full_w = width as f32;
+                        let full_h = height as f32;
+                        let aspect = if full_w > 0.0 { full_h / full_w } else { 1.0 };
+
+                        let uv_x = (full_x as f32 / full_w - 0.5) * 2.0;
+                        let uv_y = (full_y as f32 / full_h - 0.5) * 2.0;
+
+                        let sign_x = if uv_x > 0.0 { 1.0 } else if uv_x < 0.0 { -1.0 } else { 0.0 };
+                        let sign_y = if uv_y > 0.0 { 1.0 } else if uv_y < 0.0 { -1.0 } else { 0.0 };
+
+                        let uv_round_x = sign_x * uv_x.abs().powf(v_round);
+                        let uv_round_y = sign_y * uv_y.abs().powf(v_round);
+                        let d = ((uv_round_x * uv_round_x) + (uv_round_y * aspect) * (uv_round_y * aspect)).sqrt() * 0.5;
+
+                        let vignette_mask = smoothstep(v_mid - v_feather, v_mid + v_feather, d);
+                        if v_amount < 0.0 {
+                            let mult = (1.0 + v_amount * vignette_mask).clamp(0.0, 2.0);
+                            srgb = [srgb[0] * mult, srgb[1] * mult, srgb[2] * mult];
+                        } else {
+                            let t = (v_amount * vignette_mask).clamp(0.0, 1.0);
+                            srgb = [
+                                srgb[0] + (1.0 - srgb[0]) * t,
+                                srgb[1] + (1.0 - srgb[1]) * t,
+                                srgb[2] + (1.0 - srgb[2]) * t,
+                            ];
+                        }
+                        srgb = [
+                            srgb[0].clamp(0.0, 1.0),
+                            srgb[1].clamp(0.0, 1.0),
+                            srgb[2].clamp(0.0, 1.0),
+                        ];
+                    }
+
+                    let out_base = ((full_y * width + full_x) as usize) * 3;
+                    rgb[out_base] = clamp_to_u8(srgb[0] * 255.0);
+                    rgb[out_base + 1] = clamp_to_u8(srgb[1] * 255.0);
+                    rgb[out_base + 2] = clamp_to_u8(srgb[2] * 255.0);
+                }
+            }
+
+            tile_x += tile;
+        }
+        tile_y += tile;
+    }
+
+    let mut encoded = Vec::new();
+    let quality = if fast_demosaic { 88 } else { 96 };
+    let mut encoder = JpegEncoder::new_with_quality(&mut encoded, quality);
+    encoder.encode(&rgb, width, height, ExtendedColorType::Rgb8)?;
+    Ok(encoded)
+}
+
+// Helper to handle the specific export logic with u16 compact storage
 fn render_export_from_session(
     handle: jlong,
     adjustments_json: Option<&str>,
@@ -4030,56 +4459,61 @@ fn render_export_from_session(
     low_ram_mode: bool,
 ) -> Result<Vec<u8>> {
     let session = get_session(handle).context("Invalid session handle")?;
-    let mut session = session.lock().map_err(|_| anyhow::anyhow!("Session lock poisoned"))?;
-
-    // Drop any cached preview/zoom/mask buffers to free native memory before export
-    // This helps avoid OOM by releasing preview caches that are not needed for export.
-    session.super_low = None;
-    session.low = None;
-    session.preview = None;
-    session.zoom = None;
-    session.masks_super_low = None;
-    session.masks_low = None;
-    session.masks_preview = None;
-    session.masks_zoom = None;
+    
+    // 1. Get raw bytes and clear session cache to free RAM
+    let raw_bytes = {
+        let mut session = session.lock().map_err(|_| anyhow::anyhow!("Session lock poisoned"))?;
+        
+        // AGGRESSIVE CLEANUP: Drop everything to free RAM for export
+        session.super_low = None;
+        session.low = None;
+        session.preview = None;
+        session.zoom = None;
+        session.masks_super_low = None;
+        session.masks_low = None;
+        session.masks_preview = None;
+        session.masks_zoom = None;
+        
+        session.raw_bytes.clone()
+    }; // Session lock DROPPED
 
     let payload = parse_adjustments_payload(adjustments_json);
-
-    // 1. Determine dimensions
-    // If max_dimension is > 0, we pass it to develop_preview_linear.
-    // This ensures that even if we decode full, we resize strictly BEFORE
-    // applying complex masks, curves, and tone mapping, saving RAM.
-    let (req_w, req_h) = if max_dimension > 0 {
-        (Some(max_dimension), Some(max_dimension))
-    } else {
-        (None, None)
-    };
-
-    // 2. Develop
-    // If low_ram_mode is TRUE, we force fast_demosaic.
-    // fast_demosaic uses significantly less RAM (approx 1/4) during the initial decode.
-    let fast_demosaic = low_ram_mode;
-    
-    // We bypass the cache (session.preview/zoom) because export settings 
-    // (size/quality/demosaic) might differ from what's cached.
-    let linear = develop_preview_linear(
-        &session.raw_bytes, 
-        fast_demosaic, 
-        req_w, 
-        req_h
-    )?;
-
-    // 3. Apply Adjustments
-    let transformed = apply_transformations(&linear, &payload);
-    
-    // For export, we regenerate masks at the exact export resolution.
     let mask_defs = parse_mask_defs(payload.masks.clone());
-    let tile_size = if low_ram_mode { 512 } else { 1024 };
 
-    // 4. Render
-    // We use fast_demosaic flag here only to control JPEG quality (88 vs 96),
-    // but for export we might want High Quality JPEG even if Low RAM mode used for decoding.
-    render_linear_with_payload_tiled(transformed.as_ref(), &payload, &mask_defs, fast_demosaic, tile_size)
+    // 2. Decode to f32 (Peak RAM moment ~288MB for 24MP)
+    let fast_demosaic = low_ram_mode;
+    let (req_w, req_h) = if max_dimension > 0 { 
+        (Some(max_dimension), Some(max_dimension)) 
+    } else { 
+        (None, None) 
+    };
+    
+    let linear_f32 = develop_preview_linear(&raw_bytes, fast_demosaic, req_w, req_h)?;
+
+    // 3. Compact to u16 (Reduces sustained RAM to ~144MB)
+    let compact_source = compact_image(&linear_f32);
+    
+    // Explicitly drop the f32 buffer to free ~288MB immediately
+    drop(linear_f32);
+
+    // 4. Setup Virtual Transform (No new buffer allocation!)
+    let transform = TransformState::new(
+        compact_source.width(), 
+        compact_source.height(), 
+        &payload
+    );
+
+    // 5. Render Tiled using Virtual Coordinates
+    let tile_size = if low_ram_mode { 128 } else { 256 };
+    
+    render_compact_tiled(
+        &compact_source, 
+        &transform, 
+        &payload, 
+        &mask_defs, 
+        fast_demosaic, 
+        tile_size
+    )
 }
 
 #[no_mangle]
@@ -4452,15 +4886,17 @@ fn render_from_session(
         effective_kind = kind;
         session.linear_for(kind)?
     };
-    let transformed = apply_transformations(linear.as_ref(), &payload);
+    // Try to consume the Arc, or clone if it's still shared
+    let linear_owned = Arc::try_unwrap(linear).unwrap_or_else(|arc| (*arc).clone());
+    let transformed = apply_transformations(linear_owned, &payload);
     let width = transformed.width();
     let height = transformed.height();
     let masks = session.masks_for(effective_kind, &payload.masks, width, height);
 
     if let Some(roi) = payload.preview.roi.as_ref() {
-        render_linear_roi_with_payload(transformed.as_ref(), &payload, masks, true, roi)
+        render_linear_roi_with_payload(&transformed, &payload, masks, true, roi)
     } else {
-        render_linear_with_payload(transformed.as_ref(), &payload, masks, true)
+        render_linear_with_payload(&transformed, &payload, masks, true)
     }
 }
 
