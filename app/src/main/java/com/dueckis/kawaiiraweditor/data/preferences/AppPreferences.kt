@@ -138,6 +138,24 @@ internal class AppPreferences(context: Context) {
         prefs.edit().putString(KEY_MASK_RENAME_TAGS, JSONArray(normalized).toString()).apply()
     }
 
+    fun getGallerySortField(): String = prefs.getString(KEY_GALLERY_SORT_FIELD, "date").orEmpty()
+
+    fun setGallerySortField(field: String) {
+        prefs.edit().putString(KEY_GALLERY_SORT_FIELD, field.trim().lowercase()).apply()
+    }
+
+    fun getGallerySortOrder(): String = prefs.getString(KEY_GALLERY_SORT_ORDER, "desc").orEmpty()
+
+    fun setGallerySortOrder(order: String) {
+        prefs.edit().putString(KEY_GALLERY_SORT_ORDER, order.trim().lowercase()).apply()
+    }
+
+    fun getGalleryGridColumns(): Int = prefs.getInt(KEY_GALLERY_GRID_COLUMNS, 0)
+
+    fun setGalleryGridColumns(columns: Int) {
+        prefs.edit().putInt(KEY_GALLERY_GRID_COLUMNS, columns).apply()
+    }
+
     fun ensureDefaultMaskRenameTagsSeeded() {
         if (!prefs.contains(KEY_MASK_RENAME_TAGS)) {
             setMaskRenameTags(DEFAULT_MASK_RENAME_TAGS)
@@ -162,6 +180,9 @@ internal class AppPreferences(context: Context) {
         private const val KEY_IMMICH_AUTO_UPLOAD_EDITS_ENABLED_LEGACY = "immich_auto_upload_edits_enabled"
         private const val KEY_IMMICH_LOCAL_EXPORT_RELATIVE_PATH = "immich_local_export_relative_path"
         private const val KEY_IMMICH_DESCRIPTION_SYNC_ENABLED = "immich_description_sync_enabled"
+        private const val KEY_GALLERY_SORT_FIELD = "gallery_sort_field"
+        private const val KEY_GALLERY_SORT_ORDER = "gallery_sort_order"
+        private const val KEY_GALLERY_GRID_COLUMNS = "gallery_grid_columns"
         private const val DEFAULT_IMMICH_LOCAL_EXPORT_RELATIVE_PATH = "Pictures/IRIDIS/Immich"
         private val DEFAULT_MASK_RENAME_TAGS = listOf(
             "Subject",

@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FloatingToolbarDefaults
@@ -2826,6 +2827,360 @@ internal fun EditorScreen(
             }
 
             val cropAspectRatio = if (isCropMode) adjustments.aspectRatio else null
+            val configuration = LocalConfiguration.current
+            val isTabletLayout = configuration.screenWidthDp >= 900
+            val tabletControlsWidth = if (configuration.screenWidthDp >= 1200) 320.dp else 280.dp
+
+            @Composable
+            fun PreviewPane(modifier: Modifier = Modifier) {
+                Box(modifier = modifier) {
+                    Box {
+                        ImagePreview(
+                            bitmap = if (isComparingOriginal) originalBitmap ?: displayBitmap else displayBitmap,
+                            isLoading = isLoading || isGeneratingAiMask,
+                            viewportBitmap = if (isComparingOriginal || isCropMode) null else editedViewportBitmap,
+                            viewportRoi = if (isComparingOriginal || isCropMode) null else editedViewportRoi,
+                            onViewportRoiChange = onPreviewViewportRoiChange,
+                            maskOverlay = selectedMaskForOverlay,
+                            activeSubMask = selectedSubMaskForEdit,
+                            isMaskMode = isMaskMode && !isComparingOriginal,
+                            showMaskOverlay = showMaskOverlay && !isComparingOriginal,
+                            maskOverlayBlinkKey = maskOverlayBlinkKey,
+                            maskOverlayBlinkSubMaskId = maskOverlayBlinkSubMaskId,
+                            isPainting = isInteractiveMaskingEnabled && !isComparingOriginal,
+                            brushSize = brushSize,
+                            maskTapMode = if (isComparingOriginal) MaskTapMode.None else maskTapMode,
+                            onMaskTap = if (isComparingOriginal) null else onMaskTap,
+                            requestBeforePreview = { requestIdentityPreview() },
+                            onBrushStrokeFinished = onBrushStrokeFinished,
+                            onLassoFinished = onLassoFinished,
+                            onSubMaskHandleDrag = onSubMaskHandleDrag,
+                            onSubMaskHandleDragStateChange = { isDraggingMaskHandle = it },
+                            onRequestAiSubjectOverride = {
+                                val maskId = selectedMaskId
+                                val subId = selectedSubMaskId
+                                if (maskId != null && subId != null) {
+                                    aiSubjectOverrideTarget = maskId to subId
+                                    showAiSubjectOverrideDialog = true
+                                }
+                            },
+                            isCropMode = isCropMode && !isComparingOriginal,
+                            cropState = if (isCropMode && !isComparingOriginal) (cropDraft ?: adjustments.crop) else null,
+                            cropAspectRatio = cropAspectRatio,
+                            extraRotationDegrees = previewRotationDelta,
+                            isStraightenActive = isCropMode && isStraightenActive && !isComparingOriginal,
+                            onStraightenResult = { rotation ->
+                                beginEditInteraction()
+                                val baseRatio =
+                                    (cropBaseWidthPx?.toFloat()?.coerceAtLeast(1f) ?: 1f) /
+                                        (cropBaseHeightPx?.toFloat()?.coerceAtLeast(1f) ?: 1f)
+                                val autoCrop =
+                                    computeMaxCropNormalized(
+                                        AutoCropParams(
+                                            baseAspectRatio = baseRatio,
+                                            rotationDegrees = rotation,
+                                            aspectRatio = adjustments.aspectRatio
+                                        )
+                                    )
+                                cropDraft = autoCrop
+                                rotationDraft = null
+                                isStraightenActive = false
+                                applyAdjustmentsPreservingMasks(adjustments.copy(rotation = rotation, crop = autoCrop))
+                                endEditInteraction()
+                            },
+                            onCropDraftChange = { cropDraft = it },
+                            onCropInteractionStart = {
+                                isCropGestureActive = true
+                                beginEditInteraction()
+                            },
+                            onCropInteractionEnd = { crop ->
+                                isCropGestureActive = false
+                                cropDraft = crop
+                                applyAdjustmentsPreservingMasks(adjustments.copy(crop = crop))
+                                endEditInteraction()
+                            }
+                        )
+
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(16.dp),
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                            contentColor = Color.White
+                        ) {
+                            Row(
+                                modifier = Modifier.height(IntrinsicSize.Min),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                IconButton(
+                                    onClick = ::undo,
+                                    enabled = canUndo,
+                                    colors = IconButtonDefaults.iconButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.onSurface,
+                                        disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                    ),
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Rounded.Undo,
+                                        contentDescription = "Undo",
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                VerticalDivider(
+                                    thickness = 1.dp,
+                                    color = Color.White.copy(alpha = 0.15f),
+                                    modifier = Modifier
+                                        .padding(vertical = 12.dp)
+                                        .fillMaxHeight()
+                                )
+
+                                IconButton(
+                                    onClick = ::redo,
+                                    enabled = canRedo,
+                                    colors = IconButtonDefaults.iconButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.onSurface,
+                                        disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                    ),
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Rounded.Redo,
+                                        contentDescription = "Redo",
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(16.dp)
+                        ) {
+                            val interactionSource = remember { MutableInteractionSource() }
+                            val isPressed by interactionSource.collectIsPressedAsState()
+
+                            LaunchedEffect(isPressed) {
+                                isComparingOriginal = isPressed
+                                if (isPressed && originalBitmap == null) {
+                                    originalBitmap = requestIdentityPreview()
+                                }
+                            }
+
+                            Surface(
+                                onClick = { },
+                                interactionSource = interactionSource,
+                                shape = RoundedCornerShape(24.dp),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(56.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.CompareArrows,
+                                        contentDescription = "Compare",
+                                        modifier = Modifier
+                                            .size(26.dp)
+                                            .rotate(45f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            @Composable
+            fun ControlsPane(modifier: Modifier = Modifier) {
+                Surface(
+                    modifier = modifier,
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 3.dp,
+                    shape = if (isTabletLayout) RoundedCornerShape(topStart = 24.dp) else RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+                ) {
+                    AnimatedContent(
+                        targetState = panelTab,
+                        transitionSpec = {
+                            val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
+                            (slideInHorizontally(
+                                animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy),
+                                initialOffsetX = { it * direction }
+                            ) + fadeIn(animationSpec = tween(200))).togetherWith(
+                                slideOutHorizontally(
+                                    animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy),
+                                    targetOffsetX = { -it * direction }
+                                ) + fadeOut(animationSpec = tween(200))
+                            )
+                        },
+                        label = "TabAnimation"
+                    ) { currentTab ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .background(color = MaterialTheme.colorScheme.surface)
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            errorMessage?.let { Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                            statusMessage?.let { Text(text = it, color = Color(0xFF1B5E20), style = MaterialTheme.typography.bodySmall) }
+
+                            EditorControlsContent(
+                                panelTab = currentTab,
+                                adjustments = adjustments,
+                                onAdjustmentsChange = { applyAdjustmentsPreservingMasks(it) },
+                                onBeginEditInteraction = ::beginEditInteraction,
+                                onEndEditInteraction = ::endEditInteraction,
+                                histogramData = histogramData,
+                                masks = masks,
+                                onMasksChange = { updated ->
+                                    if (panelTab == EditorPanelTab.Masks && showMaskOverlay) showMaskOverlay = false
+                                    masks = updated
+                                },
+                                maskNumbers = maskNumbers,
+                                selectedMaskId = selectedMaskId,
+                                onSelectedMaskIdChange = { selectedMaskId = it },
+                                selectedSubMaskId = selectedSubMaskId,
+                                onSelectedSubMaskIdChange = { selectedSubMaskId = it },
+                                isPaintingMask = isPaintingMask,
+                                onPaintingMaskChange = { isPaintingMask = it },
+                                showMaskOverlay = showMaskOverlay,
+                                onShowMaskOverlayChange = { showMaskOverlay = it },
+                                onRequestMaskOverlayBlink = ::requestMaskOverlayBlink,
+                                onCreateMask = onCreateMask,
+                                onCreateSubMask = onCreateSubMask,
+                                brushSize = brushSize,
+                                onBrushSizeChange = { brushSize = it },
+                                brushTool = brushTool,
+                                onBrushToolChange = { brushTool = it },
+                                brushSoftness = brushSoftness,
+                                onBrushSoftnessChange = { brushSoftness = it },
+                                eraserSoftness = eraserSoftness,
+                                onEraserSoftnessChange = { eraserSoftness = it },
+                                maskTapMode = maskTapMode,
+                                onMaskTapModeChange = { maskTapMode = it },
+                                cropBaseWidthPx = cropBaseWidthPx,
+                                cropBaseHeightPx = cropBaseHeightPx,
+                                rotationDraft = rotationDraft,
+                                onRotationDraftChange = { rotationDraft = it },
+                                isStraightenActive = isStraightenActive,
+                                onStraightenActiveChange = { isStraightenActive = it },
+                                environmentMaskingEnabled = environmentMaskingEnabled,
+                                isGeneratingAiMask = isGeneratingAiMask,
+                                onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask,
+                                detectedAiEnvironmentCategories = detectedAiEnvironmentCategories,
+                                isDetectingAiEnvironmentCategories = isDetectingAiEnvironmentCategories,
+                                onDetectAiEnvironmentCategories = onDetectAiEnvironmentCategories,
+                                maskRenameTags = maskRenameTags
+                            )
+                            Spacer(modifier = Modifier.height(100.dp))
+                        }
+                    }
+                }
+            }
+
+            @Composable
+            fun ExportOverlayButton(
+                modifier: Modifier = Modifier,
+                content: @Composable () -> Unit
+            ) {
+                Box(modifier = modifier) {
+                    content()
+                    ExportButton(
+                        label = "",
+                        sessionHandle = sessionHandle,
+                        adjustments = adjustments,
+                        masks = exportMasks,
+                        originImmichAssetId = galleryItem.immichAssetId,
+                        originImmichAlbumId = galleryItem.immichAlbumId,
+                        sourceFileName = galleryItem.fileName,
+                        isExporting = isExporting,
+                        nativeDispatcher = renderDispatcher,
+                        context = context,
+                        onExportStart = { isExporting = true },
+                        onExportComplete = { success, message ->
+                            isExporting = false
+                            if (success) {
+                                if (message.startsWith("Saved to ")) {
+                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                    statusMessage = null
+                                } else {
+                                    statusMessage = message
+                                }
+                                errorMessage = null
+                            } else {
+                                errorMessage = message
+                                statusMessage = null
+                            }
+                        },
+                        modifier = Modifier.matchParentSize().alpha(0f)
+                    )
+                }
+            }
+
+            @Composable
+            fun PanelToolbar() {
+                HorizontalFloatingToolbar(
+                    expanded = true,
+                    colors = FloatingToolbarDefaults.standardFloatingToolbarColors(
+                        toolbarContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        toolbarContentColor = MaterialTheme.colorScheme.onSurface
+                    ),
+                    floatingActionButton = {
+                        ExportOverlayButton {
+                            FloatingToolbarDefaults.StandardFloatingActionButton(
+                                onClick = { },
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            ) {
+                                Icon(Icons.Filled.Download, "Export")
+                            }
+                        }
+                    },
+                    content = {
+                        EditorPanelTab.entries.forEach { tab ->
+                            val selected = panelTab == tab
+                            IconButton(onClick = { onSelectPanelTab(tab) }) {
+                                Icon(
+                                    imageVector = if (selected) tab.iconSelected else tab.icon,
+                                    contentDescription = tab.label,
+                                    tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                )
+            }
+
+            @Composable
+            fun TabletBottomBar(modifier: Modifier = Modifier) {
+                BottomAppBar(
+                    modifier = modifier,
+                    windowInsets = WindowInsets(0),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    actions = {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            EditorPanelTab.entries.forEach { tab ->
+                                val selected = panelTab == tab
+                                IconButton(onClick = { onSelectPanelTab(tab) }) {
+                                    Icon(
+                                        imageVector = if (selected) tab.iconSelected else tab.icon,
+                                        contentDescription = tab.label,
+                                        tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                )
+            }
 
             Box(modifier = Modifier.fillMaxSize()) {
 
@@ -2876,6 +3231,25 @@ internal fun EditorScreen(
                                 }
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (isTabletLayout) {
+                                    ExportOverlayButton(
+                                        modifier = Modifier.padding(end = 8.dp)
+                                    ) {
+                                        IconButton(
+                                            enabled = sessionHandle != 0L && !isExporting,
+                                            onClick = { },
+                                            colors = IconButtonDefaults.filledIconButtonColors(
+                                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+                                            )
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Download,
+                                                contentDescription = "Export",
+                                                tint = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                }
                                 IconButton(
                                     onClick = { openEditTimeline() },
                                     colors = IconButtonDefaults.filledIconButtonColors(
@@ -2897,318 +3271,51 @@ internal fun EditorScreen(
                         Box(modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)) {
-                            Column(modifier = Modifier.fillMaxSize()) {
-                                Box(modifier = Modifier
-                                    .weight(1f)) {
-                                    Box {
-                                        ImagePreview(
-                                            bitmap = if (isComparingOriginal) originalBitmap ?: displayBitmap else displayBitmap,
-                                            isLoading = isLoading || isGeneratingAiMask,
-                                            viewportBitmap = if (isComparingOriginal || isCropMode) null else editedViewportBitmap,
-                                            viewportRoi = if (isComparingOriginal || isCropMode) null else editedViewportRoi,
-                                            onViewportRoiChange = onPreviewViewportRoiChange,
-                                            maskOverlay = selectedMaskForOverlay,
-                                            activeSubMask = selectedSubMaskForEdit,
-                                            isMaskMode = isMaskMode && !isComparingOriginal,
-                                            showMaskOverlay = showMaskOverlay && !isComparingOriginal,
-                                            maskOverlayBlinkKey = maskOverlayBlinkKey,
-                                            maskOverlayBlinkSubMaskId = maskOverlayBlinkSubMaskId,
-                                            isPainting = isInteractiveMaskingEnabled && !isComparingOriginal,
-                                            brushSize = brushSize,
-                                            maskTapMode = if (isComparingOriginal) MaskTapMode.None else maskTapMode,
-                                            onMaskTap = if (isComparingOriginal) null else onMaskTap,
-                                            requestBeforePreview = { requestIdentityPreview() },
-                                            onBrushStrokeFinished = onBrushStrokeFinished,
-                                            onLassoFinished = onLassoFinished,
-                                            onSubMaskHandleDrag = onSubMaskHandleDrag,
-                                            onSubMaskHandleDragStateChange = { isDraggingMaskHandle = it },
-                                            onRequestAiSubjectOverride = {
-                                                val maskId = selectedMaskId
-                                                val subId = selectedSubMaskId
-                                                if (maskId != null && subId != null) {
-                                                    aiSubjectOverrideTarget = maskId to subId
-                                                    showAiSubjectOverrideDialog = true
-                                                }
-                                            },
-                                            isCropMode = isCropMode && !isComparingOriginal,
-                                            cropState = if (isCropMode && !isComparingOriginal) (cropDraft ?: adjustments.crop) else null,
-                                            cropAspectRatio = cropAspectRatio,
-                                            extraRotationDegrees = previewRotationDelta,
-                                            isStraightenActive = isCropMode && isStraightenActive && !isComparingOriginal,
-                                            onStraightenResult = { rotation ->
-                                                beginEditInteraction()
-                                                val baseRatio =
-                                                    (cropBaseWidthPx?.toFloat()?.coerceAtLeast(1f) ?: 1f) /
-                                                            (cropBaseHeightPx?.toFloat()?.coerceAtLeast(1f) ?: 1f)
-                                                val autoCrop =
-                                                    computeMaxCropNormalized(AutoCropParams(baseAspectRatio = baseRatio, rotationDegrees = rotation, aspectRatio = adjustments.aspectRatio))
-                                                cropDraft = autoCrop
-                                                rotationDraft = null
-                                                isStraightenActive = false
-                                                applyAdjustmentsPreservingMasks(adjustments.copy(rotation = rotation, crop = autoCrop))
-                                                endEditInteraction()
-                                            },
-                                            onCropDraftChange = { cropDraft = it },
-                                            onCropInteractionStart = {
-                                                isCropGestureActive = true
-                                                beginEditInteraction()
-                                            },
-                                            onCropInteractionEnd = { crop ->
-                                                isCropGestureActive = false
-                                                cropDraft = crop
-                                                applyAdjustmentsPreservingMasks(adjustments.copy(crop = crop))
-                                                endEditInteraction()
-                                            }
+                            if (isTabletLayout) {
+                                Row(modifier = Modifier.fillMaxSize()) {
+                                    PreviewPane(
+                                        Modifier
+                                            .weight(1f)
+                                            .fillMaxHeight()
+                                    )
+                                    Column(
+                                        modifier = Modifier
+                                            .width(tabletControlsWidth)
+                                            .fillMaxHeight()
+                                    ) {
+                                        ControlsPane(
+                                            Modifier
+                                                .weight(1f)
+                                                .fillMaxWidth()
                                         )
-
-                                        Surface(
+                                        TabletBottomBar(
                                             modifier = Modifier
-                                                .align(Alignment.BottomStart)
-                                                .padding(16.dp),
-                                            shape = CircleShape,
-                                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
-                                            contentColor = Color.White
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.height(IntrinsicSize.Min),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.Center
-                                            ) {
-                                                IconButton(
-                                                    onClick = ::undo,
-                                                    enabled = canUndo,
-                                                    colors = IconButtonDefaults.iconButtonColors(
-                                                        contentColor = MaterialTheme.colorScheme.onSurface,
-                                                        disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                                    ),
-                                                    modifier = Modifier.size(48.dp)
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.AutoMirrored.Rounded.Undo,
-                                                        contentDescription = "Undo",
-                                                        modifier = Modifier.size(20.dp)
-                                                    )
-                                                }
-
-                                                VerticalDivider(
-                                                    thickness = 1.dp,
-                                                    color = Color.White.copy(alpha = 0.15f),
-                                                    modifier = Modifier
-                                                        .padding(vertical = 12.dp)
-                                                        .fillMaxHeight()
-                                                )
-
-                                                IconButton(
-                                                    onClick = ::redo,
-                                                    enabled = canRedo,
-                                                    colors = IconButtonDefaults.iconButtonColors(
-                                                        contentColor = MaterialTheme.colorScheme.onSurface,
-                                                        disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                                    ),
-                                                    modifier = Modifier.size(48.dp)
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.AutoMirrored.Rounded.Redo,
-                                                        contentDescription = "Redo",
-                                                        modifier = Modifier.size(20.dp)
-                                                    )
-                                                }
-                                            }
-                                        }
-
-                                        Box(
-                                            modifier = Modifier
-                                                .align(Alignment.BottomEnd)
-                                                .padding(16.dp)
-                                        ) {
-                                            val interactionSource = remember { MutableInteractionSource() }
-                                            val isPressed by interactionSource.collectIsPressedAsState()
-
-                                            LaunchedEffect(isPressed) {
-                                                isComparingOriginal = isPressed
-                                                if (isPressed && originalBitmap == null) {
-                                                    originalBitmap = requestIdentityPreview()
-                                                }
-                                            }
-
-                                            Surface(
-                                                onClick = { },
-                                                interactionSource = interactionSource,
-                                                shape = RoundedCornerShape(24.dp),
-                                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
-                                                contentColor = MaterialTheme.colorScheme.onSurface,
-                                                modifier = Modifier.size(56.dp)
-                                            ) {
-                                                Box(contentAlignment = Alignment.Center) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.CompareArrows,
-                                                        contentDescription = "Compare",
-                                                        modifier = Modifier
-                                                            .size(26.dp)
-                                                            .rotate(45f)
-                                                    )
-                                                }
-                                            }
-                                        }
+                                                .fillMaxWidth()
+                                        )
                                     }
                                 }
-
-                                Surface(
+                            } else {
+                                Column(modifier = Modifier.fillMaxSize()) {
+                                    PreviewPane(
+                                        Modifier
+                                            .weight(1f)
+                                            .fillMaxWidth()
+                                    )
+                                    ControlsPane(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .height(360.dp)
+                                    )
+                                }
+                                Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(360.dp),
-                                    color = MaterialTheme.colorScheme.surface,
-                                    tonalElevation = 3.dp,
-                                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+                                        .align(Alignment.BottomCenter)
+                                        .padding(bottom = 16.dp)
+                                        .windowInsetsPadding(WindowInsets.navigationBars)
+                                        .zIndex(1f)
                                 ) {
-                                    AnimatedContent(
-                                        targetState = panelTab,
-                                        transitionSpec = {
-                                            val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
-                                            (slideInHorizontally(
-                                                animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy),
-                                                initialOffsetX = { it * direction }
-                                            ) + fadeIn(animationSpec = tween(200))).togetherWith(
-                                                slideOutHorizontally(
-                                                    animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy),
-                                                    targetOffsetX = { -it * direction }
-                                                ) + fadeOut(animationSpec = tween(200))
-                                            )
-                                        },
-                                        label = "TabAnimation"
-                                    ) { currentTab ->
-                                        Column(
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .verticalScroll(rememberScrollState())
-                                                .background(color=MaterialTheme.colorScheme.surface)
-                                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                            errorMessage?.let { Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                                            statusMessage?.let { Text(text = it, color = Color(0xFF1B5E20), style = MaterialTheme.typography.bodySmall) }
-
-                                            EditorControlsContent(
-                                                panelTab = currentTab,
-                                                adjustments = adjustments,
-                                                onAdjustmentsChange = { applyAdjustmentsPreservingMasks(it) },
-                                                onBeginEditInteraction = ::beginEditInteraction,
-                                                onEndEditInteraction = ::endEditInteraction,
-                                                histogramData = histogramData,
-                                                masks = masks,
-                                                onMasksChange = { updated ->
-                                                    if (panelTab == EditorPanelTab.Masks && showMaskOverlay) showMaskOverlay = false
-                                                    masks = updated
-                                                },
-                                                maskNumbers = maskNumbers,
-                                                selectedMaskId = selectedMaskId,
-                                                onSelectedMaskIdChange = { selectedMaskId = it },
-                                                selectedSubMaskId = selectedSubMaskId,
-                                                onSelectedSubMaskIdChange = { selectedSubMaskId = it },
-                                                isPaintingMask = isPaintingMask,
-                                                onPaintingMaskChange = { isPaintingMask = it },
-                                                showMaskOverlay = showMaskOverlay,
-                                                onShowMaskOverlayChange = { showMaskOverlay = it },
-                                                onRequestMaskOverlayBlink = ::requestMaskOverlayBlink,
-                                                onCreateMask = onCreateMask,
-                                                onCreateSubMask = onCreateSubMask,
-                                                brushSize = brushSize,
-                                                onBrushSizeChange = { brushSize = it },
-                                                brushTool = brushTool,
-                                                onBrushToolChange = { brushTool = it },
-                                                brushSoftness = brushSoftness,
-                                                onBrushSoftnessChange = { brushSoftness = it },
-                                                eraserSoftness = eraserSoftness,
-                                                onEraserSoftnessChange = { eraserSoftness = it },
-                                                maskTapMode = maskTapMode,
-                                                onMaskTapModeChange = { maskTapMode = it },
-                                                cropBaseWidthPx = cropBaseWidthPx,
-                                                cropBaseHeightPx = cropBaseHeightPx,
-                                                rotationDraft = rotationDraft,
-                                                onRotationDraftChange = { rotationDraft = it },
-                                                isStraightenActive = isStraightenActive,
-                                                onStraightenActiveChange = { isStraightenActive = it },
-                                                environmentMaskingEnabled = environmentMaskingEnabled,
-                                                isGeneratingAiMask = isGeneratingAiMask,
-                                                onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask,
-                                                detectedAiEnvironmentCategories = detectedAiEnvironmentCategories,
-                                                isDetectingAiEnvironmentCategories = isDetectingAiEnvironmentCategories,
-                                                onDetectAiEnvironmentCategories = onDetectAiEnvironmentCategories,
-                                                maskRenameTags = maskRenameTags
-                                            )
-                                            Spacer(modifier = Modifier.height(100.dp))
-                                        }
-                                    }
+                                    PanelToolbar()
                                 }
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .padding(bottom = 16.dp)
-                                    .windowInsetsPadding(WindowInsets.navigationBars)
-                                    .zIndex(1f)
-                            ) {
-                                HorizontalFloatingToolbar(
-                                    expanded = true,
-                                    colors = FloatingToolbarDefaults.standardFloatingToolbarColors(
-                                        toolbarContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                        toolbarContentColor = MaterialTheme.colorScheme.onSurface
-                                    ),
-                                    floatingActionButton = {
-                                        Box {
-                                            FloatingToolbarDefaults.StandardFloatingActionButton(
-                                                onClick = { },
-                                                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                                            ) {
-                                                Icon(Icons.Filled.Download, "Export")
-                                            }
-
-                                            ExportButton(
-                                                label = "",
-                                                sessionHandle = sessionHandle,
-                                                adjustments = adjustments,
-                                                masks = exportMasks,
-                                                originImmichAssetId = galleryItem.immichAssetId,
-                                                originImmichAlbumId = galleryItem.immichAlbumId,
-                                                sourceFileName = galleryItem.fileName,
-                                                isExporting = isExporting,
-                                                nativeDispatcher = renderDispatcher,
-                                                context = context,
-                                                onExportStart = { isExporting = true },
-                                                onExportComplete = { success, message ->
-                                                    isExporting = false
-                                                    if (success) {
-                                                        if (message.startsWith("Saved to ")) {
-                                                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                                                            statusMessage = null
-                                                        } else {
-                                                            statusMessage = message
-                                                        }
-                                                        errorMessage = null
-                                                    } else {
-                                                        errorMessage = message
-                                                        statusMessage = null
-                                                    }
-                                                },
-                                                modifier = Modifier.matchParentSize().alpha(0f)
-                                            )
-                                        }
-                                    },
-                                    content = {
-                                        EditorPanelTab.entries.forEach { tab ->
-                                            val selected = panelTab == tab
-                                            IconButton(onClick = { onSelectPanelTab(tab) }) {
-                                                Icon(
-                                                    imageVector = if (selected) tab.iconSelected else tab.icon,
-                                                    contentDescription = tab.label,
-                                                    tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                        }
-                                    }
-                                )
                             }
                         }
                     }

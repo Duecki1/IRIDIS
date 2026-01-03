@@ -132,6 +132,7 @@ import com.dueckis.kawaiiraweditor.data.model.MaskTransformState
 import com.dueckis.kawaiiraweditor.data.model.SubMaskType
 import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
 import com.dueckis.kawaiiraweditor.data.permissions.maybeRequestPostNotificationsPermission
+import com.dueckis.kawaiiraweditor.data.preferences.AppPreferences
 import com.dueckis.kawaiiraweditor.data.storage.ProjectStorage
 import com.dueckis.kawaiiraweditor.domain.ai.AiEnvironmentMaskGenerator
 import com.dueckis.kawaiiraweditor.domain.ai.ClipAutoTagger
@@ -195,6 +196,7 @@ internal fun GalleryScreen(
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val storage = remember { ProjectStorage(context) }
+    val appPreferences = remember(context) { AppPreferences(context) }
     val coroutineScope = rememberCoroutineScope()
     val configuration = LocalConfiguration.current
     val screenWidthDp = configuration.screenWidthDp
@@ -351,13 +353,6 @@ internal fun GalleryScreen(
         }
     }
 
-    val columns = when {
-        screenWidthDp >= 900 -> 5
-        screenWidthDp >= 600 -> 4
-        screenWidthDp >= 400 -> 3
-        else -> 2
-    }
-
     val mimeTypes = arrayOf("image/x-sony-arw", "image/*")
     val immichConfigured = remember(immichServerUrl, immichAuthMode, immichAccessToken, immichApiKey) {
         when (immichAuthMode) {
@@ -411,8 +406,33 @@ internal fun GalleryScreen(
 
     var queryText by rememberSaveable { mutableStateOf("") }
     val queryLower = remember(queryText) { queryText.trim().lowercase(Locale.US) }
-    var gallerySortField by rememberSaveable { mutableStateOf(GallerySortField.Date) }
-    var gallerySortOrder by rememberSaveable { mutableStateOf(GallerySortOrder.Desc) }
+    val initialSortField = remember(appPreferences) {
+        val raw = appPreferences.getGallerySortField()
+        GallerySortField.values().firstOrNull { it.name.equals(raw, true) } ?: GallerySortField.Date
+    }
+    val initialSortOrder = remember(appPreferences) {
+        val raw = appPreferences.getGallerySortOrder()
+        GallerySortOrder.values().firstOrNull { it.name.equals(raw, true) } ?: GallerySortOrder.Desc
+    }
+    val initialGridColumns = remember(appPreferences) { appPreferences.getGalleryGridColumns() }
+    var gallerySortField by rememberSaveable { mutableStateOf(initialSortField) }
+    var gallerySortOrder by rememberSaveable { mutableStateOf(initialSortOrder) }
+    var galleryGridColumns by rememberSaveable { mutableIntStateOf(initialGridColumns) }
+
+    val isTabletLayout = screenWidthDp >= 900
+    val autoColumns = when {
+        screenWidthDp >= 600 -> 4
+        screenWidthDp >= 400 -> 3
+        else -> 2
+    }
+    val columns =
+        if (isTabletLayout && galleryGridColumns in 4..10) {
+            galleryGridColumns
+        } else if (!isTabletLayout && galleryGridColumns in 2..4) {
+            galleryGridColumns
+        } else {
+            autoColumns
+        }
 
     fun matchesQuery(item: GalleryItem): Boolean {
         if (queryLower.isBlank()) return true
@@ -538,10 +558,15 @@ internal fun GalleryScreen(
         }
     }
 
-    val pickRaw = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+    val pickRaw = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
         coroutineScope.launch {
-            importUri(uri, openAfterImport = openEditorOnImportEnabled)
+            var opened = false
+            uris.forEach { uri ->
+                val openThis = openEditorOnImportEnabled && !opened
+                importUri(uri, openAfterImport = openThis)
+                if (openThis) opened = true
+            }
         }
     }
 
@@ -1327,6 +1352,7 @@ internal fun GalleryScreen(
 
                 val sortMenuExpanded = remember { mutableStateOf(false) }
                 val orderMenuExpanded = remember { mutableStateOf(false) }
+                val gridMenuExpanded = remember { mutableStateOf(false) }
 
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp),
@@ -1351,6 +1377,7 @@ internal fun GalleryScreen(
                                         text = { Text(option.label) },
                                         onClick = {
                                             gallerySortField = option
+                                            appPreferences.setGallerySortField(option.name)
                                             sortMenuExpanded.value = false
                                         }
                                     )
@@ -1377,7 +1404,37 @@ internal fun GalleryScreen(
                                         text = { Text(option.label) },
                                         onClick = {
                                             gallerySortOrder = option
+                                            appPreferences.setGallerySortOrder(option.name)
                                             orderMenuExpanded.value = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    item {
+                        Box {
+                            InputChip(
+                                selected = false,
+                                onClick = { gridMenuExpanded.value = true },
+                                label = { Text("Grid: $columns") },
+                                colors = InputChipDefaults.inputChipColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                )
+                            )
+                            DropdownMenu(
+                                expanded = gridMenuExpanded.value,
+                                onDismissRequest = { gridMenuExpanded.value = false }
+                            ) {
+                                val gridOptions =
+                                    if (isTabletLayout) (4..10).toList() else listOf(2, 3, 4)
+                                gridOptions.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text("$option columns") },
+                                        onClick = {
+                                            galleryGridColumns = option
+                                            appPreferences.setGalleryGridColumns(option)
+                                            gridMenuExpanded.value = false
                                         }
                                     )
                                 }
