@@ -95,6 +95,38 @@ Steps:
 
 Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 
+## Features (current)
+
+- Import RAW files via Android’s document picker.
+- Gallery with thumbnails, multi-select, bulk export, and star ratings.
+- Editor with fast preview rendering (super-low → low → full).
+- Adjustments: brightness, contrast, highlights/shadows, whites/blacks, saturation, temperature/tint, vibrance, etc.
+- Curves (Luma/R/G/B)
+- Color grading (shadows/midtones/highlights) + blending/balance.
+- Effects: vignette.
+- Masks: brush, linear gradient, radial,AI environment (optional), and AI subject mask (lasso-assisted)
+- S-Pen support for brush masks (line width depending on pressure)
+- Choose export file format and resolution 
+- Button to switch between unedited and edited preview
+- Widget showing all edits
+- Tab for cropping and rotating the image
+- Tag system for mask names
+- [Immich](https://github.com/immich-app/immich) intergration (download, edit sync via desc, export & upload to immich)
+- Versioning via a Version Tree
+  
+## Planned/Issues:
+
+- Clarity and such slider need to actually work
+- Highlight recovery needs to be better for the highlight slider. (use the exposure slider for now)
+- Use a more intuitive rating system
+- Save calculated AI Masks
+- Tablet UI design
+- app should only open once
+- folder management
+  
+## Info
+Downloading the app will automatically install a Subject selection ML Model.
+
 ## License
 
 AGPL-3.0 — see `LICENSE`.
