@@ -1,6 +1,6 @@
 # IRIDIS
 
-IRIDIS is an Android RAW editor built with Jetpack Compose and a Rust-based processing engine.
+IRIDIS is an Android RAW editor built with Jetpack Compose and a Rust-based processing engine (RapidRaw).
 
 Latest pre-release builds: https://github.com/Duecki1/IRIDIS/releases
 
