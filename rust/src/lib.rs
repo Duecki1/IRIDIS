@@ -20,6 +20,7 @@ use log::Level;
 use raw_processing::develop_raw_image;
 use rawler::decoders::RawDecodeParams;
 use rawler::rawsource::RawSource;
+use rayon::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
 use serde_json::from_str;
@@ -2065,42 +2066,49 @@ fn box_blur_f32(src: &[f32], width: usize, height: usize, radius: usize) -> Vec<
     let w = width;
     let h = height;
     let r = radius;
+    
+    // Allocate buffers
     let mut tmp = vec![0.0f32; w * h];
     let mut dst = vec![0.0f32; w * h];
 
-    // Horizontal pass
-    for y in 0..h {
-        let row = y * w;
-        let denom = (2 * r + 1) as f32;
-        let mut sum: f32 = 0.0;
+    // 1. Parallel Horizontal Pass
+    // Split the 'tmp' buffer into rows and process them in parallel
+    tmp.par_chunks_exact_mut(w)
+       .enumerate()
+       .for_each(|(y, row_dst)| {
+           let row_src_start = y * w;
+           // We need to access 'src', which is a slice. Rayon allows concurrent reads.
+           let row_src = &src[row_src_start..row_src_start + w];
+           
+           let denom = (2 * r + 1) as f32;
+           let mut sum: f32 = 0.0;
 
-        // x = 0 window: replicate edge pixels.
-        sum += src[row] * (r as f32 + 1.0);
-        let max_ix = r.min(w - 1);
-        for ix in 1..=max_ix {
-            sum += src[row + ix];
-        }
-        let repeats = r.saturating_sub(max_ix) as f32;
-        if repeats > 0.0 {
-            sum += src[row + (w - 1)] * repeats;
-        }
-        tmp[row] = sum / denom;
+           // Initialize window
+           sum += row_src[0] * (r as f32 + 1.0);
+           let max_ix = r.min(w - 1);
+           for ix in 1..=max_ix {
+               sum += row_src[ix];
+           }
+           let repeats = r.saturating_sub(max_ix) as f32;
+           if repeats > 0.0 {
+               sum += row_src[w - 1] * repeats;
+           }
+           row_dst[0] = sum / denom;
 
-        for x in 1..w {
-            let add_x = (x + r).min(w - 1);
-            let sub_x = x.saturating_sub(r + 1).min(w - 1);
-            sum += src[row + add_x];
-            sum -= src[row + sub_x];
-            tmp[row + x] = sum / denom;
-        }
-    }
+           // Slide window
+           for x in 1..w {
+               let add_x = (x + r).min(w - 1);
+               let sub_x = x.saturating_sub(r + 1).min(w - 1);
+               sum += row_src[add_x];
+               sum -= row_src[sub_x];
+               row_dst[x] = sum / denom;
+           }
+       });
 
-    // Vertical pass
+    // 2. Vertical Pass (Still serial for simplicity, but optimized cache access)
     for x in 0..w {
         let denom = (2 * r + 1) as f32;
         let mut sum: f32 = 0.0;
-
-        // y = 0 window: replicate edge pixels.
         sum += tmp[x] * (r as f32 + 1.0);
         let max_iy = r.min(h - 1);
         for iy in 1..=max_iy {
@@ -3645,127 +3653,128 @@ fn render_linear_with_payload(
         .context("RGB buffer size overflow")?;
     let mut rgb = try_alloc_vec(len, 0u8)?;
 
-    for (idx, out) in rgb.chunks_exact_mut(3).enumerate() {
-        let base = idx * 3;
-        let x = (idx as u32) % width;
-        let y = (idx as u32) / width;
+    // --- PARALLEL PROCESSING START ---
+    // Use Rayon to split the image into chunks and process on all cores
+    rgb.par_chunks_exact_mut(3)
+        .enumerate()
+        .for_each(|(idx, out)| {
+            // Re-calculate x, y from linear index
+            let x = (idx as u32) % width;
+            let y = (idx as u32) / width;
+            let base = idx * 3;
 
-        // Start with linear RAW pixel data
-        let mut colors =
-            if ca_active {
+            // 1. Fetch Linear Pixel
+            let mut colors = if ca_active {
                 sample_ca_corrected_color(linear, width, height, x, y, ca_rc, ca_by)
             } else {
                 [linear[base], linear[base + 1], linear[base + 2]]
             };
 
-        // Apply default RAW processing (brightness + contrast boost for Basic tone mapper)
-        colors = apply_default_raw_processing(colors, use_basic_tone_mapper);
+            // 2. Default Processing
+            colors = apply_default_raw_processing(colors, use_basic_tone_mapper);
 
-        let centre_mask = if need_centre_mask { compute_centre_mask(x, y, width, height) } else { 0.0 };
-        if let Some(blurs) = detail_blurs.as_ref() {
-            colors = apply_local_contrast_stack(colors, x, y, centre_mask, &adjustment_values, blurs);
-        }
-
-        // RapidRAW-like mask compositing: apply globals once, then for each mask
-        // mix toward a separately-adjusted result by mask influence.
-        let mut composite = apply_color_adjustments(colors, &adjustment_values, centre_mask);
-        for mask in mask_runtimes {
-            let mut selection = mask_selection_at(mask, x, y);
-            if mask.invert {
-                selection = 1.0 - selection;
-            }
-            let influence = (selection * mask.opacity_factor).clamp(0.0, 1.0);
-            if influence <= 0.001 {
-                continue;
+            // 3. Detail & Local Contrast
+            let centre_mask = if need_centre_mask { compute_centre_mask(x, y, width, height) } else { 0.0 };
+            
+            if let Some(blurs) = &detail_blurs {
+                colors = apply_local_contrast_stack(colors, x, y, centre_mask, &adjustment_values, blurs);
             }
 
-            let mut mask_base = composite;
-            if let Some(blurs) = detail_blurs.as_ref() {
-                mask_base = apply_local_contrast_stack(mask_base, x, y, centre_mask, &mask.adjustments, blurs);
-            }
-            let mask_adjusted = apply_color_adjustments(mask_base, &mask.adjustments, centre_mask);
-            composite = [
-                composite[0] + (mask_adjusted[0] - composite[0]) * influence,
-                composite[1] + (mask_adjusted[1] - composite[1]) * influence,
-                composite[2] + (mask_adjusted[2] - composite[2]) * influence,
-            ];
-        }
+            // 4. Global Adjustments
+            let mut composite = apply_color_adjustments(colors, &adjustment_values, centre_mask);
 
-        composite = tone_map(composite, adjustment_values.tone_mapper);
-
-        let mut srgb = [
-            linear_to_srgb(composite[0]),
-            linear_to_srgb(composite[1]),
-            linear_to_srgb(composite[2]),
-        ];
-
-        if curves_are_active {
-            srgb = global_curves.apply_all(srgb);
-
+            // 5. Mask Blending
             for mask in mask_runtimes {
-                if !mask.curves_are_active {
-                    continue;
-                }
-
                 let mut selection = mask_selection_at(mask, x, y);
-                if mask.invert {
-                    selection = 1.0 - selection;
-                }
+                if mask.invert { selection = 1.0 - selection; }
+                
                 let influence = (selection * mask.opacity_factor).clamp(0.0, 1.0);
-                if influence <= 0.001 {
-                    continue;
+                if influence > 0.001 {
+                    let mut mask_base = composite;
+                    if let Some(blurs) = &detail_blurs {
+                        mask_base = apply_local_contrast_stack(mask_base, x, y, centre_mask, &mask.adjustments, blurs);
+                    }
+                    let mask_adjusted = apply_color_adjustments(mask_base, &mask.adjustments, centre_mask);
+                    composite = [
+                        composite[0] + (mask_adjusted[0] - composite[0]) * influence,
+                        composite[1] + (mask_adjusted[1] - composite[1]) * influence,
+                        composite[2] + (mask_adjusted[2] - composite[2]) * influence,
+                    ];
                 }
-
-                let mask_curved = mask.curves.apply_all(srgb);
-                srgb = [
-                    srgb[0] + (mask_curved[0] - srgb[0]) * influence,
-                    srgb[1] + (mask_curved[1] - srgb[1]) * influence,
-                    srgb[2] + (mask_curved[2] - srgb[2]) * influence,
-                ];
             }
-        }
 
-        if adjustment_values.vignette_amount.abs() > 0.00001 {
-            let v_amount = adjustment_values.vignette_amount.clamp(-1.0, 1.0);
-            let v_mid = adjustment_values.vignette_midpoint.clamp(0.0, 1.0);
-            let v_round = (1.0 - adjustment_values.vignette_roundness).clamp(0.01, 4.0);
-            let v_feather = adjustment_values.vignette_feather.clamp(0.0, 1.0) * 0.5;
+            // 6. Tone Mapping
+            composite = tone_map(composite, adjustment_values.tone_mapper);
 
-            let x = (idx as u32) % width;
-            let y = (idx as u32) / width;
-            let full_w = width as f32;
-            let full_h = height as f32;
-            let aspect = if full_w > 0.0 { full_h / full_w } else { 1.0 };
+            // 7. Linear -> sRGB
+            let mut srgb = [
+                linear_to_srgb(composite[0]),
+                linear_to_srgb(composite[1]),
+                linear_to_srgb(composite[2]),
+            ];
 
-            let uv_x = (x as f32 / full_w - 0.5) * 2.0;
-            let uv_y = (y as f32 / full_h - 0.5) * 2.0;
-
-            let sign_x = if uv_x > 0.0 { 1.0 } else if uv_x < 0.0 { -1.0 } else { 0.0 };
-            let sign_y = if uv_y > 0.0 { 1.0 } else if uv_y < 0.0 { -1.0 } else { 0.0 };
-
-            let uv_round_x = sign_x * uv_x.abs().powf(v_round);
-            let uv_round_y = sign_y * uv_y.abs().powf(v_round);
-            let d = ((uv_round_x * uv_round_x) + (uv_round_y * aspect) * (uv_round_y * aspect)).sqrt() * 0.5;
-
-            let vignette_mask = smoothstep(v_mid - v_feather, v_mid + v_feather, d);
-            if v_amount < 0.0 {
-                let mult = (1.0 + v_amount * vignette_mask).clamp(0.0, 2.0);
-                srgb = [srgb[0] * mult, srgb[1] * mult, srgb[2] * mult];
-            } else {
-                let t = (v_amount * vignette_mask).clamp(0.0, 1.0);
-                srgb = [
-                    srgb[0] + (1.0 - srgb[0]) * t,
-                    srgb[1] + (1.0 - srgb[1]) * t,
-                    srgb[2] + (1.0 - srgb[2]) * t,
-                ];
+            // 8. Curves
+            if curves_are_active {
+                srgb = global_curves.apply_all(srgb);
+                for mask in mask_runtimes {
+                    if mask.curves_are_active {
+                        let mut selection = mask_selection_at(mask, x, y);
+                        if mask.invert { selection = 1.0 - selection; }
+                        let influence = (selection * mask.opacity_factor).clamp(0.0, 1.0);
+                        if influence > 0.001 {
+                            let mask_curved = mask.curves.apply_all(srgb);
+                            srgb = [
+                                srgb[0] + (mask_curved[0] - srgb[0]) * influence,
+                                srgb[1] + (mask_curved[1] - srgb[1]) * influence,
+                                srgb[2] + (mask_curved[2] - srgb[2]) * influence,
+                            ];
+                        }
+                    }
+                }
             }
-            srgb = [srgb[0].clamp(0.0, 1.0), srgb[1].clamp(0.0, 1.0), srgb[2].clamp(0.0, 1.0)];
-        }
 
-        out[0] = clamp_to_u8(srgb[0] * 255.0);
-        out[1] = clamp_to_u8(srgb[1] * 255.0);
-        out[2] = clamp_to_u8(srgb[2] * 255.0);
-    }
+            // 9. Vignette
+            if adjustment_values.vignette_amount.abs() > 0.00001 {
+               let v_amount = adjustment_values.vignette_amount.clamp(-1.0, 1.0);
+               let v_mid = adjustment_values.vignette_midpoint.clamp(0.0, 1.0);
+               let v_round = (1.0 - adjustment_values.vignette_roundness).clamp(0.01, 4.0);
+               let v_feather = adjustment_values.vignette_feather.clamp(0.0, 1.0) * 0.5;
+
+               let full_w = width as f32;
+               let full_h = height as f32;
+               let aspect = if full_w > 0.0 { full_h / full_w } else { 1.0 };
+
+               let uv_x = (x as f32 / full_w - 0.5) * 2.0;
+               let uv_y = (y as f32 / full_h - 0.5) * 2.0;
+
+               let sign_x = if uv_x > 0.0 { 1.0 } else if uv_x < 0.0 { -1.0 } else { 0.0 };
+               let sign_y = if uv_y > 0.0 { 1.0 } else if uv_y < 0.0 { -1.0 } else { 0.0 };
+
+               let uv_round_x = sign_x * uv_x.abs().powf(v_round);
+               let uv_round_y = sign_y * uv_y.abs().powf(v_round);
+               let d = ((uv_round_x * uv_round_x) + (uv_round_y * aspect) * (uv_round_y * aspect)).sqrt() * 0.5;
+
+               let vignette_mask = smoothstep(v_mid - v_feather, v_mid + v_feather, d);
+               if v_amount < 0.0 {
+                   let mult = (1.0 + v_amount * vignette_mask).clamp(0.0, 2.0);
+                   srgb = [srgb[0] * mult, srgb[1] * mult, srgb[2] * mult];
+               } else {
+                   let t = (v_amount * vignette_mask).clamp(0.0, 1.0);
+                   srgb = [
+                       srgb[0] + (1.0 - srgb[0]) * t,
+                       srgb[1] + (1.0 - srgb[1]) * t,
+                       srgb[2] + (1.0 - srgb[2]) * t,
+                   ];
+               }
+               srgb = [srgb[0].clamp(0.0, 1.0), srgb[1].clamp(0.0, 1.0), srgb[2].clamp(0.0, 1.0)];
+            }
+
+            // 10. Write output
+            out[0] = clamp_to_u8(srgb[0] * 255.0);
+            out[1] = clamp_to_u8(srgb[1] * 255.0);
+            out[2] = clamp_to_u8(srgb[2] * 255.0);
+        });
+    // --- PARALLEL PROCESSING END ---
 
     let mut encoded = Vec::new();
     let quality = if fast_demosaic { 88 } else { 96 };
