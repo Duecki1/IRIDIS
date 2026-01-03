@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -89,7 +88,6 @@ private enum class CropHandle {
 @Composable
 internal fun ImagePreview(
     bitmap: Bitmap?,
-    isLoading: Boolean,
     viewportBitmap: Bitmap? = null,
     viewportRoi: CropState? = null,
     onViewportRoiChange: ((CropState?, Float) -> Unit)? = null,
@@ -1108,11 +1106,6 @@ internal fun ImagePreview(
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
-
-
-        if (isLoading) {
-            ContainedLoadingIndicator(modifier = Modifier.align(Alignment.Center))
         }
     }
 }
