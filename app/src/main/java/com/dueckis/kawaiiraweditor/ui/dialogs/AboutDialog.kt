@@ -5,10 +5,8 @@ package com.dueckis.kawaiiraweditor.ui.dialogs
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -34,7 +32,7 @@ internal fun AboutDialog(onDismissRequest: () -> Unit) {
         text = {
             Column {
                 Text(
-                    "Android app by Duecki1 using image processing from RapidRaw by CyberTimon.\n\nIRIDIS is an open-source RAW photo editor for Android, leveraging the RapidRaw engine for fast and high-quality image processing."
+                    "Android app by Duecki1 using image processing from RapidRaw by CyberTimon.\n\nIRIDIS is an open-source RAW photo editor for Android, leveraging the RapidRaw engine for fast and high-quality image processing.\n\nImmich integration supported."
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
@@ -48,19 +46,24 @@ internal fun AboutDialog(onDismissRequest: () -> Unit) {
             TextButton(onClick = onDismissRequest) { Text("OK") }
         },
         dismissButton = {
-            Row {
+            Column {
                 TextButton(onClick = {
                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Duecki1/IRIDIS"))
                     context.startActivity(intent)
                 }) {
                     Text("IRIDIS GitHub")
                 }
-                Spacer(modifier = Modifier.width(8.dp))
                 TextButton(onClick = {
                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/CyberTimon/RapidRaw"))
                     context.startActivity(intent)
                 }) {
                     Text("RapidRaw GitHub")
+                }
+                TextButton(onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/immich-app/immich"))
+                    context.startActivity(intent)
+                }) {
+                    Text("Immich GitHub")
                 }
             }
         }
