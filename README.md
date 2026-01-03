@@ -95,9 +95,6 @@ Steps:
 
 Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
 ## Features (current)
 
 - Import RAW files via Android’s document picker.
@@ -130,9 +127,6 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 ## Info
 Downloading the app will automatically install a Subject selection ML Model.
 
->>>>>>> fbde24c8d87eb8765c1d03657c9e7a8c350e37c8
-=======
->>>>>>> f326235fb790d2e0f86ddcb1e3801e12b420267f
 ## License
 
 AGPL-3.0 — see `LICENSE`.
