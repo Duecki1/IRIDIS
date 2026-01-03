@@ -122,6 +122,8 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Save calculated AI Masks
 - app should only open once
 - folder management
+- maybe video of adjustments to export
+- lens corrections?
 
 ## License
 
