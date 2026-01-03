@@ -116,16 +116,11 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
   
 ## Planned/Issues:
 
-- Clarity and such slider need to actually work
 - Highlight recovery needs to be better for the highlight slider. (use the exposure slider for now)
 - Use a more intuitive rating system
 - Save calculated AI Masks
-- Tablet UI design
 - app should only open once
 - folder management
-  
-## Info
-Downloading the app will automatically install a Subject selection ML Model.
 
 ## License
 
