@@ -14,9 +14,8 @@ pub fn develop_raw_image(
     file_bytes: &[u8],
     fast_demosaic: bool,
     highlight_compression: f32,
-) -> Result<DynamicImage> {
-    let (developed_image, orientation) = develop_internal(file_bytes, fast_demosaic, highlight_compression)?;
-    Ok(apply_orientation(developed_image, orientation))
+) -> Result<(DynamicImage, Orientation)> {
+    develop_internal(file_bytes, fast_demosaic, highlight_compression)
 }
 
 fn develop_internal(
@@ -56,6 +55,8 @@ fn develop_internal(
     let mut developer = RawDevelop::default();
     if fast_demosaic {
         developer.demosaic_algorithm = DemosaicAlgorithm::Speed;
+    } else {
+        developer.demosaic_algorithm = DemosaicAlgorithm::Quality;
     }
     developer.steps.retain(|&step| step != ProcessingStep::SRgb);
 
@@ -124,40 +125,34 @@ fn develop_internal(
         let dim = developed_intermediate.dim();
         (dim.w as u32, dim.h as u32)
     };
+    
+    // Return u16 (ImageRgb16) to save RAM. Do not rotate here.
     let dynamic_image = match developed_intermediate {
         Intermediate::ThreeColor(pixels) => {
-            let buffer = ImageBuffer::<Rgb<f32>, _>::from_fn(width, height, |x, y| {
+            let buffer = ImageBuffer::<Rgb<u16>, _>::from_fn(width, height, |x, y| {
                 let p = pixels.data[(y * width + x) as usize];
-                Rgb([p[0], p[1], p[2]])
+                Rgb([
+                    (p[0] * 65535.0).clamp(0.0, 65535.0) as u16,
+                    (p[1] * 65535.0).clamp(0.0, 65535.0) as u16,
+                    (p[2] * 65535.0).clamp(0.0, 65535.0) as u16,
+                ])
             });
-            DynamicImage::ImageRgb32F(buffer)
+            DynamicImage::ImageRgb16(buffer)
         }
         Intermediate::Monochrome(pixels) => {
-            let buffer = ImageBuffer::<Rgb<f32>, _>::from_fn(width, height, |x, y| {
+            let buffer = ImageBuffer::<Rgb<u16>, _>::from_fn(width, height, |x, y| {
                 let p = pixels.data[(y * width + x) as usize];
-                Rgb([p, p, p])
+                let val = (p * 65535.0).clamp(0.0, 65535.0) as u16;
+                Rgb([val, val, val])
             });
-            DynamicImage::ImageRgb32F(buffer)
+            DynamicImage::ImageRgb16(buffer)
         }
         _ => {
-            return Err(anyhow::anyhow!("Unsupported intermediate format for f32 conversion"));
+            return Err(anyhow::anyhow!("Unsupported intermediate format for u16 conversion"));
         }
     };
 
     Ok((dynamic_image, orientation))
-}
-
-fn apply_orientation(image: DynamicImage, orientation: Orientation) -> DynamicImage {
-    match orientation {
-        Orientation::Normal | Orientation::Unknown => image,
-        Orientation::HorizontalFlip => image.fliph(),
-        Orientation::Rotate180 => image.rotate180(),
-        Orientation::VerticalFlip => image.flipv(),
-        Orientation::Transpose => image.rotate90().flipv(),
-        Orientation::Rotate90 => image.rotate90(),
-        Orientation::Transverse => image.rotate90().fliph(),
-        Orientation::Rotate270 => image.rotate270(),
-    }
 }
 
 fn apply_cpu_default_raw_processing(image: DynamicImage) -> DynamicImage {

@@ -10,6 +10,7 @@ use image::{
     imageops::FilterType,
     ExtendedColorType,
     ImageBuffer,
+    DynamicImage,
 };
 use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{jbyteArray, jlong, jstring, jint, jboolean};
@@ -18,7 +19,7 @@ use log::error;
 #[cfg(target_os = "android")]
 use log::Level;
 use raw_processing::develop_raw_image;
-use rawler::decoders::RawDecodeParams;
+use rawler::decoders::{RawDecodeParams, Orientation};
 use rawler::rawsource::RawSource;
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -3220,6 +3221,62 @@ fn compact_image(input: &LinearImage) -> CompactImage {
     ImageBuffer::from_vec(w, h, raw_u16).unwrap()
 }
 
+// Decode RAW to compact u16 format without rotation (for export)
+fn decode_raw_to_compact(
+    raw_bytes: &[u8],
+    fast_demosaic: bool,
+    max_w: Option<u32>,
+    max_h: Option<u32>
+) -> Result<(CompactImage, Orientation)> {
+    let highlight_compression = 2.5;
+
+    // 1. Decode RAW (returns unrotated u16 + orientation)
+    let (dyn_img, orientation) = develop_raw_image(raw_bytes, fast_demosaic, highlight_compression)
+        .context("Failed to decode RAW")?;
+
+    let src_w = dyn_img.width();
+    let src_h = dyn_img.height();
+
+    // 2. Calculate target dimensions
+    let mut dst_w = src_w;
+    let mut dst_h = src_h;
+
+    if let (Some(mw), Some(mh)) = (max_w, max_h) {
+        if src_w > mw || src_h > mh {
+            let scale = (mw as f32 / src_w as f32).min(mh as f32 / src_h as f32);
+            dst_w = (src_w as f32 * scale).max(1.0) as u32;
+            dst_h = (src_h as f32 * scale).max(1.0) as u32;
+        }
+    }
+
+    // 3. Resize if needed (using nearest neighbor for speed)
+    let output_len = (dst_w as usize) * (dst_h as usize) * 3;
+    let mut raw_u16 = Vec::with_capacity(output_len);
+
+    match dyn_img {
+        DynamicImage::ImageRgb16(buf) => {
+            let s = buf.as_raw();
+            let x_ratio = src_w as f32 / dst_w as f32;
+            let y_ratio = src_h as f32 / dst_h as f32;
+
+            for y in 0..dst_h {
+                let sy = ((y as f32) * y_ratio).min((src_h - 1) as f32) as u32;
+                let y_offset = (sy * src_w) as usize * 3;
+                for x in 0..dst_w {
+                    let sx = ((x as f32) * x_ratio).min((src_w - 1) as f32) as u32;
+                    let idx = y_offset + (sx as usize * 3);
+                    raw_u16.push(s[idx]);
+                    raw_u16.push(s[idx+1]);
+                    raw_u16.push(s[idx+2]);
+                }
+            }
+        },
+        _ => return Err(anyhow::anyhow!("Unexpected image format")),
+    }
+
+    Ok((ImageBuffer::from_vec(dst_w, dst_h, raw_u16).unwrap(), orientation))
+}
+
 // Virtual transformation state - no physical rotation needed
 struct TransformState {
     source_w: u32,
@@ -3236,27 +3293,48 @@ struct TransformState {
 }
 
 impl TransformState {
-    fn new(w: u32, h: u32, payload: &AdjustmentsPayload) -> Self {
-        let steps = payload.orientation_steps % 4;
+    fn new(w: u32, h: u32, payload: &AdjustmentsPayload, base_orientation: Orientation) -> Self {
+        // 1. Convert base orientation to steps and flips
+        let (base_steps, base_flip_h, base_flip_v) = match base_orientation {
+            Orientation::Normal | Orientation::Unknown => (0, false, false),
+            Orientation::Rotate90 => (1, false, false),
+            Orientation::Rotate180 => (2, false, false),
+            Orientation::Rotate270 => (3, false, false),
+            Orientation::HorizontalFlip => (0, true, false),
+            Orientation::VerticalFlip => (0, false, true),
+            Orientation::Transpose => (1, true, false),
+            Orientation::Transverse => (3, true, false),
+        };
+
+        // 2. Combine with user adjustments
+        let user_steps = payload.orientation_steps % 4;
+        let total_steps = (base_steps + user_steps) % 4;
+        let total_flip_h = base_flip_h ^ payload.flip_horizontal;
+        let total_flip_v = base_flip_v ^ payload.flip_vertical;
         
-        // Calculate dimensions after 90 degree turns
-        let (mut final_w, mut final_h) = if steps % 2 == 1 { (h, w) } else { (w, h) };
+        // --- IMPORTANT CHANGE HERE ---
+        // Calculate final dimensions *before* applying crop logic
+        let (rotated_w, rotated_h) = if total_steps % 2 == 1 { (h, w) } else { (w, h) };
         
-        // Apply crop dimensions if present
+        let (mut final_w, mut final_h) = (rotated_w, rotated_h);
+
+        // Now apply crop based on these potentially swapped dimensions
         if let Some(crop) = &payload.crop {
-            let (_, _, cw, ch) = crop_rect_pixels(final_w, final_h, crop);
+            // Use the rotated dimensions to calculate the crop rectangle
+            let (_, _, cw, ch) = crop_rect_pixels(rotated_w, rotated_h, crop);
             final_w = cw;
             final_h = ch;
         }
+        // --- END OF CHANGE ---
 
         Self {
             source_w: w,
             source_h: h,
             output_w: final_w,
             output_h: final_h,
-            orientation_steps: steps,
-            flip_h: payload.flip_horizontal,
-            flip_v: payload.flip_vertical,
+            orientation_steps: total_steps,
+            flip_h: total_flip_h,
+            flip_v: total_flip_v,
             rotation_rad: payload.rotation.to_radians(),
             crop: payload.crop.clone(),
             center_x: (final_w as f32 - 1.0) / 2.0,
@@ -3304,11 +3382,12 @@ impl TransformState {
         if self.flip_v { fy = cur_h as f32 - 1.0 - fy; }
 
         // 4. Inverse Orientation (Swap/Flip coords to match source)
+        // CRITICAL FIX: Use correct dimensions after swap for each rotation
         let (sx, sy) = match self.orientation_steps {
             0 => (fx, fy),
-            1 => (fy, (self.source_w as f32 - 1.0) - fx), // 90 deg CW
-            2 => ((self.source_w as f32 - 1.0) - fx, (self.source_h as f32 - 1.0) - fy), // 180
-            3 => ((self.source_h as f32 - 1.0) - fy, fx), // 270 deg CW
+            1 => (fy, (self.source_h as f32 - 1.0) - fx), // 90° CW: x maps to y, y maps to (H-1-x)
+            2 => ((self.source_w as f32 - 1.0) - fx, (self.source_h as f32 - 1.0) - fy), // 180°
+            3 => ((self.source_w as f32 - 1.0) - fy, fx), // 270° CW: x maps to (W-1-y), y maps to x
             _ => (fx, fy),
         };
 
@@ -3376,6 +3455,20 @@ fn extract_tile_f32(
     tile
 }
 
+// Physical rotation helper (used for preview only)
+fn apply_orientation_physical(image: DynamicImage, orientation: Orientation) -> DynamicImage {
+    match orientation {
+        Orientation::Normal | Orientation::Unknown => image,
+        Orientation::HorizontalFlip => image.fliph(),
+        Orientation::Rotate180 => image.rotate180(),
+        Orientation::VerticalFlip => image.flipv(),
+        Orientation::Transpose => image.rotate90().flipv(),
+        Orientation::Rotate90 => image.rotate90(),
+        Orientation::Transverse => image.rotate90().fliph(),
+        Orientation::Rotate270 => image.rotate270(),
+    }
+}
+
 fn develop_preview_linear(
     raw_bytes: &[u8],
     fast_demosaic: bool,
@@ -3383,10 +3476,12 @@ fn develop_preview_linear(
     max_height: Option<u32>,
 ) -> Result<LinearImage> {
     let highlight_compression = 2.5; // RapidRAW default
-    let mut dynamic_image = develop_raw_image(raw_bytes, fast_demosaic, highlight_compression)
+    
+    // 1. Decode (returns unrotated u16 image + orientation)
+    let (mut dynamic_image, orientation) = develop_raw_image(raw_bytes, fast_demosaic, highlight_compression)
         .context("Failed to decode RAW image")?;
 
-    // If a maximum size was requested, downscale BEFORE the per-pixel adjustments
+    // 2. If a maximum size was requested, downscale BEFORE the per-pixel adjustments
     // to avoid performing expensive color math at full sensor resolution.
     if let (Some(max_w), Some(max_h)) = (max_width, max_height) {
         if dynamic_image.width() > max_w || dynamic_image.height() > max_h {
@@ -3401,7 +3496,13 @@ fn develop_preview_linear(
         }
     }
 
-    Ok(dynamic_image.to_rgb32f())
+    // 3. Convert to f32
+    let linear_img = dynamic_image.to_rgb32f();
+
+    // 4. Apply physical orientation (since this is preview, the image is small)
+    let rotated = apply_orientation_physical(DynamicImage::ImageRgb32F(linear_img), orientation);
+    
+    Ok(rotated.to_rgb32f())
 }
 
 fn rotate_about_center_rgb32f(image: &LinearImage, rotation_degrees: f32) -> LinearImage {
@@ -4489,7 +4590,7 @@ fn render_export_from_session(
     let payload = parse_adjustments_payload(adjustments_json);
     let mask_defs = parse_mask_defs(payload.masks.clone());
 
-    // 2. Decode to f32 (Peak RAM moment ~288MB for 24MP)
+    // 2. Decode directly to u16 compact format (no rotation, returns orientation)
     let fast_demosaic = low_ram_mode;
     let (req_w, req_h) = if max_dimension > 0 { 
         (Some(max_dimension), Some(max_dimension)) 
@@ -4497,22 +4598,17 @@ fn render_export_from_session(
         (None, None) 
     };
     
-    let linear_f32 = develop_preview_linear(&raw_bytes, fast_demosaic, req_w, req_h)?;
+    let (compact_source, base_orientation) = decode_raw_to_compact(&raw_bytes, fast_demosaic, req_w, req_h)?;
 
-    // 3. Compact to u16 (Reduces sustained RAM to ~144MB)
-    let compact_source = compact_image(&linear_f32);
-    
-    // Explicitly drop the f32 buffer to free ~288MB immediately
-    drop(linear_f32);
-
-    // 4. Setup Virtual Transform (No new buffer allocation!)
+    // 3. Setup Virtual Transform with base orientation (handles rotation virtually)
     let transform = TransformState::new(
         compact_source.width(), 
         compact_source.height(), 
-        &payload
+        &payload,
+        base_orientation
     );
 
-    // 5. Render Tiled using Virtual Coordinates
+    // 4. Render Tiled using Virtual Coordinates
     let tile_size = if low_ram_mode { 128 } else { 256 };
     
     render_compact_tiled(
