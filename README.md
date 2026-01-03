@@ -56,6 +56,7 @@ Latest pre-release builds: https://github.com/Duecki1/IRIDIS/releases
 - Toggle for before/after preview.
 - Widget.
 - Mask tagging and naming.
+- Copy and paste adjustments (including ai environment masks)
 
 ## Tech stack
 
