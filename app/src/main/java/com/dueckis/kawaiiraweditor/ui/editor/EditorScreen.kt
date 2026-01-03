@@ -2837,7 +2837,6 @@ internal fun EditorScreen(
                     Box {
                         ImagePreview(
                             bitmap = if (isComparingOriginal) originalBitmap ?: displayBitmap else displayBitmap,
-                            isLoading = isLoading || isGeneratingAiMask,
                             viewportBitmap = if (isComparingOriginal || isCropMode) null else editedViewportBitmap,
                             viewportRoi = if (isComparingOriginal || isCropMode) null else editedViewportRoi,
                             onViewportRoiChange = onPreviewViewportRoiChange,
