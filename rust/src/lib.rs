@@ -983,9 +983,22 @@ struct MaskRuntime {
     curves: CurvesRuntime,
     curves_are_active: bool,
     bitmap: Option<Vec<u8>>,
+    origin_x: u32,
+    origin_y: u32,
+    width: u32,
+    height: u32,
 }
 
-fn parse_masks(values: Vec<Value>, width: u32, height: u32) -> Vec<MaskRuntime> {
+struct MaskRuntimeDef {
+    opacity_factor: f32,
+    invert: bool,
+    adjustments: AdjustmentValues,
+    curves: CurvesRuntime,
+    curves_are_active: bool,
+    sub_masks: Option<Vec<SubMaskPayload>>,
+}
+
+fn parse_mask_defs(values: Vec<Value>) -> Vec<MaskRuntimeDef> {
     values
         .into_iter()
         .filter_map(|value| {
@@ -998,14 +1011,13 @@ fn parse_masks(values: Vec<Value>, width: u32, height: u32) -> Vec<MaskRuntime> 
                 let opacity_factor = (def.opacity / 100.0).clamp(0.0, 1.0);
                 let curves = CurvesRuntime::from_payload(&def.adjustments.curves);
                 let curves_are_active = !curves.is_default();
-                let bitmap = Some(generate_mask_bitmap(&def.sub_masks, width, height));
-                return Some(MaskRuntime {
+                return Some(MaskRuntimeDef {
                     opacity_factor,
                     invert: def.invert,
                     adjustments: def.adjustments.to_values().normalized(&ADJUSTMENT_SCALES),
                     curves,
                     curves_are_active,
-                    bitmap,
+                    sub_masks: Some(def.sub_masks),
                 });
             }
 
@@ -1015,19 +1027,121 @@ fn parse_masks(values: Vec<Value>, width: u32, height: u32) -> Vec<MaskRuntime> 
                 if !legacy.enabled {
                     return None;
                 }
-                return Some(MaskRuntime {
+                return Some(MaskRuntimeDef {
                     opacity_factor: 1.0,
                     invert: false,
                     adjustments: legacy.to_values().normalized(&ADJUSTMENT_SCALES),
                     curves: CurvesRuntime::from_payload(&CurvesPayload::default()),
                     curves_are_active: false,
-                    bitmap: None,
+                    sub_masks: None,
                 });
             }
 
             None
         })
         .collect()
+}
+
+fn parse_masks(values: Vec<Value>, width: u32, height: u32) -> Vec<MaskRuntime> {
+    parse_mask_defs(values)
+        .into_iter()
+        .map(|def| {
+            let bitmap = def
+                .sub_masks
+                .as_ref()
+                .map(|sub_masks| generate_mask_bitmap(sub_masks, width, height));
+            MaskRuntime {
+                opacity_factor: def.opacity_factor,
+                invert: def.invert,
+                adjustments: def.adjustments,
+                curves: def.curves,
+                curves_are_active: def.curves_are_active,
+                bitmap,
+                origin_x: 0,
+                origin_y: 0,
+                width,
+                height,
+            }
+        })
+        .collect()
+}
+
+fn build_mask_runtimes_for_region(
+    mask_defs: &[MaskRuntimeDef],
+    full_width: u32,
+    full_height: u32,
+    origin_x: u32,
+    origin_y: u32,
+    width: u32,
+    height: u32,
+    ai_cache: &HashMap<String, Vec<u8>>,
+) -> Vec<MaskRuntime> {
+    mask_defs
+        .iter()
+        .map(|def| {
+            let bitmap = def.sub_masks.as_ref().map(|sub_masks| {
+                generate_mask_bitmap_region(sub_masks, full_width, full_height, origin_x, origin_y, width, height, ai_cache)
+            });
+            MaskRuntime {
+                opacity_factor: def.opacity_factor,
+                invert: def.invert,
+                adjustments: def.adjustments,
+                curves: def.curves.clone(),
+                curves_are_active: def.curves_are_active,
+                bitmap,
+                origin_x,
+                origin_y,
+                width,
+                height,
+            }
+        })
+        .collect()
+}
+
+fn build_ai_mask_cache(mask_defs: &[MaskRuntimeDef], width: u32, height: u32) -> HashMap<String, Vec<u8>> {
+    let mut cache = HashMap::new();
+    for def in mask_defs {
+        let Some(sub_masks) = def.sub_masks.as_ref() else { continue };
+        for sub_mask in sub_masks {
+            match sub_mask.mask_type.as_str() {
+                "ai-subject" => {
+                    if cache.contains_key(&sub_mask.id) {
+                        continue;
+                    }
+                    if let Some(mask) = generate_ai_subject_mask(&sub_mask.parameters, width, height) {
+                        cache.insert(sub_mask.id.clone(), mask);
+                    }
+                }
+                "ai-environment" => {
+                    if cache.contains_key(&sub_mask.id) {
+                        continue;
+                    }
+                    if let Some(mask) = generate_ai_environment_mask(&sub_mask.parameters, width, height) {
+                        cache.insert(sub_mask.id.clone(), mask);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    cache
+}
+
+fn mask_selection_at(mask: &MaskRuntime, full_x: u32, full_y: u32) -> f32 {
+    let bitmap = match mask.bitmap.as_ref() {
+        Some(bitmap) => bitmap,
+        None => return 1.0,
+    };
+    if full_x < mask.origin_x || full_y < mask.origin_y {
+        return 0.0;
+    }
+    let local_x = full_x - mask.origin_x;
+    let local_y = full_y - mask.origin_y;
+    if local_x >= mask.width || local_y >= mask.height {
+        return 0.0;
+    }
+    let idx = (local_y * mask.width + local_x) as usize;
+    bitmap.get(idx).copied().unwrap_or(0) as f32 / 255.0
 }
 
 fn apply_feathered_circle_add(target: &mut [u8], width: u32, height: u32, cx: f32, cy: f32, radius: f32, feather: f32) {
@@ -1226,6 +1340,226 @@ fn apply_brush_submask(target: &mut [u8], sub_mask: &SubMaskPayload, width: u32,
     }
 }
 
+fn apply_feathered_circle_add_region(
+    target: &mut [u8],
+    width: u32,
+    height: u32,
+    origin_x: u32,
+    origin_y: u32,
+    cx: f32,
+    cy: f32,
+    radius: f32,
+    feather: f32,
+) {
+    if radius <= 0.5 || width == 0 || height == 0 {
+        return;
+    }
+    let feather_amount = feather.clamp(0.0, 1.0);
+    let inner_radius = radius * (1.0 - feather_amount);
+    let outer_radius = radius;
+    let outer_sq = outer_radius * outer_radius;
+
+    let min_x = (cx - outer_radius).floor().max(origin_x as f32) as i32;
+    let min_y = (cy - outer_radius).floor().max(origin_y as f32) as i32;
+    let max_x = (cx + outer_radius).ceil().min((origin_x + width - 1) as f32) as i32;
+    let max_y = (cy + outer_radius).ceil().min((origin_y + height - 1) as f32) as i32;
+
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let dist_sq = dx * dx + dy * dy;
+            if dist_sq > outer_sq {
+                continue;
+            }
+
+            let dist = dist_sq.sqrt();
+            let intensity = if dist <= inner_radius {
+                1.0
+            } else if outer_radius > inner_radius {
+                1.0 - ((dist - inner_radius) / (outer_radius - inner_radius)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+
+            if intensity <= 0.0 {
+                continue;
+            }
+
+            let local_x = (x as u32).saturating_sub(origin_x);
+            let local_y = (y as u32).saturating_sub(origin_y);
+            let idx = (local_y * width + local_x) as usize;
+            let current = target[idx] as f32 / 255.0;
+            let next = 1.0 - (1.0 - current) * (1.0 - intensity);
+            target[idx] = (next.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    }
+}
+
+fn apply_feathered_circle_sub_region(
+    target: &mut [u8],
+    width: u32,
+    height: u32,
+    origin_x: u32,
+    origin_y: u32,
+    cx: f32,
+    cy: f32,
+    radius: f32,
+    feather: f32,
+) {
+    if radius <= 0.5 || width == 0 || height == 0 {
+        return;
+    }
+    let feather_amount = feather.clamp(0.0, 1.0);
+    let inner_radius = radius * (1.0 - feather_amount);
+    let outer_radius = radius;
+    let outer_sq = outer_radius * outer_radius;
+
+    let min_x = (cx - outer_radius).floor().max(origin_x as f32) as i32;
+    let min_y = (cy - outer_radius).floor().max(origin_y as f32) as i32;
+    let max_x = (cx + outer_radius).ceil().min((origin_x + width - 1) as f32) as i32;
+    let max_y = (cy + outer_radius).ceil().min((origin_y + height - 1) as f32) as i32;
+
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let dist_sq = dx * dx + dy * dy;
+            if dist_sq > outer_sq {
+                continue;
+            }
+
+            let dist = dist_sq.sqrt();
+            let intensity = if dist <= inner_radius {
+                1.0
+            } else if outer_radius > inner_radius {
+                1.0 - ((dist - inner_radius) / (outer_radius - inner_radius)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+
+            if intensity <= 0.0 {
+                continue;
+            }
+
+            let local_x = (x as u32).saturating_sub(origin_x);
+            let local_y = (y as u32).saturating_sub(origin_y);
+            let idx = (local_y * width + local_x) as usize;
+            let current = target[idx] as f32 / 255.0;
+            let next = (current * (1.0 - intensity)).clamp(0.0, 1.0);
+            target[idx] = (next * 255.0).round() as u8;
+        }
+    }
+}
+
+fn apply_brush_submask_region(
+    target: &mut [u8],
+    sub_mask: &SubMaskPayload,
+    full_width: u32,
+    full_height: u32,
+    origin_x: u32,
+    origin_y: u32,
+    width: u32,
+    height: u32,
+) {
+    if sub_mask.mask_type != "brush" || !sub_mask.visible {
+        return;
+    }
+    if target.len() != (width * height) as usize {
+        return;
+    }
+
+    let w_f = full_width as f32;
+    let h_f = full_height as f32;
+    let base_dim = full_width.min(full_height) as f32;
+
+    fn denorm(value: f32, max: f32) -> f32 {
+        let max_coord = (max - 1.0).max(1.0);
+        if value <= 1.5 {
+            (value * max_coord).clamp(0.0, max_coord)
+        } else {
+            value
+        }
+    }
+
+    let params: BrushMaskParameters = serde_json::from_value(sub_mask.parameters.clone()).unwrap_or_default();
+    let mut events: Vec<BrushEvent> = Vec::new();
+
+    fn pressure_scale(pressure: f32) -> f32 {
+        0.2 + 0.8 * pressure.clamp(0.0, 1.0)
+    }
+
+    for line in params.lines {
+        if line.points.is_empty() {
+            continue;
+        }
+
+        let effective_mode = if line.tool == "eraser" {
+            SubMaskMode::Subtractive
+        } else {
+            sub_mask.mode
+        };
+
+        let brush_size_px = if line.brush_size <= 1.5 {
+            (line.brush_size * base_dim).max(0.0)
+        } else {
+            line.brush_size
+        };
+        let base_radius = (brush_size_px / 2.0).max(1.0);
+        let feather = line.feather.clamp(0.0, 1.0);
+
+        let points: Vec<(f32, f32, f32)> = line
+            .points
+            .into_iter()
+            .map(|p| (denorm(p.x, w_f), denorm(p.y, h_f), p.pressure.clamp(0.0, 1.0)))
+            .collect();
+
+        events.push(BrushEvent {
+            order: line.order,
+            mode: effective_mode,
+            feather,
+            base_radius,
+            points,
+        });
+    }
+
+    events.sort_by_key(|e| e.order);
+
+    for event in events {
+        let apply_circle = |mask: &mut [u8], cx: f32, cy: f32, radius: f32| {
+            if event.mode == SubMaskMode::Additive {
+                apply_feathered_circle_add_region(mask, width, height, origin_x, origin_y, cx, cy, radius, event.feather);
+            } else {
+                apply_feathered_circle_sub_region(mask, width, height, origin_x, origin_y, cx, cy, radius, event.feather);
+            }
+        };
+
+        if event.points.len() == 1 {
+            let (x, y, p) = event.points[0];
+            let radius = (event.base_radius * pressure_scale(p)).max(1.0);
+            apply_circle(target, x, y, radius);
+            continue;
+        }
+
+        for pair in event.points.windows(2) {
+            let (x1, y1, p1) = pair[0];
+            let (x2, y2, p2) = pair[1];
+            let dx = x2 - x1;
+            let dy = y2 - y1;
+            let dist = (dx * dx + dy * dy).sqrt().max(0.001);
+            let r1 = (event.base_radius * pressure_scale(p1)).max(1.0);
+            let r2 = (event.base_radius * pressure_scale(p2)).max(1.0);
+            let step_size = ((r1.max(r2)) * 0.5).max(0.75);
+            let steps = (dist / step_size).ceil() as i32;
+            for i in 0..=steps {
+                let t = i as f32 / steps.max(1) as f32;
+                let radius = r1 + (r2 - r1) * t;
+                apply_circle(target, x1 + dx * t, y1 + dy * t, radius);
+            }
+        }
+    }
+}
+
 fn apply_submask_bitmap(target: &mut [u8], sub_bitmap: &[u8], mode: SubMaskMode) {
     if target.len() != sub_bitmap.len() {
         return;
@@ -1367,6 +1701,146 @@ fn generate_linear_mask(params_value: &Value, width: u32, height: u32) -> Vec<u8
     mask
 }
 
+fn generate_radial_mask_region(
+    params_value: &Value,
+    full_width: u32,
+    full_height: u32,
+    origin_x: u32,
+    origin_y: u32,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let params: RadialMaskParameters = serde_json::from_value(params_value.clone()).unwrap_or_default();
+    let len = (width * height) as usize;
+    let mut mask = vec![0u8; len];
+
+    let w_f = full_width as f32;
+    let h_f = full_height as f32;
+    let base_dim = full_width.min(full_height) as f32;
+
+    fn denorm(value: f32, max: f32) -> f32 {
+        let max_coord = (max - 1.0).max(1.0);
+        if value <= 1.5 {
+            (value * max_coord).clamp(0.0, max_coord)
+        } else {
+            value
+        }
+    }
+
+    fn denorm_len(value: f32, base_dim: f32) -> f32 {
+        if value <= 1.5 {
+            (value * base_dim).max(0.0)
+        } else {
+            value
+        }
+    }
+
+    let cx = denorm(params.center_x, w_f);
+    let cy = denorm(params.center_y, h_f);
+    let rx = denorm_len(params.radius_x, base_dim).max(0.01);
+    let ry = denorm_len(params.radius_y, base_dim).max(0.01);
+    let feather = params.feather.clamp(0.0, 1.0);
+    let inner_bound = 1.0 - feather;
+
+    let rotation = params.rotation.to_radians();
+    let cos_rot = rotation.cos();
+    let sin_rot = rotation.sin();
+
+    for y in 0..height {
+        let full_y = origin_y + y;
+        for x in 0..width {
+            let full_x = origin_x + x;
+            let dx = full_x as f32 - cx;
+            let dy = full_y as f32 - cy;
+
+            let rot_dx = dx * cos_rot + dy * sin_rot;
+            let rot_dy = -dx * sin_rot + dy * cos_rot;
+
+            let norm_x = rot_dx / rx;
+            let norm_y = rot_dy / ry;
+            let dist = (norm_x * norm_x + norm_y * norm_y).sqrt();
+
+            let intensity = if dist <= inner_bound {
+                1.0
+            } else {
+                1.0 - (dist - inner_bound) / (1.0 - inner_bound).max(0.01)
+            };
+
+            let idx = (y * width + x) as usize;
+            mask[idx] = (intensity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    }
+
+    mask
+}
+
+fn generate_linear_mask_region(
+    params_value: &Value,
+    full_width: u32,
+    full_height: u32,
+    origin_x: u32,
+    origin_y: u32,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let params: LinearMaskParameters = serde_json::from_value(params_value.clone()).unwrap_or_default();
+    let len = (width * height) as usize;
+    let mut mask = vec![0u8; len];
+
+    let w_f = full_width as f32;
+    let h_f = full_height as f32;
+    let base_dim = full_width.min(full_height) as f32;
+
+    fn denorm(value: f32, max: f32) -> f32 {
+        let max_coord = (max - 1.0).max(1.0);
+        if value <= 1.5 {
+            (value * max_coord).clamp(0.0, max_coord)
+        } else {
+            value
+        }
+    }
+
+    fn denorm_len(value: f32, base_dim: f32) -> f32 {
+        if value <= 1.5 {
+            (value * base_dim).max(0.0)
+        } else {
+            value
+        }
+    }
+
+    let start_x = denorm(params.start_x, w_f);
+    let start_y = denorm(params.start_y, h_f);
+    let end_x = denorm(params.end_x, w_f);
+    let end_y = denorm(params.end_y, h_f);
+    let range = denorm_len(params.range, base_dim).max(0.01);
+
+    let line_vec_x = end_x - start_x;
+    let line_vec_y = end_y - start_y;
+    let len_sq = line_vec_x * line_vec_x + line_vec_y * line_vec_y;
+    if len_sq < 0.01 {
+        return mask;
+    }
+    let inv_len = 1.0 / len_sq.sqrt();
+    let perp_vec_x = -line_vec_y * inv_len;
+    let perp_vec_y = line_vec_x * inv_len;
+
+    for y in 0..height {
+        let full_y = origin_y + y;
+        for x in 0..width {
+            let full_x = origin_x + x;
+            let pixel_vec_x = full_x as f32 - start_x;
+            let pixel_vec_y = full_y as f32 - start_y;
+            let dist_perp = pixel_vec_x * perp_vec_x + pixel_vec_y * perp_vec_y;
+            let t = dist_perp / range;
+            let intensity = (0.5 - t * 0.5).clamp(0.0, 1.0);
+            let idx = (y * width + x) as usize;
+            mask[idx] = (intensity * 255.0).round() as u8;
+        }
+    }
+
+    mask
+}
+
 fn decode_data_url_base64(data_url: &str) -> Option<Vec<u8>> {
     let idx = data_url.find("base64,")?;
     let b64 = &data_url[(idx + "base64,".len())..];
@@ -1404,6 +1878,118 @@ fn generate_ai_subject_mask(params_value: &Value, width: u32, height: u32) -> Op
 fn generate_ai_environment_mask(params_value: &Value, width: u32, height: u32) -> Option<Vec<u8>> {
     let params: AiEnvironmentMaskParameters = serde_json::from_value(params_value.clone()).ok()?;
     generate_ai_png_mask(params.mask_data_base64, params.softness, width, height)
+}
+
+fn generate_ai_png_mask_region(
+    mask_data_base64: Option<String>,
+    softness: f32,
+    full_width: u32,
+    full_height: u32,
+    origin_x: u32,
+    origin_y: u32,
+    width: u32,
+    height: u32,
+) -> Option<Vec<u8>> {
+    let data_url = mask_data_base64?;
+    let bytes = decode_data_url_base64(&data_url)?;
+
+    let decoded = image::load_from_memory(&bytes).ok()?;
+    let gray = decoded.to_luma8();
+    let resized = if gray.width() == full_width && gray.height() == full_height {
+        gray
+    } else {
+        image::imageops::resize(&gray, full_width, full_height, FilterType::Triangle)
+    };
+
+    let mut raw = resized.into_raw();
+
+    let softness = softness.clamp(0.0, 1.0);
+    let radius = (softness * 10.0).round() as i32;
+    if radius >= 1 {
+        raw = box_blur_u8(&raw, full_width as usize, full_height as usize, radius as usize);
+    }
+
+    if origin_x == 0 && origin_y == 0 && width == full_width && height == full_height {
+        return Some(raw);
+    }
+
+    Some(crop_mask_region(&raw, full_width, full_height, origin_x, origin_y, width, height))
+}
+
+fn generate_ai_subject_mask_region(
+    params_value: &Value,
+    full_width: u32,
+    full_height: u32,
+    origin_x: u32,
+    origin_y: u32,
+    width: u32,
+    height: u32,
+) -> Option<Vec<u8>> {
+    let params: AiSubjectMaskParameters = serde_json::from_value(params_value.clone()).ok()?;
+    generate_ai_png_mask_region(
+        params.mask_data_base64,
+        params.softness,
+        full_width,
+        full_height,
+        origin_x,
+        origin_y,
+        width,
+        height,
+    )
+}
+
+fn generate_ai_environment_mask_region(
+    params_value: &Value,
+    full_width: u32,
+    full_height: u32,
+    origin_x: u32,
+    origin_y: u32,
+    width: u32,
+    height: u32,
+) -> Option<Vec<u8>> {
+    let params: AiEnvironmentMaskParameters = serde_json::from_value(params_value.clone()).ok()?;
+    generate_ai_png_mask_region(
+        params.mask_data_base64,
+        params.softness,
+        full_width,
+        full_height,
+        origin_x,
+        origin_y,
+        width,
+        height,
+    )
+}
+
+fn crop_mask_region(
+    full_mask: &[u8],
+    full_width: u32,
+    full_height: u32,
+    origin_x: u32,
+    origin_y: u32,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let mut tile = vec![0u8; (width * height) as usize];
+    if full_width == 0 || full_height == 0 || width == 0 || height == 0 {
+        return tile;
+    }
+    for y in 0..height {
+        let src_y = origin_y + y;
+        if src_y >= full_height {
+            continue;
+        }
+        if origin_x >= full_width {
+            continue;
+        }
+        let src_start = (src_y * full_width + origin_x) as usize;
+        let dst_start = (y * width) as usize;
+        let copy_len = width.min(full_width - origin_x) as usize;
+        let src_end = src_start + copy_len;
+        if src_end <= full_mask.len() && dst_start + copy_len <= tile.len() {
+            tile[dst_start..dst_start + copy_len].copy_from_slice(&full_mask[src_start..src_end]);
+        }
+    }
+    tile
 }
 
 fn box_blur_u8(src: &[u8], width: usize, height: usize, radius: usize) -> Vec<u8> {
@@ -1570,26 +2156,103 @@ fn generate_mask_bitmap(sub_masks: &[SubMaskPayload], width: u32, height: u32) -
     mask
 }
 
+fn generate_mask_bitmap_region(
+    sub_masks: &[SubMaskPayload],
+    full_width: u32,
+    full_height: u32,
+    origin_x: u32,
+    origin_y: u32,
+    width: u32,
+    height: u32,
+    ai_cache: &HashMap<String, Vec<u8>>,
+) -> Vec<u8> {
+    let len = (width * height) as usize;
+    let mut mask = vec![0u8; len];
+    for sub_mask in sub_masks.iter().filter(|s| s.visible) {
+        match sub_mask.mask_type.as_str() {
+            "brush" => apply_brush_submask_region(&mut mask, sub_mask, full_width, full_height, origin_x, origin_y, width, height),
+            "radial" => {
+                let bitmap = generate_radial_mask_region(&sub_mask.parameters, full_width, full_height, origin_x, origin_y, width, height);
+                apply_submask_bitmap(&mut mask, &bitmap, sub_mask.mode);
+            }
+            "linear" => {
+                let bitmap = generate_linear_mask_region(&sub_mask.parameters, full_width, full_height, origin_x, origin_y, width, height);
+                apply_submask_bitmap(&mut mask, &bitmap, sub_mask.mode);
+            }
+            "ai-subject" => {
+                if let Some(full_mask) = ai_cache.get(&sub_mask.id) {
+                    let bitmap = crop_mask_region(full_mask, full_width, full_height, origin_x, origin_y, width, height);
+                    apply_submask_bitmap(&mut mask, &bitmap, sub_mask.mode);
+                } else if let Some(bitmap) =
+                    generate_ai_subject_mask_region(&sub_mask.parameters, full_width, full_height, origin_x, origin_y, width, height)
+                {
+                    apply_submask_bitmap(&mut mask, &bitmap, sub_mask.mode);
+                }
+            }
+            "ai-environment" => {
+                if let Some(full_mask) = ai_cache.get(&sub_mask.id) {
+                    let bitmap = crop_mask_region(full_mask, full_width, full_height, origin_x, origin_y, width, height);
+                    apply_submask_bitmap(&mut mask, &bitmap, sub_mask.mode);
+                } else if let Some(bitmap) =
+                    generate_ai_environment_mask_region(&sub_mask.parameters, full_width, full_height, origin_x, origin_y, width, height)
+                {
+                    apply_submask_bitmap(&mut mask, &bitmap, sub_mask.mode);
+                }
+            }
+            _ => {}
+        }
+    }
+    mask
+}
+
 fn get_luma(color: [f32; 3]) -> f32 {
     color[0] * 0.2126 + color[1] * 0.7152 + color[2] * 0.0722
 }
 
 struct DetailBlurLuma {
+    origin_x: u32,
+    origin_y: u32,
+    width: u32,
+    height: u32,
     sharpness: Option<Vec<f32>>,
     clarity: Option<Vec<f32>>,
     structure: Option<Vec<f32>>,
 }
 
-fn build_luma_buffer(linear: &[f32], width: u32, height: u32) -> Vec<f32> {
+const DETAIL_SHARPNESS_RADIUS: usize = 2;
+const DETAIL_CLARITY_RADIUS: usize = 8;
+const DETAIL_STRUCTURE_RADIUS: usize = 40;
+
+fn build_luma_buffer_region(
+    linear: &[f32],
+    full_width: u32,
+    full_height: u32,
+    origin_x: u32,
+    origin_y: u32,
+    width: u32,
+    height: u32,
+) -> Vec<f32> {
     let mut luma = Vec::with_capacity((width as usize) * (height as usize));
-    if width == 0 || height == 0 {
+    if width == 0 || height == 0 || full_width == 0 || full_height == 0 {
         return luma;
     }
-    let count = (width as usize) * (height as usize);
-    for idx in 0..count {
-        let base = idx * 4;
-        let color = [linear[base], linear[base + 1], linear[base + 2]];
-        luma.push(get_luma(color));
+    for y in 0..height {
+        let full_y = origin_y + y;
+        if full_y >= full_height {
+            luma.extend(std::iter::repeat(0.0).take(width as usize));
+            continue;
+        }
+        for x in 0..width {
+            let full_x = origin_x + x;
+            if full_x >= full_width {
+                luma.push(0.0);
+                continue;
+            }
+            let idx = (full_y * full_width + full_x) as usize;
+            let base = idx * 4;
+            let color = [linear[base], linear[base + 1], linear[base + 2]];
+            luma.push(get_luma(color));
+        }
     }
     luma
 }
@@ -1609,32 +2272,104 @@ fn build_detail_blurs(
         return None;
     }
 
-    const SHARPNESS_RADIUS: usize = 2;
-    const CLARITY_RADIUS: usize = 8;
-    const STRUCTURE_RADIUS: usize = 40;
+    build_detail_blurs_region(
+        linear,
+        width,
+        height,
+        0,
+        0,
+        width,
+        height,
+        DETAIL_SHARPNESS_RADIUS,
+        DETAIL_CLARITY_RADIUS,
+        DETAIL_STRUCTURE_RADIUS,
+        want_sharpness,
+        want_clarity,
+        want_structure,
+    )
+}
 
-    let luma = build_luma_buffer(linear, width, height);
+fn build_detail_blurs_region(
+    linear: &[f32],
+    full_width: u32,
+    full_height: u32,
+    region_x: u32,
+    region_y: u32,
+    region_w: u32,
+    region_h: u32,
+    sharpness_radius: usize,
+    clarity_radius: usize,
+    structure_radius: usize,
+    want_sharpness: bool,
+    want_clarity: bool,
+    want_structure: bool,
+) -> Option<DetailBlurLuma> {
+    if full_width == 0 || full_height == 0 || region_w == 0 || region_h == 0 {
+        return None;
+    }
+    if !want_sharpness && !want_clarity && !want_structure {
+        return None;
+    }
+
+    let mut max_radius = 0usize;
+    if want_sharpness {
+        max_radius = max_radius.max(sharpness_radius);
+    }
+    if want_clarity {
+        max_radius = max_radius.max(clarity_radius);
+    }
+    if want_structure {
+        max_radius = max_radius.max(structure_radius);
+    }
+    let max_radius = max_radius as u32;
+    let pad_x = max_radius;
+    let pad_y = max_radius;
+
+    let start_x = region_x.saturating_sub(pad_x);
+    let start_y = region_y.saturating_sub(pad_y);
+    let end_x = (region_x + region_w).saturating_add(pad_x).min(full_width);
+    let end_y = (region_y + region_h).saturating_add(pad_y).min(full_height);
+    let padded_w = (end_x - start_x).max(1);
+    let padded_h = (end_y - start_y).max(1);
+
+    let luma = build_luma_buffer_region(linear, full_width, full_height, start_x, start_y, padded_w, padded_h);
     let sharpness = if want_sharpness {
-        Some(box_blur_f32(&luma, width as usize, height as usize, SHARPNESS_RADIUS))
+        Some(box_blur_f32(&luma, padded_w as usize, padded_h as usize, sharpness_radius))
     } else {
         None
     };
     let clarity = if want_clarity {
-        Some(box_blur_f32(&luma, width as usize, height as usize, CLARITY_RADIUS))
+        Some(box_blur_f32(&luma, padded_w as usize, padded_h as usize, clarity_radius))
     } else {
         None
     };
     let structure = if want_structure {
-        Some(box_blur_f32(&luma, width as usize, height as usize, STRUCTURE_RADIUS))
+        Some(box_blur_f32(&luma, padded_w as usize, padded_h as usize, structure_radius))
     } else {
         None
     };
 
     Some(DetailBlurLuma {
+        origin_x: start_x,
+        origin_y: start_y,
+        width: padded_w,
+        height: padded_h,
         sharpness,
         clarity,
         structure,
     })
+}
+
+fn detail_blur_index(blurs: &DetailBlurLuma, full_x: u32, full_y: u32) -> Option<usize> {
+    if full_x < blurs.origin_x || full_y < blurs.origin_y {
+        return None;
+    }
+    let local_x = full_x - blurs.origin_x;
+    let local_y = full_y - blurs.origin_y;
+    if local_x >= blurs.width || local_y >= blurs.height {
+        return None;
+    }
+    Some((local_y * blurs.width + local_x) as usize)
 }
 
 fn sample_linear_color(linear: &[f32], width: u32, height: u32, x: u32, y: u32) -> [f32; 3] {
@@ -2299,11 +3034,16 @@ fn apply_color_adjustments(mut colors: [f32; 3], settings: &AdjustmentValues, ce
 
 fn apply_local_contrast_stack(
     mut colors: [f32; 3],
-    idx: usize,
+    full_x: u32,
+    full_y: u32,
     centre_mask: f32,
     settings: &AdjustmentValues,
     blurs: &DetailBlurLuma,
 ) -> [f32; 3] {
+    let idx = match detail_blur_index(blurs, full_x, full_y) {
+        Some(idx) => idx,
+        None => return colors,
+    };
     if settings.sharpness.abs() > 0.00001 {
         if let Some(blurred) = blurs.sharpness.as_ref() {
             if let Some(luma) = blurred.get(idx) {
@@ -2751,18 +3491,14 @@ fn render_linear_with_payload(
 
         let centre_mask = if need_centre_mask { compute_centre_mask(x, y, width, height) } else { 0.0 };
         if let Some(blurs) = detail_blurs.as_ref() {
-            colors = apply_local_contrast_stack(colors, idx, centre_mask, &adjustment_values, blurs);
+            colors = apply_local_contrast_stack(colors, x, y, centre_mask, &adjustment_values, blurs);
         }
 
         // RapidRAW-like mask compositing: apply globals once, then for each mask
         // mix toward a separately-adjusted result by mask influence.
         let mut composite = apply_color_adjustments(colors, &adjustment_values, centre_mask);
         for mask in mask_runtimes {
-            let mut selection = if let Some(bitmap) = &mask.bitmap {
-                bitmap.get(idx).copied().unwrap_or(0) as f32 / 255.0
-            } else {
-                1.0
-            };
+            let mut selection = mask_selection_at(mask, x, y);
             if mask.invert {
                 selection = 1.0 - selection;
             }
@@ -2773,7 +3509,7 @@ fn render_linear_with_payload(
 
             let mut mask_base = composite;
             if let Some(blurs) = detail_blurs.as_ref() {
-                mask_base = apply_local_contrast_stack(mask_base, idx, centre_mask, &mask.adjustments, blurs);
+                mask_base = apply_local_contrast_stack(mask_base, x, y, centre_mask, &mask.adjustments, blurs);
             }
             let mask_adjusted = apply_color_adjustments(mask_base, &mask.adjustments, centre_mask);
             composite = [
@@ -2799,11 +3535,7 @@ fn render_linear_with_payload(
                     continue;
                 }
 
-                let mut selection = if let Some(bitmap) = &mask.bitmap {
-                    bitmap.get(idx).copied().unwrap_or(0) as f32 / 255.0
-                } else {
-                    1.0
-                };
+                let mut selection = mask_selection_at(mask, x, y);
                 if mask.invert {
                     selection = 1.0 - selection;
                 }
@@ -2945,18 +3677,14 @@ fn render_linear_roi_with_payload(
             let centre_mask =
                 if need_centre_mask { compute_centre_mask(full_x, full_y, width, height) } else { 0.0 };
             if let Some(blurs) = detail_blurs.as_ref() {
-                colors = apply_local_contrast_stack(colors, idx_full, centre_mask, &adjustment_values, blurs);
+                colors = apply_local_contrast_stack(colors, full_x, full_y, centre_mask, &adjustment_values, blurs);
             }
 
             // RapidRAW-like mask compositing: apply globals once, then for each mask
             // mix toward a separately-adjusted result by mask influence.
             let mut composite = apply_color_adjustments(colors, &adjustment_values, centre_mask);
             for mask in mask_runtimes {
-                let mut selection = if let Some(bitmap) = &mask.bitmap {
-                    bitmap.get(idx_full).copied().unwrap_or(0) as f32 / 255.0
-                } else {
-                    1.0
-                };
+                let mut selection = mask_selection_at(mask, full_x, full_y);
                 if mask.invert {
                     selection = 1.0 - selection;
                 }
@@ -2967,7 +3695,7 @@ fn render_linear_roi_with_payload(
 
                 let mut mask_base = composite;
                 if let Some(blurs) = detail_blurs.as_ref() {
-                    mask_base = apply_local_contrast_stack(mask_base, idx_full, centre_mask, &mask.adjustments, blurs);
+                    mask_base = apply_local_contrast_stack(mask_base, full_x, full_y, centre_mask, &mask.adjustments, blurs);
                 }
                 let mask_adjusted = apply_color_adjustments(mask_base, &mask.adjustments, centre_mask);
                 composite = [
@@ -2993,11 +3721,7 @@ fn render_linear_roi_with_payload(
                         continue;
                     }
 
-                    let mut selection = if let Some(bitmap) = &mask.bitmap {
-                        bitmap.get(idx_full).copied().unwrap_or(0) as f32 / 255.0
-                    } else {
-                        1.0
-                    };
+                    let mut selection = mask_selection_at(mask, full_x, full_y);
                     if mask.invert {
                         selection = 1.0 - selection;
                     }
@@ -3068,6 +3792,220 @@ fn render_linear_roi_with_payload(
     Ok(encoded)
 }
 
+fn render_linear_with_payload_tiled(
+    linear_buffer: &LinearImage,
+    payload: &AdjustmentsPayload,
+    mask_defs: &[MaskRuntimeDef],
+    fast_demosaic: bool,
+    tile_size: u32,
+) -> Result<Vec<u8>> {
+    let adjustment_values = payload.to_values().normalized(&ADJUSTMENT_SCALES);
+    let use_basic_tone_mapper = matches!(adjustment_values.tone_mapper, ToneMapper::Basic);
+    let global_curves = CurvesRuntime::from_payload(&payload.curves);
+    let curves_are_active = !global_curves.is_default() || mask_defs.iter().any(|m| m.curves_are_active);
+
+    let width = linear_buffer.width();
+    let height = linear_buffer.height();
+    if width == 0 || height == 0 {
+        return Err(anyhow::anyhow!("Invalid image dimensions"));
+    }
+
+    let ai_cache = build_ai_mask_cache(mask_defs, width, height);
+
+    let linear = linear_buffer.as_raw();
+    debug_assert_eq!(linear.len(), (width as usize) * (height as usize) * 4);
+
+    let need_sharpness =
+        adjustment_values.sharpness.abs() > 0.00001 ||
+            mask_defs.iter().any(|m| m.adjustments.sharpness.abs() > 0.00001);
+    let need_clarity =
+        adjustment_values.clarity.abs() > 0.00001 ||
+            adjustment_values.centre.abs() > 0.00001 ||
+            mask_defs.iter().any(|m| {
+                m.adjustments.clarity.abs() > 0.00001 || m.adjustments.centre.abs() > 0.00001
+            });
+    let need_structure =
+        adjustment_values.structure.abs() > 0.00001 ||
+            mask_defs.iter().any(|m| m.adjustments.structure.abs() > 0.00001);
+    let need_centre_mask =
+        adjustment_values.centre.abs() > 0.00001 ||
+            mask_defs.iter().any(|m| m.adjustments.centre.abs() > 0.00001);
+
+    let ca_rc = adjustment_values.chromatic_aberration_red_cyan;
+    let ca_by = adjustment_values.chromatic_aberration_blue_yellow;
+    let ca_active = ca_rc.abs() > 0.000001 || ca_by.abs() > 0.000001;
+
+    let len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|v| v.checked_mul(3))
+        .context("RGB buffer size overflow")?;
+    let mut rgb = try_alloc_vec(len, 0u8)?;
+
+    let tile = tile_size.max(64).min(width.max(height));
+    let mut tile_y = 0;
+    while tile_y < height {
+        let tile_h = (height - tile_y).min(tile);
+        let mut tile_x = 0;
+        while tile_x < width {
+            let tile_w = (width - tile_x).min(tile);
+            let mask_runtimes = if mask_defs.is_empty() {
+                Vec::new()
+            } else {
+                build_mask_runtimes_for_region(mask_defs, width, height, tile_x, tile_y, tile_w, tile_h, &ai_cache)
+            };
+            let detail_blurs = build_detail_blurs_region(
+                linear,
+                width,
+                height,
+                tile_x,
+                tile_y,
+                tile_w,
+                tile_h,
+                DETAIL_SHARPNESS_RADIUS,
+                DETAIL_CLARITY_RADIUS,
+                DETAIL_STRUCTURE_RADIUS,
+                need_sharpness,
+                need_clarity,
+                need_structure,
+            );
+
+            for y in 0..tile_h {
+                let full_y = tile_y + y;
+                for x in 0..tile_w {
+                    let full_x = tile_x + x;
+                    let idx_full = (full_y * width + full_x) as usize;
+                    let base = idx_full * 4;
+
+                    let mut colors =
+                        if ca_active {
+                            sample_ca_corrected_color(linear, width, height, full_x, full_y, ca_rc, ca_by)
+                        } else {
+                            [linear[base], linear[base + 1], linear[base + 2]]
+                        };
+
+                    colors = apply_default_raw_processing(colors, use_basic_tone_mapper);
+
+                    let centre_mask =
+                        if need_centre_mask { compute_centre_mask(full_x, full_y, width, height) } else { 0.0 };
+                    if let Some(blurs) = detail_blurs.as_ref() {
+                        colors = apply_local_contrast_stack(colors, full_x, full_y, centre_mask, &adjustment_values, blurs);
+                    }
+
+                    let mut composite = apply_color_adjustments(colors, &adjustment_values, centre_mask);
+                    for mask in &mask_runtimes {
+                        let mut selection = mask_selection_at(mask, full_x, full_y);
+                        if mask.invert {
+                            selection = 1.0 - selection;
+                        }
+                        let influence = (selection * mask.opacity_factor).clamp(0.0, 1.0);
+                        if influence <= 0.001 {
+                            continue;
+                        }
+
+                        let mut mask_base = composite;
+                        if let Some(blurs) = detail_blurs.as_ref() {
+                            mask_base = apply_local_contrast_stack(mask_base, full_x, full_y, centre_mask, &mask.adjustments, blurs);
+                        }
+                        let mask_adjusted = apply_color_adjustments(mask_base, &mask.adjustments, centre_mask);
+                        composite = [
+                            composite[0] + (mask_adjusted[0] - composite[0]) * influence,
+                            composite[1] + (mask_adjusted[1] - composite[1]) * influence,
+                            composite[2] + (mask_adjusted[2] - composite[2]) * influence,
+                        ];
+                    }
+
+                    composite = tone_map(composite, adjustment_values.tone_mapper);
+
+                    let mut srgb = [
+                        linear_to_srgb(composite[0]),
+                        linear_to_srgb(composite[1]),
+                        linear_to_srgb(composite[2]),
+                    ];
+
+                    if curves_are_active {
+                        srgb = global_curves.apply_all(srgb);
+
+                        for mask in &mask_runtimes {
+                            if !mask.curves_are_active {
+                                continue;
+                            }
+
+                            let mut selection = mask_selection_at(mask, full_x, full_y);
+                            if mask.invert {
+                                selection = 1.0 - selection;
+                            }
+                            let influence = (selection * mask.opacity_factor).clamp(0.0, 1.0);
+                            if influence <= 0.001 {
+                                continue;
+                            }
+
+                            let mask_curved = mask.curves.apply_all(srgb);
+                            srgb = [
+                                srgb[0] + (mask_curved[0] - srgb[0]) * influence,
+                                srgb[1] + (mask_curved[1] - srgb[1]) * influence,
+                                srgb[2] + (mask_curved[2] - srgb[2]) * influence,
+                            ];
+                        }
+                    }
+
+                    if adjustment_values.vignette_amount.abs() > 0.00001 {
+                        let v_amount = adjustment_values.vignette_amount.clamp(-1.0, 1.0);
+                        let v_mid = adjustment_values.vignette_midpoint.clamp(0.0, 1.0);
+                        let v_round = (1.0 - adjustment_values.vignette_roundness).clamp(0.01, 4.0);
+                        let v_feather = adjustment_values.vignette_feather.clamp(0.0, 1.0) * 0.5;
+
+                        let full_w = width as f32;
+                        let full_h = height as f32;
+                        let aspect = if full_w > 0.0 { full_h / full_w } else { 1.0 };
+
+                        let uv_x = (full_x as f32 / full_w - 0.5) * 2.0;
+                        let uv_y = (full_y as f32 / full_h - 0.5) * 2.0;
+
+                        let sign_x = if uv_x > 0.0 { 1.0 } else if uv_x < 0.0 { -1.0 } else { 0.0 };
+                        let sign_y = if uv_y > 0.0 { 1.0 } else if uv_y < 0.0 { -1.0 } else { 0.0 };
+
+                        let uv_round_x = sign_x * uv_x.abs().powf(v_round);
+                        let uv_round_y = sign_y * uv_y.abs().powf(v_round);
+                        let d = ((uv_round_x * uv_round_x) + (uv_round_y * aspect) * (uv_round_y * aspect)).sqrt() * 0.5;
+
+                        let vignette_mask = smoothstep(v_mid - v_feather, v_mid + v_feather, d);
+                        if v_amount < 0.0 {
+                            let mult = (1.0 + v_amount * vignette_mask).clamp(0.0, 2.0);
+                            srgb = [srgb[0] * mult, srgb[1] * mult, srgb[2] * mult];
+                        } else {
+                            let t = (v_amount * vignette_mask).clamp(0.0, 1.0);
+                            srgb = [
+                                srgb[0] + (1.0 - srgb[0]) * t,
+                                srgb[1] + (1.0 - srgb[1]) * t,
+                                srgb[2] + (1.0 - srgb[2]) * t,
+                            ];
+                        }
+                        srgb = [
+                            srgb[0].clamp(0.0, 1.0),
+                            srgb[1].clamp(0.0, 1.0),
+                            srgb[2].clamp(0.0, 1.0),
+                        ];
+                    }
+
+                    let out_base = (idx_full * 3) as usize;
+                    rgb[out_base] = clamp_to_u8(srgb[0] * 255.0);
+                    rgb[out_base + 1] = clamp_to_u8(srgb[1] * 255.0);
+                    rgb[out_base + 2] = clamp_to_u8(srgb[2] * 255.0);
+                }
+            }
+
+            tile_x += tile;
+        }
+        tile_y += tile;
+    }
+
+    let mut encoded = Vec::new();
+    let quality = if fast_demosaic { 88 } else { 96 };
+    let mut encoder = JpegEncoder::new_with_quality(&mut encoded, quality);
+    encoder.encode(&rgb, width, height, ExtendedColorType::Rgb8)?;
+    Ok(encoded)
+}
+
 fn render_raw(
     raw_bytes: &[u8],
     adjustments_json: Option<&str>,
@@ -3133,18 +4071,15 @@ fn render_export_from_session(
 
     // 3. Apply Adjustments
     let transformed = apply_transformations(&linear, &payload);
-    let width = transformed.width();
-    let height = transformed.height();
     
-    // For export, we regenerate masks at the exact export resolution
-    let mask_runtimes = parse_masks(payload.masks.clone(), width, height);
+    // For export, we regenerate masks at the exact export resolution.
+    let mask_defs = parse_mask_defs(payload.masks.clone());
+    let tile_size = if low_ram_mode { 512 } else { 1024 };
 
     // 4. Render
-    // We use fast_demosaic flag here only to control JPEG quality (88 vs 96), 
+    // We use fast_demosaic flag here only to control JPEG quality (88 vs 96),
     // but for export we might want High Quality JPEG even if Low RAM mode used for decoding.
-    // Let's force high quality (false) for the JPEG encoder step unless extremely constrained,
-    // but the function signature requires a bool. Let's pass the low_ram_mode.
-    render_linear_with_payload(transformed.as_ref(), &payload, &mask_runtimes, fast_demosaic)
+    render_linear_with_payload_tiled(transformed.as_ref(), &payload, &mask_defs, fast_demosaic, tile_size)
 }
 
 #[no_mangle]
