@@ -124,6 +124,9 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - folder management
 - maybe video of adjustments to export
 - lens corrections?
+- Make the curves on the right, left side the L RGB  and reset (also add aniamtion when switching like bottom to top)
+- make the hsl more compact by putting hte colors on the left side in a vertical row
+- maybe try magnetic scrolling
 
 ## License
 
