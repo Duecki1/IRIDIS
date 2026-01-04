@@ -25,6 +25,13 @@ internal class AppPreferences(context: Context) {
         prefs.edit().putBoolean(KEY_ENVIRONMENT_MASKING_ENABLED, enabled).apply()
     }
 
+    fun isToneCurveProfileSwitcherEnabled(): Boolean =
+        prefs.getBoolean(KEY_TONE_CURVE_PROFILE_SWITCHER_ENABLED, false)
+
+    fun setToneCurveProfileSwitcherEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_TONE_CURVE_PROFILE_SWITCHER_ENABLED, enabled).apply()
+    }
+
     fun isOpenEditorOnImportEnabled(): Boolean =
         prefs.getBoolean(KEY_OPEN_EDITOR_ON_IMPORT_ENABLED, false)
 
@@ -168,6 +175,7 @@ internal class AppPreferences(context: Context) {
         private const val KEY_LOW_QUALITY_PREVIEW_ENABLED = "low_quality_preview_enabled"
         private const val KEY_AUTOMATIC_TAGGING_ENABLED = "automatic_tagging_enabled"
         private const val KEY_ENVIRONMENT_MASKING_ENABLED = "environment_masking_enabled"
+        private const val KEY_TONE_CURVE_PROFILE_SWITCHER_ENABLED = "tone_curve_profile_switcher_enabled"
         private const val KEY_OPEN_EDITOR_ON_IMPORT_ENABLED = "open_editor_on_import_enabled"
         private const val KEY_IMMICH_SERVER_URL = "immich_server_url"
         private const val KEY_IMMICH_API_KEY = "immich_api_key"

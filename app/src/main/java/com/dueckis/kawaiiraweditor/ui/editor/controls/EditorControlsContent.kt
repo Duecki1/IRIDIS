@@ -39,6 +39,7 @@ internal fun EditorControlsContent(
     onAdjustmentsChange: (AdjustmentState) -> Unit,
     onBeginEditInteraction: () -> Unit,
     onEndEditInteraction: () -> Unit,
+    showToneCurveProfileSwitcher: Boolean,
     histogramData: HistogramData?,
     masks: List<MaskState>,
     onMasksChange: (List<MaskState>) -> Unit,
@@ -118,15 +119,17 @@ internal fun EditorControlsContent(
                     EditorPanelTab.Adjustments -> {
                         CommonHeader(title = "Light & Tone")
 
-                        ExpressiveSectionContainer(title = "Tone Curve Profile") {
-                            ToneMapperSection(
-                                toneMapper = adjustments.toneMapper,
-                                exposure = adjustments.exposure,
-                                onToneMapperChange = { mapper -> onAdjustmentsChange(adjustments.withToneMapper(mapper)) },
-                                onExposureChange = { value -> onAdjustmentsChange(adjustments.copy(exposure = value)) },
-                                onInteractionStart = onBeginEditInteraction,
-                                onInteractionEnd = onEndEditInteraction
-                            )
+                        if (showToneCurveProfileSwitcher) {
+                            ExpressiveSectionContainer(title = "Tone Curve Profile") {
+                                ToneMapperSection(
+                                    toneMapper = adjustments.toneMapper,
+                                    exposure = adjustments.exposure,
+                                    onToneMapperChange = { mapper -> onAdjustmentsChange(adjustments.withToneMapper(mapper)) },
+                                    onExposureChange = { value -> onAdjustmentsChange(adjustments.copy(exposure = value)) },
+                                    onInteractionStart = onBeginEditInteraction,
+                                    onInteractionEnd = onEndEditInteraction
+                                )
+                            }
                         }
 
                         adjustmentSections.forEach { (sectionTitle, controls) ->
