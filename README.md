@@ -8,29 +8,54 @@ Latest pre-release builds: https://github.com/Duecki1/IRIDIS/releases
 
 <table>
   <tr>
-    <td>
+    <td align="center">
       <img
         alt="Gallery"
-        src="https://github.com/user-attachments/assets/6b79a493-a9c6-4c6a-bdfe-0eaa9517adc6"
+        src="https://github.com/user-attachments/assets/65bdca87-b4d2-429b-a882-47fe9e1f86f0"
         width="260"
       />
+      <br/>
+      <sub><b>Gallery</b></sub>
     </td>
-    <td>
+    <td align="center">
       <img
         alt="Editor"
-        src="https://github.com/user-attachments/assets/519535ad-4827-4b61-a5dc-1207d9f064d3"
+        src="https://github.com/user-attachments/assets/02e336a3-2a0d-4f2a-a3f5-41bece9de03e"
         width="260"
       />
+      <br/>
+      <sub><b>Editor (Light & Tone)</b></sub>
     </td>
-    <td>
+    <td align="center">
       <img
         alt="Editor (extra screenshot slot)"
-        src="https://github.com/user-attachments/assets/5fcce0b0-6361-4a1c-90ac-13b810740a68"
+        src="https://github.com/user-attachments/assets/6e63a75a-7d51-423c-a813-76eade9e6047"
         width="260"
       />
+      <br/>
+      <sub><b>Editor (Color Grading)</b></sub>
+    </td>
+      <td align="center">
+      <img
+        alt="Editor (extra screenshot slot)"
+        src="https://github.com/user-attachments/assets/00798813-4560-41fd-a362-5861aa66709e"
+        width="260"
+      />
+      <br/>
+      <sub><b>Masks (AI Train Mask)</b></sub>
+    </td>
+      <td align="center">
+      <img
+        alt="Editor (extra screenshot slot)"
+        src="https://github.com/user-attachments/assets/9352b80c-d35e-4182-859c-824c97e8772e"
+        width="260"
+      />
+      <br/>
+      <sub><b>Masks (AI Sky Mask)</b></sub>
     </td>
   </tr>
 </table>
+
 
 ## Highlights
 
@@ -127,6 +152,7 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Make the curves on the right, left side the L RGB  and reset (also add aniamtion when switching like bottom to top)
 - make the hsl more compact by putting hte colors on the left side in a vertical row
 - maybe try magnetic scrolling
+- fix color grading wheels tab on tablets
 
 ## License
 
