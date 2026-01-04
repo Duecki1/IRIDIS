@@ -9,19 +9,26 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.os.Build
 import android.util.Base64
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.immich.ImmichAuthMode
@@ -142,7 +149,10 @@ internal fun ExportButton(
     val coroutineScope = rememberCoroutineScope()
     var showExportDialog by remember { mutableStateOf(false) }
     var showDestinationDialog by remember { mutableStateOf(false) }
+    var showImmichAlbumDialog by remember { mutableStateOf(false) }
     var pendingOptions by remember { mutableStateOf<ExportOptions?>(null) }
+    var pendingImmichConfig by remember { mutableStateOf<ImmichConfig?>(null) }
+    var lastChosenImmichAlbumId by remember { mutableStateOf(originImmichAlbumId) }
     var lastOptions by remember {
         mutableStateOf(
             ExportOptions(
@@ -154,6 +164,12 @@ internal fun ExportButton(
         )
     }
     val appPreferences = remember(context) { AppPreferences(context) }
+
+    LaunchedEffect(originImmichAlbumId) {
+        if (!originImmichAlbumId.isNullOrBlank()) {
+            lastChosenImmichAlbumId = originImmichAlbumId
+        }
+    }
 
     fun resolveImmichConfig(): ImmichConfig? {
         val serverUrl = appPreferences.getImmichServerUrl()
@@ -174,7 +190,12 @@ internal fun ExportButton(
         )
     }
 
-    fun startExport(destination: ExportDestination, options: ExportOptions, immichConfig: ImmichConfig?) {
+    fun startExport(
+        destination: ExportDestination,
+        options: ExportOptions,
+        immichConfig: ImmichConfig?,
+        targetImmichAlbumId: String?
+    ) {
         if (isExporting || sessionHandle == 0L) return
         val currentAdjustments = adjustments
         val currentMasks = masks
@@ -236,6 +257,7 @@ internal fun ExportButton(
                             onExportComplete(false, "Immich is not configured.")
                             return@launch
                         }
+                        val selectedAlbumId = targetImmichAlbumId?.takeIf { it.isNotBlank() }
                         val exportBytes = withContext(Dispatchers.Default) {
                             encodeExportBytes(fullBytes, options, allowPassthroughJpeg = false)
                         }
@@ -252,12 +274,11 @@ internal fun ExportButton(
                         )
                         val uploadedAssetId = upload.assetId
                         if (!uploadedAssetId.isNullOrBlank()) {
-                            val albumId = originImmichAlbumId
-                            if (!albumId.isNullOrBlank()) {
+                            if (!selectedAlbumId.isNullOrBlank()) {
                                 runCatching {
                                     addImmichAssetsToAlbum(
                                         config = config,
-                                        albumId = albumId,
+                                        albumId = selectedAlbumId,
                                         assetIds = listOf(uploadedAssetId)
                                     )
                                 }
@@ -275,11 +296,11 @@ internal fun ExportButton(
                                     )
                                 }.getOrDefault(ImmichUploadResult(assetId = null, errorMessage = "XMP upload failed."))
                             val xmpAssetId = xmpUpload.assetId
-                            if (!xmpAssetId.isNullOrBlank() && !albumId.isNullOrBlank()) {
+                            if (!xmpAssetId.isNullOrBlank() && !selectedAlbumId.isNullOrBlank()) {
                                 runCatching {
                                     addImmichAssetsToAlbum(
                                         config = config,
-                                        albumId = albumId,
+                                        albumId = selectedAlbumId,
                                         assetIds = listOf(xmpAssetId)
                                     )
                                 }
@@ -329,8 +350,12 @@ internal fun ExportButton(
                 if (isExporting || sessionHandle == 0L) return@ExportOptionsDialog
                 pendingOptions = options
                 val immichConfig = resolveImmichConfig()
+                pendingImmichConfig = immichConfig
+                showExportDialog = false
                 if (immichConfig == null) {
-                    startExport(ExportDestination.Local, options, null)
+                    showDestinationDialog = false
+                    showImmichAlbumDialog = false
+                    startExport(ExportDestination.Local, options, null, null)
                 } else {
                     showDestinationDialog = true
                 }
@@ -339,7 +364,7 @@ internal fun ExportButton(
     }
 
     if (showDestinationDialog) {
-        val immichConfig = resolveImmichConfig()
+        val immichConfig = pendingImmichConfig ?: resolveImmichConfig()
         val immichAuthMode = appPreferences.getImmichAuthMode()
         ExportDestinationDialog(
             immichEnabled = immichConfig != null,
@@ -347,9 +372,75 @@ internal fun ExportButton(
             onDismissRequest = { showDestinationDialog = false },
             onSelectDestination = { destination ->
                 val options = pendingOptions ?: lastOptions
+                pendingOptions = options
                 showDestinationDialog = false
-                startExport(destination, options, immichConfig)
+                when (destination) {
+                    ExportDestination.Local -> {
+                        pendingImmichConfig = null
+                        showImmichAlbumDialog = false
+                        startExport(ExportDestination.Local, options, null, null)
+                    }
+
+                    ExportDestination.Immich -> {
+                        if (immichConfig == null) {
+                            onExportComplete(false, "Immich is not configured.")
+                        } else {
+                            pendingImmichConfig = immichConfig
+                            showImmichAlbumDialog = true
+                        }
+                    }
+                }
             }
         )
     }
+
+    if (showImmichAlbumDialog) {
+        val config = pendingImmichConfig ?: resolveImmichConfig()
+        if (config == null) {
+            showImmichAlbumDialog = false
+            onExportComplete(false, "Immich is not configured.")
+        } else {
+            ImmichAlbumPickerDialog(
+                config = config,
+                initialSelectionId = lastChosenImmichAlbumId,
+                onDismissRequest = {
+                    showImmichAlbumDialog = false
+                    showDestinationDialog = true
+                },
+                onAlbumSelected = { albumId ->
+                    val options = pendingOptions ?: lastOptions
+                    lastChosenImmichAlbumId = albumId
+                    pendingImmichConfig = config
+                    showImmichAlbumDialog = false
+                    startExport(ExportDestination.Immich, options, config, albumId)
+                }
+            )
+        }
+    }
+
+    if (isExporting && !showExportDialog && !showDestinationDialog && !showImmichAlbumDialog) {
+        val isImmichTarget = pendingImmichConfig != null
+        val message = if (isImmichTarget) "Uploading to Immich..." else "Saving export..."
+        ExportProgressDialog(message = message)
+    }
+}
+
+@Composable
+private fun ExportProgressDialog(message: String) {
+    AlertDialog(
+        onDismissRequest = {},
+        confirmButton = {},
+        dismissButton = {},
+        title = { Text("Exporting") },
+        text = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                CircularProgressIndicator()
+                Text(message)
+            }
+        }
+    )
 }
