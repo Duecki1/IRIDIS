@@ -16,10 +16,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,7 +51,7 @@ internal fun ColorGradingEditor(
 ) {
     val formatterInt: (Float) -> String = { it.roundToInt().toString() }
 
-    // Updated Order: Shadows -> Midtones -> Highlights
+    // Order: Shadows -> Midtones -> Highlights
     val wheelEntries = buildList {
         add(
             Triple("Shadows", colorGrading.shadows) { value: HueSatLumState ->
@@ -72,7 +75,22 @@ internal fun ColorGradingEditor(
     val pagerState = rememberPagerState(pageCount = { wheelEntries.size })
     val scope = rememberCoroutineScope()
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    // Requester to snap the view into position on interaction
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+
+    // Wrapper to trigger scroll-to-view when user starts interacting
+    val internalOnBeginEditInteraction = {
+        scope.launch {
+            bringIntoViewRequester.bringIntoView()
+        }
+        onBeginEditInteraction()
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .bringIntoViewRequester(bringIntoViewRequester)
+    ) {
 
         // 1. Page Indicator (Dots)
         PageIndicator(
@@ -89,7 +107,7 @@ internal fun ColorGradingEditor(
         ColorGradingWheelCarousel(
             pagerState = pagerState,
             entries = wheelEntries,
-            onBeginEditInteraction = onBeginEditInteraction,
+            onBeginEditInteraction = internalOnBeginEditInteraction, // Pass wrapped callback
             onEndEditInteraction = onEndEditInteraction
         )
 
@@ -120,7 +138,7 @@ internal fun ColorGradingEditor(
                 defaultValue = 50f,
                 formatter = formatterInt,
                 onValueChange = { onColorGradingChange(colorGrading.copy(blending = it)) },
-                onInteractionStart = onBeginEditInteraction,
+                onInteractionStart = internalOnBeginEditInteraction, // Pass wrapped callback
                 onInteractionEnd = onEndEditInteraction
             )
             AdjustmentSlider(
@@ -131,7 +149,7 @@ internal fun ColorGradingEditor(
                 defaultValue = 0f,
                 formatter = formatterInt,
                 onValueChange = { onColorGradingChange(colorGrading.copy(balance = it)) },
-                onInteractionStart = onBeginEditInteraction,
+                onInteractionStart = internalOnBeginEditInteraction, // Pass wrapped callback
                 onInteractionEnd = onEndEditInteraction
             )
         }
