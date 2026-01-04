@@ -1,6 +1,8 @@
 package com.dueckis.kawaiiraweditor.ui.components
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
@@ -15,13 +17,13 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlin.ranges.ClosedFloatingPointRange
 
-// --- Original Slider (Unchanged) ---
 @Composable
 internal fun AdjustmentSlider(
     label: String,
@@ -36,58 +38,56 @@ internal fun AdjustmentSlider(
 ) {
     val colors = SliderDefaults.colors(
         activeTrackColor = MaterialTheme.colorScheme.primary,
-        inactiveTrackColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        inactiveTrackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
         thumbColor = MaterialTheme.colorScheme.primary
     )
-    val snappedDefault = snapToStep(defaultValue, step, range)
+
+    // GUARD: Prevents the slider from jumping back to the touch position after reset
+    var lastResetTime by remember { mutableLongStateOf(0L) }
+    val snappedDefault = snapValueToStepLocal(defaultValue, step, range)
+
+    val performReset = {
+        lastResetTime = System.currentTimeMillis()
+        onInteractionStart?.invoke()
+        onValueChange(snappedDefault)
+        onInteractionEnd?.invoke()
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        // Double tap on text header
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .pointerInput(label, defaultValue) {
-                    detectTapGestures(
-                        onDoubleTap = {
-                            onInteractionStart?.invoke()
-                            onValueChange(defaultValue)
-                            onInteractionEnd?.invoke()
-                        }
-                    )
+                .pointerInput(Unit) {
+                    detectTapGestures(onDoubleTap = { performReset() })
                 },
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = formatter(value),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Text(text = label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(text = formatter(value), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Box(
-            modifier = Modifier.fillMaxWidth() // Logic for standard slider double tap usually handled in parent or here
-        ) {
-            Slider(
-                modifier = Modifier.fillMaxWidth(),
-                value = value,
-                onValueChange = { newValue ->
-                    val snapped = snapToStep(newValue, step, range)
+
+        Slider(
+            modifier = Modifier
+                .fillMaxWidth()
+                .interceptDoubleTapToReset { performReset() }, // NEW INTERCEPTOR
+            value = value,
+            onValueChange = { newValue ->
+                // Guard: Ignore seek events for 250ms after a reset
+                if (System.currentTimeMillis() - lastResetTime > 250) {
+                    val snapped = snapValueToStepLocal(newValue, step, range)
                     onInteractionStart?.invoke()
                     onValueChange(snapped)
-                },
-                onValueChangeFinished = { onInteractionEnd?.invoke() },
-                valueRange = range,
-                colors = colors
-            )
-        }
+                }
+            },
+            onValueChangeFinished = { onInteractionEnd?.invoke() },
+            valueRange = range,
+            colors = colors
+        )
     }
 }
 
-// --- NEW: Compact Horizontal Slider ---
-// Removes the large header row to save space.
 @Composable
 internal fun CompactAdjustmentSlider(
     label: String,
@@ -105,45 +105,74 @@ internal fun CompactAdjustmentSlider(
         thumbColor = MaterialTheme.colorScheme.primary
     )
 
+    var lastResetTime by remember { mutableLongStateOf(0L) }
+    val snappedDefault = snapValueToStepLocal(defaultValue, step, range)
+
+    val performReset = {
+        lastResetTime = System.currentTimeMillis()
+        onInteractionStart?.invoke()
+        onValueChange(snappedDefault)
+        onInteractionEnd?.invoke()
+    }
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth().interceptDoubleTapToReset { performReset() }
     ) {
-        // Label on the left
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(60.dp)
-        )
+        Text(text = label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(60.dp))
 
-        // Slider
-        Slider(
-            modifier = Modifier.weight(1f),
-            value = value,
-            onValueChange = { newValue ->
-                val snapped = snapToStep(newValue, step, range)
-                onInteractionStart?.invoke()
-                onValueChange(snapped)
-            },
-            onValueChangeFinished = { onInteractionEnd?.invoke() },
-            valueRange = range,
-            colors = colors
-        )
+        Box(modifier = Modifier.weight(1f)) {
+            Slider(
+                modifier = Modifier.fillMaxWidth(),
+                value = value,
+                onValueChange = { newValue ->
+                    if (System.currentTimeMillis() - lastResetTime > 250) {
+                        val snapped = snapValueToStepLocal(newValue, step, range)
+                        onInteractionStart?.invoke()
+                        onValueChange(snapped)
+                    }
+                },
+                onValueChangeFinished = { onInteractionEnd?.invoke() },
+                valueRange = range,
+                colors = colors
+            )
+        }
 
-        // Value on the right
-        Text(
-            text = value.toInt().toString(),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.End,
-            modifier = Modifier.width(36.dp)
-        )
+        Text(text = value.toInt().toString(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.End, modifier = Modifier.width(36.dp))
     }
 }
 
-// --- NEW: Vertical Slider (Custom Canvas) ---
-// Designed for Luminance control next to color wheel
+/**
+ * HIGH-PRIORITY GESTURE INTERCEPTOR
+ * This looks at the touch events in the "Initial" pass, meaning it sees them
+ * before the Slider logic can consume them.
+ */
+fun Modifier.interceptDoubleTapToReset(onReset: () -> Unit): Modifier = this.pointerInput(Unit) {
+    var lastClickTime = 0L
+    awaitEachGesture {
+        // Look at the "Down" event before the Slider consumes it
+        val down = awaitFirstDown(pass = PointerEventPass.Initial)
+        val currentTime = System.currentTimeMillis()
+
+        if (currentTime - lastClickTime < 300) {
+            // Double tap detected!
+            onReset()
+            // Consuming the event stops the slider from seeking to the second tap position
+            down.consume()
+
+            // Also consume all following move/up events for this specific gesture
+            while (true) {
+                val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+                event.changes.forEach { it.consume() }
+                if (event.changes.all { !it.pressed }) break
+            }
+            lastClickTime = 0L
+        } else {
+            lastClickTime = currentTime
+        }
+    }
+}
+
 @Composable
 internal fun VerticalValueSlider(
     value: Float,
@@ -158,23 +187,16 @@ internal fun VerticalValueSlider(
     val density = LocalDensity.current
     val thumbRadius = with(density) { 8.dp.toPx() }
     val trackWidth = with(density) { 4.dp.toPx() }
-
-    // Calculate normalized position (0..1)
-    // For range -100..100: 100 is top (0.0y), -100 is bottom (1.0y)
-    // Compose Canvas Y increases downwards.
-    // Let's map Max Value -> Top (0f), Min Value -> Bottom (Height)
     val rangeSize = range.endInclusive - range.start
 
     Box(
         modifier = modifier
             .pointerInput(Unit) {
-                detectTapGestures(
-                    onDoubleTap = {
-                        onInteractionStart()
-                        onValueChange(0f) // Reset to 0
-                        onInteractionEnd()
-                    }
-                )
+                detectTapGestures(onDoubleTap = {
+                    onInteractionStart()
+                    onValueChange(0f)
+                    onInteractionEnd()
+                })
             }
             .pointerInput(Unit) {
                 detectVerticalDragGestures(
@@ -183,10 +205,7 @@ internal fun VerticalValueSlider(
                     onDragCancel = { onInteractionEnd() }
                 ) { change, _ ->
                     change.consume()
-                    // Calculate new value based on Y position
-                    // Y = 0 is Max, Y = Height is Min
                     val yRatio = (change.position.y / size.height).coerceIn(0f, 1f)
-                    // Invert ratio because Y grows down (1.0 is bottom/min)
                     val newValue = range.endInclusive - (yRatio * rangeSize)
                     onValueChange(newValue.coerceIn(range.start, range.endInclusive))
                 }
@@ -196,58 +215,21 @@ internal fun VerticalValueSlider(
             val w = size.width
             val h = size.height
             val centerX = w / 2
-
-            // Draw Track
-            drawRoundRect(
-                color = trackColor,
-                topLeft = Offset(centerX - trackWidth / 2, 0f),
-                size = Size(trackWidth, h),
-                cornerRadius = CornerRadius(trackWidth / 2)
-            )
-
-            // Draw Center Marker (Zero point)
+            drawRoundRect(color = trackColor, topLeft = Offset(centerX - trackWidth / 2, 0f), size = Size(trackWidth, h), cornerRadius = CornerRadius(trackWidth / 2))
             val zeroRatio = (range.endInclusive - 0f) / rangeSize
             val zeroY = zeroRatio * h
-            drawLine(
-                color = trackColor.copy(alpha = 0.8f),
-                start = Offset(centerX - trackWidth * 1.5f, zeroY),
-                end = Offset(centerX + trackWidth * 1.5f, zeroY),
-                strokeWidth = 2.dp.toPx()
-            )
-
-            // Draw Active Fill (from center to current)
+            drawLine(color = trackColor.copy(alpha = 0.8f), start = Offset(centerX - trackWidth * 1.5f, zeroY), end = Offset(centerX + trackWidth * 1.5f, zeroY), strokeWidth = 2.dp.toPx())
             val currentRatio = (range.endInclusive - value) / rangeSize
             val currentY = currentRatio * h
-
-            drawLine(
-                color = activeColor.copy(alpha = 0.5f),
-                start = Offset(centerX, zeroY),
-                end = Offset(centerX, currentY),
-                strokeWidth = trackWidth
-            )
-
-            // Draw Thumb
-            drawCircle(
-                color = Color.White,
-                radius = thumbRadius,
-                center = Offset(centerX, currentY)
-            )
-            drawCircle(
-                color = activeColor,
-                radius = thumbRadius,
-                center = Offset(centerX, currentY),
-                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx())
-            )
+            drawLine(color = activeColor.copy(alpha = 0.5f), start = Offset(centerX, zeroY), end = Offset(centerX, currentY), strokeWidth = trackWidth)
+            drawCircle(color = Color.White, radius = thumbRadius, center = Offset(centerX, currentY))
+            drawCircle(color = activeColor, radius = thumbRadius, center = Offset(centerX, currentY), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()))
         }
     }
 }
 
-// Helper
-internal fun Float.snapToStep(step: Float, range: ClosedFloatingPointRange<Float>): Float {
-    if (step == 0f) return this
-    val stepped = Math.round(this / step) * step
+private fun snapValueToStepLocal(value: Float, step: Float, range: ClosedFloatingPointRange<Float>): Float {
+    if (step == 0f) return value
+    val stepped = Math.round(value / step) * step
     return stepped.coerceIn(range.start, range.endInclusive)
 }
-
-// Stub for modifier if not present in project
-fun Modifier.doubleTapSliderThumbToReset(value: Float, valueRange: ClosedFloatingPointRange<Float>, onReset: () -> Unit): Modifier = this

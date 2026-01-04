@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.model.HslState
 import com.dueckis.kawaiiraweditor.data.model.HueSatLumState
 import com.dueckis.kawaiiraweditor.ui.components.GradientAdjustmentSlider
+import com.dueckis.kawaiiraweditor.ui.components.RoundGradientAdjustmentSlider
 import kotlin.math.roundToInt
 
 // --- Helper Functions ---
@@ -185,7 +186,7 @@ internal fun HslEditor(
                     verticalArrangement = Arrangement.spacedBy(16.dp), // Comfortable spacing
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    GradientAdjustmentSlider(
+                    RoundGradientAdjustmentSlider(
                         label = "Hue",
                         value = current.hue,
                         range = -100f..100f,
@@ -197,7 +198,7 @@ internal fun HslEditor(
                         onInteractionStart = onBeginEditInteraction,
                         onInteractionEnd = onEndEditInteraction
                     )
-                    GradientAdjustmentSlider(
+                    RoundGradientAdjustmentSlider(
                         label = "Saturation",
                         value = current.saturation,
                         range = -100f..100f,
@@ -209,7 +210,7 @@ internal fun HslEditor(
                         onInteractionStart = onBeginEditInteraction,
                         onInteractionEnd = onEndEditInteraction
                     )
-                    GradientAdjustmentSlider(
+                    RoundGradientAdjustmentSlider(
                         label = "Luminance",
                         value = current.luminance,
                         range = -100f..100f,
