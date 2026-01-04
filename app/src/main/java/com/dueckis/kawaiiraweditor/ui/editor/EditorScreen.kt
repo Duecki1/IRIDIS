@@ -192,6 +192,7 @@ internal fun EditorScreen(
     galleryItem: GalleryItem?,
     lowQualityPreviewEnabled: Boolean,
     environmentMaskingEnabled: Boolean,
+    toneCurveProfileSwitcherEnabled: Boolean,
     immichDescriptionSyncEnabled: Boolean,
     initialPanelTab: EditorPanelTab = EditorPanelTab.Adjustments,
     maskRenameTags: List<String> = emptyList(),
@@ -3034,6 +3035,7 @@ internal fun EditorScreen(
                                 onAdjustmentsChange = { applyAdjustmentsPreservingMasks(it) },
                                 onBeginEditInteraction = ::beginEditInteraction,
                                 onEndEditInteraction = ::endEditInteraction,
+                                showToneCurveProfileSwitcher = toneCurveProfileSwitcherEnabled,
                                 histogramData = histogramData,
                                 masks = masks,
                                 onMasksChange = { updated ->

@@ -58,6 +58,7 @@ internal fun SettingsScreen(
     lowQualityPreviewEnabled: Boolean,
     automaticTaggingEnabled: Boolean,
     environmentMaskingEnabled: Boolean,
+    toneCurveProfileSwitcherEnabled: Boolean,
     openEditorOnImportEnabled: Boolean,
     maskRenameTags: List<String>,
     immichDescriptionSyncEnabled: Boolean,
@@ -69,6 +70,7 @@ internal fun SettingsScreen(
     onLowQualityPreviewEnabledChange: (Boolean) -> Unit,
     onAutomaticTaggingEnabledChange: (Boolean) -> Unit,
     onEnvironmentMaskingEnabledChange: (Boolean) -> Unit,
+    onToneCurveProfileSwitcherEnabledChange: (Boolean) -> Unit,
     onOpenEditorOnImportEnabledChange: (Boolean) -> Unit,
     onMaskRenameTagsChange: (List<String>) -> Unit,
     onImmichDescriptionSyncEnabledChange: (Boolean) -> Unit,
@@ -171,6 +173,25 @@ internal fun SettingsScreen(
                     )
                 },
                 modifier = Modifier.clickable { onEnvironmentMaskingEnabledChange(!environmentMaskingEnabled) }
+            )
+            ListItem(
+                headlineContent = { Text("Show tone curve profile switcher") },
+                supportingContent = {
+                    Text(
+                        "Controls whether the Tone Curve Profile toggle appears in the Adjustments tab.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                trailingContent = {
+                    Switch(
+                        checked = toneCurveProfileSwitcherEnabled,
+                        onCheckedChange = onToneCurveProfileSwitcherEnabledChange
+                    )
+                },
+                modifier = Modifier.clickable {
+                    onToneCurveProfileSwitcherEnabledChange(!toneCurveProfileSwitcherEnabled)
+                }
             )
             ListItem(
                 headlineContent = { Text("Open editor after import") },

@@ -95,6 +95,9 @@ fun KawaiiApp(
     var lowQualityPreviewEnabled by remember { mutableStateOf(appPreferences.isLowQualityPreviewEnabled()) }
     var automaticTaggingEnabled by remember { mutableStateOf(appPreferences.isAutomaticTaggingEnabled()) }
     var environmentMaskingEnabled by remember { mutableStateOf(appPreferences.isEnvironmentMaskingEnabled()) }
+    var toneCurveProfileSwitcherEnabled by remember {
+        mutableStateOf(appPreferences.isToneCurveProfileSwitcherEnabled())
+    }
     var openEditorOnImportEnabled by remember { mutableStateOf(appPreferences.isOpenEditorOnImportEnabled()) }
     var immichServerUrl by remember { mutableStateOf(appPreferences.getImmichServerUrl()) }
     var immichAuthMode by remember { mutableStateOf(appPreferences.getImmichAuthMode()) }
@@ -471,6 +474,7 @@ fun KawaiiApp(
                             galleryItem = selectedItem,
                             lowQualityPreviewEnabled = lowQualityPreviewEnabled,
                             environmentMaskingEnabled = environmentMaskingEnabled,
+                            toneCurveProfileSwitcherEnabled = toneCurveProfileSwitcherEnabled,
                             immichDescriptionSyncEnabled = immichDescriptionSyncEnabled,
                             initialPanelTab = editorInitialTab ?: EditorPanelTab.Adjustments,
                             maskRenameTags = maskRenameTags,
@@ -500,6 +504,7 @@ fun KawaiiApp(
                         lowQualityPreviewEnabled = lowQualityPreviewEnabled,
                         automaticTaggingEnabled = automaticTaggingEnabled,
                         environmentMaskingEnabled = environmentMaskingEnabled,
+                        toneCurveProfileSwitcherEnabled = toneCurveProfileSwitcherEnabled,
                         openEditorOnImportEnabled = openEditorOnImportEnabled,
                         maskRenameTags = maskRenameTags,
                         onMaskRenameTagsChange = { tags ->
@@ -517,6 +522,10 @@ fun KawaiiApp(
                         onEnvironmentMaskingEnabledChange = { enabled ->
                             environmentMaskingEnabled = enabled
                             appPreferences.setEnvironmentMaskingEnabled(enabled)
+                        },
+                        onToneCurveProfileSwitcherEnabledChange = { enabled ->
+                            toneCurveProfileSwitcherEnabled = enabled
+                            appPreferences.setToneCurveProfileSwitcherEnabled(enabled)
                         },
                         onOpenEditorOnImportEnabledChange = { enabled ->
                             openEditorOnImportEnabled = enabled
