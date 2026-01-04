@@ -8,48 +8,58 @@ Latest pre-release builds: https://github.com/Duecki1/IRIDIS/releases
 
 <table>
   <tr>
-    <td align="center">
-      <img
-        alt="Gallery"
-        src="https://github.com/user-attachments/assets/65bdca87-b4d2-429b-a882-47fe9e1f86f0"
-        width="260"
-      />
+    <td align="center" width="280">
+      <div style="width:260px;height:260px;overflow:hidden;">
+        <img
+          alt="Gallery"
+          src="https://github.com/user-attachments/assets/65bdca87-b4d2-429b-a882-47fe9e1f86f0"
+          style="width:260px;height:260px;object-fit:cover;"
+        />
+      </div>
       <br/>
       <sub><b>Gallery</b></sub>
     </td>
-    <td align="center">
-      <img
-        alt="Editor"
-        src="https://github.com/user-attachments/assets/02e336a3-2a0d-4f2a-a3f5-41bece9de03e"
-        width="260"
-      />
+    <td align="center" width="280">
+      <div style="width:260px;height:260px;overflow:hidden;">
+        <img
+          alt="Editor"
+          src="https://github.com/user-attachments/assets/02e336a3-2a0d-4f2a-a3f5-41bece9de03e"
+          style="width:260px;height:260px;object-fit:cover;"
+        />
+      </div>
       <br/>
-      <sub><b>Editor (Light & Tone)</b></sub>
+      <sub><b>Editor (Light &amp; Tone)</b></sub>
     </td>
-    <td align="center">
-      <img
-        alt="Editor (extra screenshot slot)"
-        src="https://github.com/user-attachments/assets/6e63a75a-7d51-423c-a813-76eade9e6047"
-        width="260"
-      />
+    <td align="center" width="280">
+      <div style="width:260px;height:260px;overflow:hidden;">
+        <img
+          alt="Editor (Color Grading)"
+          src="https://github.com/user-attachments/assets/6e63a75a-7d51-423c-a813-76eade9e6047"
+          style="width:260px;height:260px;object-fit:cover;"
+        />
+      </div>
       <br/>
       <sub><b>Editor (Color Grading)</b></sub>
     </td>
-      <td align="center">
-      <img
-        alt="Editor (extra screenshot slot)"
-        src="https://github.com/user-attachments/assets/00798813-4560-41fd-a362-5861aa66709e"
-        width="260"
-      />
+    <td align="center" width="280">
+      <div style="width:260px;height:260px;overflow:hidden;">
+        <img
+          alt="Masks (AI Train Mask)"
+          src="https://github.com/user-attachments/assets/00798813-4560-41fd-a362-5861aa66709e"
+          style="width:260px;height:260px;object-fit:cover;"
+        />
+      </div>
       <br/>
       <sub><b>Masks (AI Train Mask)</b></sub>
     </td>
-      <td align="center">
-      <img
-        alt="Editor (extra screenshot slot)"
-        src="https://github.com/user-attachments/assets/9352b80c-d35e-4182-859c-824c97e8772e"
-        width="260"
-      />
+    <td align="center" width="280">
+      <div style="width:260px;height:260px;overflow:hidden;">
+        <img
+          alt="Masks (AI Sky Mask)"
+          src="https://github.com/user-attachments/assets/9352b80c-d35e-4182-859c-824c97e8772e"
+          style="width:260px;height:260px;object-fit:cover;"
+        />
+      </div>
       <br/>
       <sub><b>Masks (AI Sky Mask)</b></sub>
     </td>
