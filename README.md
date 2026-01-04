@@ -121,7 +121,7 @@ Steps:
 
 Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 
-## Issues:
+## To Do:
 
 - Highlight recovery needs to be better for the highlight slider. (use the exposure slider for now)
 - Use a more intuitive rating system
