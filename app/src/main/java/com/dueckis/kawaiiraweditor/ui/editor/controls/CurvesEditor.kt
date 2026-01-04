@@ -1,53 +1,35 @@
 package com.dueckis.kawaiiraweditor.ui.editor.controls
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
 import com.dueckis.kawaiiraweditor.data.model.CurvePointState
 import com.dueckis.kawaiiraweditor.data.model.CurvesState
@@ -82,204 +64,462 @@ internal fun CurvesEditor(
     var activeChannel by remember { mutableStateOf(CurveChannel.Luma) }
     val points = adjustments.curves.pointsFor(activeChannel)
 
-    // Luma is primary (darker), others are colored
+    // 1. Color Animation
     val targetChannelColor = when (activeChannel) {
         CurveChannel.Luma -> MaterialTheme.colorScheme.primary
         CurveChannel.Red -> Color(0xFFFF6B6B)
         CurveChannel.Green -> Color(0xFF6BCB77)
         CurveChannel.Blue -> Color(0xFF4D96FF)
     }
-
-    // Animation states
-    val transitionAlpha = remember { Animatable(1f) }
-    val prevPoints = remember { mutableStateOf(points) }
-    val prevChannel = remember { mutableStateOf(activeChannel) }
-    val prevColor = remember { mutableStateOf(targetChannelColor) }
-
     val animatedChannelColor by animateColorAsState(
         targetValue = targetChannelColor,
         animationSpec = tween(400),
         label = "ChannelColor"
     )
 
-    // Transition Logic for switching channels
-    LaunchedEffect(activeChannel) {
-        if (prevChannel.value != activeChannel) {
-            transitionAlpha.snapTo(0f)
-            transitionAlpha.animateTo(1f, tween(400))
-            prevPoints.value = points
-            prevColor.value = when (prevChannel.value) {
-                CurveChannel.Luma -> targetChannelColor // Fallback
-                CurveChannel.Red -> Color(0xFFFF6B6B)
-                CurveChannel.Green -> Color(0xFF6BCB77)
-                CurveChannel.Blue -> Color(0xFF4D96FF)
+    // 2. Data Preparation
+    val targetCurveLut = remember(points) { calculateCurveLut(points) }
+    val targetHistoLut = remember(histogramData, activeChannel) {
+        histogramData?.let { data ->
+            when (activeChannel) {
+                CurveChannel.Luma -> data.luma
+                CurveChannel.Red -> data.red
+                CurveChannel.Green -> data.green
+                CurveChannel.Blue -> data.blue
             }
-            prevChannel.value = activeChannel
+        } ?: FloatArray(256)
+    }
+
+    // 3. Animation State
+    val animationProgress = remember { Animatable(1f) }
+
+    val startCurveLut = remember { FloatArray(256) }
+    val startHistoLut = remember { FloatArray(256) }
+    var startPoints by remember { mutableStateOf<List<CurvePointState>>(emptyList()) }
+
+    val previousFrameCurveLut = remember { FloatArray(256) }
+    val previousFrameHistoLut = remember { FloatArray(256) }
+
+    var lastSettledChannel by remember { mutableStateOf(activeChannel) }
+    var lastSettledPoints by remember { mutableStateOf(points) }
+
+    var animationTriggerKey by remember { mutableLongStateOf(0L) }
+    var currentAnimationId by remember { mutableLongStateOf(0L) }
+
+    val isChannelSwitch = activeChannel != lastSettledChannel
+    val isReset = points == defaultCurvePoints() && lastSettledPoints != points && !isChannelSwitch
+
+    if (isChannelSwitch || isReset) {
+        System.arraycopy(previousFrameCurveLut, 0, startCurveLut, 0, 256)
+        System.arraycopy(previousFrameHistoLut, 0, startHistoLut, 0, 256)
+        startPoints = lastSettledPoints
+
+        animationTriggerKey++
+        lastSettledChannel = activeChannel
+        lastSettledPoints = points
+    } else {
+        lastSettledPoints = points
+    }
+
+    LaunchedEffect(animationTriggerKey) {
+        if (animationTriggerKey > 0L) {
+            animationProgress.snapTo(0f)
+            currentAnimationId = animationTriggerKey
+            animationProgress.animateTo(1f, tween(400, easing = FastOutSlowInEasing))
         }
     }
 
-    // Reset Animation Listener
-    LaunchedEffect(points) {
-        if (points == defaultCurvePoints() && prevPoints.value != points) {
-            transitionAlpha.snapTo(0f)
-            transitionAlpha.animateTo(1f, tween(400))
-        }
-        prevPoints.value = points
-    }
+    val effectiveProgress = if (animationTriggerKey != currentAnimationId) 0f else animationProgress.value
 
     val latestAdjustments by rememberUpdatedState(adjustments)
     val latestOnAdjustmentsChange by rememberUpdatedState(onAdjustmentsChange)
     val latestCurves by rememberUpdatedState(adjustments.curves)
     val latestPoints by rememberUpdatedState(points)
 
-    Row(
-        modifier = Modifier.fillMaxWidth().height(220.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalAlignment = Alignment.CenterVertically
+    // --- MAIN CARD LAYOUT ---
+    ElevatedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(220.dp),
+        shape = RoundedCornerShape(16.dp),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
     ) {
-        // --- Left Side: 50% ---
-        Column(
-            modifier = Modifier.weight(1f),
-            horizontalAlignment = Alignment.Start,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            val channels = remember { listOf(CurveChannel.Luma, CurveChannel.Red, CurveChannel.Green, CurveChannel.Blue) }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                channels.chunked(2).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        row.forEach { channel ->
-                            val selected = channel == activeChannel
-                            val accent = when (channel) {
-                                CurveChannel.Luma -> MaterialTheme.colorScheme.primary
-                                CurveChannel.Red -> Color(0xFFFF6B6B)
-                                CurveChannel.Green -> Color(0xFF6BCB77)
-                                CurveChannel.Blue -> Color(0xFF4D96FF)
-                            }
-                            FilledTonalButton(
-                                onClick = { activeChannel = channel },
-                                colors = ButtonDefaults.filledTonalButtonColors(
-                                    containerColor = if (selected) accent.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceContainerHighest,
-                                    contentColor = if (selected) MaterialTheme.colorScheme.onSurface else accent
-                                ),
-                                modifier = Modifier.size(44.dp).then(if (selected) Modifier.border(1.5.dp, accent, CircleShape) else Modifier),
-                                shape = CircleShape,
-                                contentPadding = PaddingValues(0.dp)
-                            ) {
-                                Text(channel.label, style = MaterialTheme.typography.labelMedium)
-                            }
-                        }
-                    }
-                }
-            }
-            TextButton(
-                onClick = {
-                    onBeginEditInteraction()
-                    val updated = latestCurves.withPoints(activeChannel, defaultCurvePoints())
-                    latestOnAdjustmentsChange(latestAdjustments.copy(curves = updated))
-                    onEndEditInteraction()
-                },
-                contentPadding = PaddingValues(0.dp)
+        Row(modifier = Modifier.fillMaxSize()) {
+
+            // --- LEFT COLUMN: CONTROLS ---
+            Column(
+                modifier = Modifier
+                    .weight(0.3f)
+                    .fillMaxHeight()
+                    .padding(8.dp),
+                verticalArrangement = Arrangement.SpaceBetween // Pushes Reset button to bottom
             ) {
-                Text("Reset Channel", fontSize = 13.sp, color = animatedChannelColor)
-            }
-        }
+                // Top: Title and Channels
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "CHANNELS",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
+                    )
 
-        // --- Right Side: 50% ---
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .pointerInput(activeChannel) {
-                    val hitRadius = 28.dp.toPx()
-                    awaitEachGesture {
-                        // 1. On touch down, call onBeginEditInteraction to lock parent scrolling
-                        val down = awaitFirstDown(requireUnconsumed = false)
+                    val channels = remember { listOf(CurveChannel.Luma, CurveChannel.Red, CurveChannel.Green, CurveChannel.Blue) }
+                    channels.forEach { channel ->
+                        val isSelected = activeChannel == channel
+                        val color = when (channel) {
+                            CurveChannel.Luma -> MaterialTheme.colorScheme.onSurface
+                            CurveChannel.Red -> Color(0xFFFF6B6B)
+                            CurveChannel.Green -> Color(0xFF6BCB77)
+                            CurveChannel.Blue -> Color(0xFF4D96FF)
+                        }
+
+                        val label = when(channel) {
+                            CurveChannel.Luma -> "Luma"
+                            CurveChannel.Red -> "Red"
+                            CurveChannel.Green -> "Green"
+                            CurveChannel.Blue -> "Blue"
+                        }
+
+                        CompactChannelRow(
+                            label = label,
+                            color = color,
+                            isSelected = isSelected,
+                            onClick = { activeChannel = channel }
+                        )
+                    }
+                }
+
+                // Bottom: Reset Icon
+                IconButton(
+                    onClick = {
                         onBeginEditInteraction()
+                        val updated = latestCurves.withPoints(activeChannel, defaultCurvePoints())
+                        latestOnAdjustmentsChange(latestAdjustments.copy(curves = updated))
+                        onEndEditInteraction()
+                    },
+                    modifier = Modifier.size(32.dp).align(Alignment.Start) // Align to bottom-left
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Reset",
+                        tint = animatedChannelColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
 
-                        var working = latestPoints
-                        val draggingIndex = closestPointIndex(down.position, working, size, hitRadius)
+            // --- RIGHT COLUMN: GRAPH ---
+            var lastClickTime by remember { mutableLongStateOf(0L) }
+            var lastClickedIndex by remember { mutableIntStateOf(-1) }
 
-                        if (draggingIndex == null) {
-                            val slop = viewConfiguration.touchSlop
-                            var moved = false
-                            while (true) {
-                                val event = awaitPointerEvent()
-                                val change = event.changes.firstOrNull { it.id == down.id } ?: continue
-                                if (!change.pressed) {
-                                    if (!moved && working.size < 16) {
-                                        val newPoint = toCurvePoint(change.position, size)
-                                        val newPoints = (working + newPoint).sortedBy { it.x }
-                                        latestOnAdjustmentsChange(latestAdjustments.copy(curves = latestCurves.withPoints(activeChannel, newPoints)))
+            Box(
+                modifier = Modifier
+                    .weight(0.7f)
+                    .fillMaxHeight()
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .pointerInput(activeChannel) {
+                        val hitRadius = 28.dp.toPx()
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            onBeginEditInteraction()
+
+                            var working = latestPoints
+                            val draggingIndex = closestPointIndex(down.position, working, size, hitRadius)
+
+                            if (draggingIndex == null) {
+                                val slop = viewConfiguration.touchSlop
+                                var moved = false
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull { it.id == down.id } ?: continue
+                                    if (!change.pressed) {
+                                        if (!moved && working.size < 16) {
+                                            val newPoint = toCurvePoint(change.position, size)
+                                            val newPoints = (working + newPoint).sortedBy { it.x }
+                                            latestOnAdjustmentsChange(latestAdjustments.copy(curves = latestCurves.withPoints(activeChannel, newPoints)))
+                                        }
+                                        onEndEditInteraction()
+                                        break
                                     }
-                                    // 2. On release, unlock scrolling
-                                    onEndEditInteraction()
-                                    break
+                                    change.consume()
+                                    if ((change.position - down.position).getDistance() > slop) moved = true
                                 }
-                                // Consume move events to prevent parent scroll
-                                change.consume()
-                                if ((change.position - down.position).getDistance() > slop) moved = true
+                            } else {
+                                val now = System.currentTimeMillis()
+                                val timeDiff = now - lastClickTime
+                                val isDoubleClick = draggingIndex == lastClickedIndex && timeDiff < 300
+
+                                if (isDoubleClick && draggingIndex > 0 && draggingIndex < working.size - 1) {
+                                    val newPoints = working.toMutableList().apply { removeAt(draggingIndex) }
+                                    latestOnAdjustmentsChange(latestAdjustments.copy(curves = latestCurves.withPoints(activeChannel, newPoints)))
+                                    down.consume()
+                                    onEndEditInteraction()
+                                    lastClickedIndex = -1
+                                } else {
+                                    lastClickTime = now
+                                    lastClickedIndex = draggingIndex
+                                    drag(down.id) { change ->
+                                        change.consume()
+                                        val target = toCurvePoint(change.position, size)
+                                        working = moveCurvePoint(working, draggingIndex, target)
+                                        latestOnAdjustmentsChange(latestAdjustments.copy(curves = latestCurves.withPoints(activeChannel, working)))
+                                    }
+                                    onEndEditInteraction()
+                                }
                             }
-                        } else {
-                            // Instant dragging
-                            drag(down.id) { change ->
-                                // Consume drag events to prevent parent scroll
-                                change.consume()
-                                val target = toCurvePoint(change.position, size)
-                                working = moveCurvePoint(working, draggingIndex, target)
-                                latestOnAdjustmentsChange(latestAdjustments.copy(curves = latestCurves.withPoints(activeChannel, working)))
-                            }
-                            // 2. On release, unlock scrolling
-                            onEndEditInteraction()
                         }
                     }
-                }
-        ) {
-            val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)
-            Canvas(modifier = Modifier.matchParentSize()) {
-                val alpha = transitionAlpha.value
+            ) {
+                val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+                val dashEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f)
 
-                // Grid
-                for (i in 1..3) {
-                    val t = i / 4f
-                    drawLine(gridColor, Offset(size.width * t, 0f), Offset(size.width * t, size.height))
-                    drawLine(gridColor, Offset(0f, size.height * t), Offset(size.width, size.height * t))
-                }
+                Canvas(modifier = Modifier.matchParentSize()) {
+                    val curveStrokeWidth = 3.dp.toPx()
+                    val pointRadius = 6.dp.toPx()
+                    val pointStrokeWidth = 2.dp.toPx()
 
-                // Histogram
-                histogramData?.let { data ->
-                    val activeHisto = when(activeChannel) {
-                        CurveChannel.Luma -> data.luma; CurveChannel.Red -> data.red;
-                        CurveChannel.Green -> data.green; CurveChannel.Blue -> data.blue
+                    val isAnimating = effectiveProgress < 1f
+                    val fadeOutAlpha = (1f - effectiveProgress * 4f).coerceAtLeast(0f)
+                    val fadeInAlpha = effectiveProgress
+
+                    // 1. Grid (Dashed)
+                    for (i in 1..3) {
+                        val t = i / 4f
+                        drawLine(
+                            color = gridColor,
+                            start = Offset(size.width * t, 0f),
+                            end = Offset(size.width * t, size.height),
+                            pathEffect = dashEffect
+                        )
+                        drawLine(
+                            color = gridColor,
+                            start = Offset(0f, size.height * t),
+                            end = Offset(size.width, size.height * t),
+                            pathEffect = dashEffect
+                        )
                     }
-                    drawHisto(activeHisto, animatedChannelColor.copy(alpha = 0.12f * alpha), size)
+
+                    // 2. Histogram
+                    if (isAnimating) {
+                        val interpolatedHisto = FloatArray(256) { i ->
+                            lerp(startHistoLut[i], targetHistoLut[i], effectiveProgress)
+                        }
+                        drawHistoFromLut(interpolatedHisto, animatedChannelColor.copy(alpha = 0.12f), size)
+                    } else {
+                        drawHistoFromLut(targetHistoLut, animatedChannelColor.copy(alpha = 0.12f), size)
+                    }
+
+                    // 3. Curve
+                    if (isAnimating) {
+                        val interpolatedCurve = FloatArray(256) { i ->
+                            lerp(startCurveLut[i], targetCurveLut[i], effectiveProgress)
+                        }
+                        drawCurveFill(interpolatedCurve, animatedChannelColor, size)
+                        drawCurveFromLut(interpolatedCurve, animatedChannelColor, size, curveStrokeWidth)
+
+                        if (fadeOutAlpha > 0.01f) drawCurvePoints(startPoints, size, fadeOutAlpha, pointRadius, pointStrokeWidth)
+                        if (fadeInAlpha > 0.01f) drawCurvePoints(points, size, fadeInAlpha, pointRadius, pointStrokeWidth)
+
+                    } else {
+                        val curvePath = CurvesMath.buildCurvePath(points, size)
+                        drawCurveFill(targetCurveLut, animatedChannelColor, size)
+                        drawPath(curvePath, color = animatedChannelColor, style = Stroke(curveStrokeWidth))
+                        drawCurvePoints(points, size, 1f, pointRadius, pointStrokeWidth)
+                    }
                 }
 
-                // Curves Cross-fade
-                if (alpha < 1f) {
-                    val oldPath = CurvesMath.buildCurvePath(prevPoints.value, size)
-                    drawPath(oldPath, prevColor.value.copy(alpha = 1f - alpha), style = Stroke(6f))
-                    val newPath = CurvesMath.buildCurvePath(points, size)
-                    drawPath(newPath, animatedChannelColor.copy(alpha = alpha), style = Stroke(7f))
-                } else {
-                    val curvePath = CurvesMath.buildCurvePath(points, size)
-                    drawPath(curvePath, color = animatedChannelColor, style = Stroke(7f))
-                }
-
-                // Points
-                points.forEach { p ->
-                    val x = p.x / 255f * size.width
-                    val y = (255f - p.y) / 255f * size.height
-                    drawCircle(Color.White, radius = 10f, center = Offset(x, y), alpha = alpha)
-                    drawCircle(Color.Black.copy(0.2f), radius = 10f, center = Offset(x, y), style = Stroke(4f), alpha = alpha)
+                SideEffect {
+                    System.arraycopy(targetCurveLut, 0, previousFrameCurveLut, 0, 256)
+                    System.arraycopy(targetHistoLut, 0, previousFrameHistoLut, 0, 256)
                 }
             }
         }
     }
 }
 
-// Coordinate Helpers
+// --- Compact Channel Row ---
+@Composable
+private fun CompactChannelRow(
+    label: String,
+    color: Color,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val backgroundColor = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
+    val contentColor = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick)
+            .background(backgroundColor)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .background(color, CircleShape)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = contentColor
+        )
+    }
+}
+
+// --- Drawing Helpers ---
+private fun DrawScope.drawCurveFill(data: FloatArray, color: Color, size: Size) {
+    val path = Path().apply {
+        moveTo(0f, size.height)
+        data.forEachIndexed { i, yVal ->
+            val x = (i / 255f) * size.width
+            val y = (255f - yVal) / 255f * size.height
+            lineTo(x, y)
+        }
+        lineTo(size.width, size.height)
+        close()
+    }
+
+    val brush = Brush.verticalGradient(
+        colors = listOf(color.copy(alpha = 0.2f), Color.Transparent),
+        startY = 0f,
+        endY = size.height
+    )
+    drawPath(path, brush)
+}
+
+private fun DrawScope.drawCurvePoints(
+    points: List<CurvePointState>,
+    size: Size,
+    alpha: Float,
+    radiusPx: Float,
+    strokePx: Float
+) {
+    points.forEach { p ->
+        val x = p.x / 255f * size.width
+        val y = (255f - p.y) / 255f * size.height
+        drawCircle(Color.White, radius = radiusPx, center = Offset(x, y), alpha = alpha)
+        drawCircle(
+            Color.Black.copy(0.2f),
+            radius = radiusPx,
+            center = Offset(x, y),
+            style = Stroke(strokePx),
+            alpha = alpha
+        )
+    }
+}
+
+private fun DrawScope.drawHistoFromLut(data: FloatArray, color: Color, size: Size) {
+    val maxVal = data.maxOrNull()?.coerceAtLeast(1f) ?: 1f
+    val path = Path().apply {
+        moveTo(0f, size.height)
+        data.forEachIndexed { i, v ->
+            val x = (i / 255f) * size.width
+            val y = size.height - (v / maxVal * size.height)
+            lineTo(x, y)
+        }
+        lineTo(size.width, size.height)
+        close()
+    }
+    drawPath(path, color)
+}
+
+private fun DrawScope.drawCurveFromLut(data: FloatArray, color: Color, size: Size, strokeWidth: Float) {
+    val path = Path().apply {
+        data.forEachIndexed { i, yVal ->
+            val x = (i / 255f) * size.width
+            val y = (255f - yVal) / 255f * size.height
+            if (i == 0) moveTo(x, y) else lineTo(x, y)
+        }
+    }
+    drawPath(path, color, style = Stroke(strokeWidth))
+}
+
+// --- Interpolation & Math Helpers ---
+private fun lerp(start: Float, stop: Float, fraction: Float): Float {
+    return start + (stop - start) * fraction
+}
+
+private fun calculateCurveLut(points: List<CurvePointState>): FloatArray {
+    if (points.isEmpty()) return FloatArray(256) { it.toFloat() }
+
+    val sorted = points.sortedBy { it.x }
+    val n = sorted.size
+    val x = FloatArray(n) { sorted[it].x }
+    val y = FloatArray(n) { sorted[it].y }
+
+    val m = FloatArray(n)
+    val delta = FloatArray(n - 1)
+
+    for (i in 0 until n - 1) {
+        val dx = x[i + 1] - x[i]
+        val dy = y[i + 1] - y[i]
+        delta[i] = if (dx == 0f) 0f else dy / dx
+    }
+
+    m[0] = delta[0]
+    m[n - 1] = delta[n - 2]
+    for (i in 1 until n - 1) {
+        m[i] = (delta[i - 1] + delta[i]) * 0.5f
+    }
+
+    for (i in 0 until n - 1) {
+        if (delta[i] == 0f) {
+            m[i] = 0f
+            m[i + 1] = 0f
+        } else {
+            val alpha = m[i] / delta[i]
+            val beta = m[i + 1] / delta[i]
+            val s = alpha * alpha + beta * beta
+            if (s > 9f) {
+                val tau = 3f / sqrt(s)
+                m[i] = tau * alpha * delta[i]
+                m[i + 1] = tau * beta * delta[i]
+            }
+        }
+    }
+
+    val lut = FloatArray(256)
+    var segmentIndex = 0
+
+    for (i in 0..255) {
+        val currentX = i.toFloat()
+        while (segmentIndex < n - 2 && currentX > x[segmentIndex + 1]) {
+            segmentIndex++
+        }
+        val x0 = x[segmentIndex]
+        val x1 = x[segmentIndex + 1]
+        val y0 = y[segmentIndex]
+        val y1 = y[segmentIndex + 1]
+        val m0 = m[segmentIndex]
+        val m1 = m[segmentIndex + 1]
+
+        val h = x1 - x0
+        if (h <= 0f) {
+            lut[i] = y0
+        } else {
+            val t = (currentX - x0) / h
+            val t2 = t * t
+            val t3 = t2 * t
+            val h00 = 2 * t3 - 3 * t2 + 1
+            val h10 = t3 - 2 * t2 + t
+            val h01 = -2 * t3 + 3 * t2
+            val h11 = t3 - t2
+            val interpolatedY = h00 * y0 + h10 * h * m0 + h01 * y1 + h11 * h * m1
+            lut[i] = interpolatedY.coerceIn(0f, 255f)
+        }
+    }
+    return lut
+}
+
 private fun toCurvePoint(pos: Offset, size: IntSize): CurvePointState {
     val x = (pos.x / size.width.toFloat() * 255f).coerceIn(0f, 255f)
     val y = (255f - (pos.y / size.height.toFloat() * 255f)).coerceIn(0f, 255f)
@@ -301,19 +541,4 @@ private fun moveCurvePoint(pts: List<CurvePointState>, index: Int, target: Curve
     val x = if (isEnd) pts[index].x else target.x.coerceIn(pts[index - 1].x + 0.1f, pts[index + 1].x - 0.1f)
     out[index] = CurvePointState(x, target.y.coerceIn(0f, 255f))
     return out
-}
-
-private fun DrawScope.drawHisto(data: FloatArray?, color: Color, size: Size) {
-    data ?: return
-    val maxVal = data.maxOrNull() ?: 0f
-    if (maxVal <= 0f) return
-    val path = Path().apply {
-        moveTo(0f, size.height)
-        data.forEachIndexed { i, v ->
-            lineTo((i / 255f) * size.width, size.height - (v / maxVal) * size.height)
-        }
-        lineTo(size.width, size.height)
-        close()
-    }
-    drawPath(path, color)
 }

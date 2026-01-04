@@ -1,121 +1,123 @@
 package com.dueckis.kawaiiraweditor.ui.components
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.model.HueSatLumState
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.roundToInt
-import kotlin.math.sin
-import kotlin.math.sqrt
+import kotlin.math.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ColorWheelControl(
-    title: String,
+    title: String, // Kept for API compatibility, but unused inside as per request
     wheelSize: Dp,
     modifier: Modifier = Modifier,
     value: HueSatLumState,
     defaultValue: HueSatLumState,
-    isHeaderCentered: Boolean? = null,
     enabled: Boolean = true,
     onValueChange: (HueSatLumState) -> Unit,
     onBeginEditInteraction: () -> Unit,
     onEndEditInteraction: () -> Unit
 ) {
-    val formatterInt: (Float) -> String = { it.roundToInt().toString() }
     val latestValue by rememberUpdatedState(value)
     val latestOnValueChange by rememberUpdatedState(onValueChange)
-    val handleHitRadiusPx = with(LocalDensity.current) { 28.dp.toPx() }
+    val latestDefaultValue by rememberUpdatedState(defaultValue)
 
-    Column(modifier = modifier.fillMaxWidth()) {
+    val density = LocalDensity.current
+    val handleHitRadiusPx = with(density) { 28.dp.toPx() }
+    val pointerRadiusPx = with(density) { 6.dp.toPx() }
+    val pointerStrokePx = with(density) { 2.dp.toPx() }
 
-        // 1. Top Section: Row containing Info (Left) and Wheel (Right)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+    // Symmetric Layout: Weight 1 - Weight 2 - Weight 1
+    // This ensures the middle element is perfectly centered.
+    Row(
+        modifier = modifier.fillMaxSize(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+
+        // 1. LEFT SIDE: Info & Reset
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+            contentAlignment = Alignment.CenterStart // Align content start, but box takes full space
         ) {
-
-            // --- Left Side: Title, HSL, Reset (Left Bound) ---
             Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(end = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                horizontalAlignment = Alignment.Start // Ensures children start at the left
+                horizontalAlignment = Alignment.Start,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(start = 12.dp)
             ) {
-                // Title
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    textAlign = TextAlign.Start,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
                 // HSL Values
-                Text(
-                    text = "H ${value.hue.roundToInt()}  S ${value.saturation.roundToInt()}  L ${value.luminance.roundToInt()}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Start,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                CompositionLocalProvider(LocalTextStyle provides MaterialTheme.typography.labelSmall) {
+                    val color = MaterialTheme.colorScheme.onSurfaceVariant
+                    Text(text = "H ${value.hue.roundToInt()}°", color = color, fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(text = "S ${value.saturation.roundToInt()}", color = color, fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(text = "L ${value.luminance.roundToInt()}", color = color, fontWeight = FontWeight.Medium)
+                }
 
-                // Reset "Button" (Implemented as Text to ensure exact left alignment)
-                Text(
-                    text = "Reset",
-                    style = MaterialTheme.typography.labelLarge, // Button-like typography
-                    color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                    textAlign = TextAlign.Start,
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Reset Icon
+                Box(
                     modifier = Modifier
-                        // No padding here to ensure it aligns perfectly with the text above
-                        .clickable(enabled = enabled) {
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable {
                             onBeginEditInteraction()
                             onValueChange(defaultValue)
                             onEndEditInteraction()
                         }
-                        .padding(vertical = 8.dp) // Vertical padding for touch target, but horizontal is flush
-                )
+                        // Negative padding trick to make the visual icon flush left with text
+                        // while keeping a good touch target
+                        .padding(4.dp)
+                        .offset(x = (-4).dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Reset",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
+        }
 
-            // --- Right Side: The Wheel ---
+        // 2. CENTER: The Wheel
+        // State for Double Click
+        var lastClickTime by remember { mutableLongStateOf(0L) }
+
+        Box(
+            modifier = Modifier
+                .weight(2f) // Takes double the space of sides
+                .fillMaxHeight(),
+            contentAlignment = Alignment.Center
+        ) {
             Box(
                 modifier = Modifier
-                    .size(wheelSize)
-                    .clip(MaterialTheme.shapes.medium)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .fillMaxHeight(0.95f) // Use most of the height
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(100))
                     .pointerInput(enabled) {
                         if (!enabled) return@pointerInput
 
@@ -150,51 +152,60 @@ internal fun ColorWheelControl(
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             val downPos = down.position
-                            val slop = viewConfiguration.touchSlop
+                            val now = System.currentTimeMillis()
 
-                            val handlePos = handleOffsetFor(latestValue)
-                            val dist = (handlePos - downPos).getDistance()
-
-                            if (dist <= handleHitRadiusPx) {
+                            if (now - lastClickTime < 300) {
                                 down.consume()
                                 onBeginEditInteraction()
-                                drag(down.id) { change ->
-                                    change.consume()
-                                    latestOnValueChange(calcHueSat(change.position))
-                                }
+                                // Reset H/S, keep L
+                                latestOnValueChange(latestDefaultValue.copy(luminance = latestValue.luminance))
                                 onEndEditInteraction()
+                                lastClickTime = 0L
                             } else {
-                                var movedTooMuch = false
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    val change = event.changes.firstOrNull { it.id == down.id } ?: continue
-                                    if (!change.pressed) {
-                                        if (!movedTooMuch) {
-                                            onBeginEditInteraction()
-                                            latestOnValueChange(calcHueSat(change.position))
-                                            onEndEditInteraction()
-                                        }
-                                        break
+                                lastClickTime = now
+                                val slop = viewConfiguration.touchSlop
+                                val handlePos = handleOffsetFor(latestValue)
+                                val dist = (handlePos - downPos).getDistance()
+
+                                if (dist <= handleHitRadiusPx) {
+                                    down.consume()
+                                    onBeginEditInteraction()
+                                    drag(down.id) { change ->
+                                        change.consume()
+                                        latestOnValueChange(calcHueSat(change.position))
                                     }
-                                    val dx = change.position.x - downPos.x
-                                    val dy = change.position.y - downPos.y
-                                    if ((dx * dx + dy * dy) > slop * slop) {
-                                        movedTooMuch = true
+                                    onEndEditInteraction()
+                                } else {
+                                    var movedTooMuch = false
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id } ?: continue
+                                        if (!change.pressed) {
+                                            if (!movedTooMuch) {
+                                                onBeginEditInteraction()
+                                                latestOnValueChange(calcHueSat(change.position))
+                                                onEndEditInteraction()
+                                            }
+                                            break
+                                        }
+                                        val dx = change.position.x - downPos.x
+                                        val dy = change.position.y - downPos.y
+                                        if ((dx * dx + dy * dy) > slop * slop) {
+                                            movedTooMuch = true
+                                        }
                                     }
                                 }
                             }
                         }
                     }
             ) {
-                Canvas(modifier = Modifier.size(wheelSize)) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
                     val w = size.width
                     val h = size.height
                     val center = Offset(w / 2f, h / 2f)
                     val radius = minOf(w, h) / 2f
 
-                    val sweep =
-                        listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red)
-
+                    val sweep = listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red)
                     drawCircle(brush = Brush.sweepGradient(sweep), radius = radius, center = center)
                     drawCircle(
                         brush = Brush.radialGradient(
@@ -205,37 +216,42 @@ internal fun ColorWheelControl(
                         radius = radius,
                         center = center
                     )
-                    drawCircle(
-                        color = Color.Black.copy(alpha = 0.15f),
-                        radius = radius,
-                        center = center
-                    )
+                    drawCircle(color = Color.Black.copy(alpha = 0.1f), radius = radius, center = center)
 
                     val angleRad = (value.hue / 180f) * Math.PI.toFloat()
                     val satNorm = (value.saturation / 100f).coerceIn(0f, 1f)
                     val px = center.x + cos(angleRad) * radius * satNorm
                     val py = center.y + sin(angleRad) * radius * satNorm
-                    val pointerColor = if (value.saturation > 5f) Color.hsv(value.hue, satNorm, 1f) else Color.Transparent
+                    val pointerFill = if (value.saturation > 2f) Color.hsv(value.hue, satNorm, 1f) else Color.Transparent
 
-                    drawCircle(color = pointerColor, radius = 14f, center = Offset(px, py))
-                    drawCircle(color = Color.White, radius = 14f, center = Offset(px, py))
+                    drawCircle(color = pointerFill, radius = pointerRadiusPx, center = Offset(px, py))
+                    drawCircle(color = Color.White, radius = pointerRadiusPx, center = Offset(px, py), style = Stroke(width = pointerStrokePx))
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // 2. Bottom Section: Slider
-        AdjustmentSlider(
-            label = "Luminance",
-            value = value.luminance,
-            range = -100f..100f,
-            step = 1f,
-            defaultValue = 0f,
-            formatter = formatterInt,
-            onValueChange = {
-                if (enabled) onValueChange(value.copy(luminance = it))
+        // 3. RIGHT SIDE: Vertical Slider
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+            contentAlignment = Alignment.CenterEnd // Slider aligned towards the end, or Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .padding(end = 12.dp)
+                    .width(32.dp)
+                    .fillMaxHeight(0.7f), // Slider is 70% of container height
+                contentAlignment = Alignment.Center
+            ) {
+                VerticalValueSlider(
+                    value = value.luminance,
+                    onValueChange = { if (enabled) onValueChange(value.copy(luminance = it)) },
+                    onInteractionStart = onBeginEditInteraction,
+                    onInteractionEnd = onEndEditInteraction,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
-        )
+        }
     }
 }

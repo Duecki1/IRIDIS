@@ -29,7 +29,7 @@ internal fun ColorTabControls(
     onBeginEditInteraction: () -> Unit,
     onEndEditInteraction: () -> Unit
 ) {
-    val colorTabs = listOf("Curves", "Color Grading", "HSL Mixer")
+    val colorTabs = listOf("Curves", "Grading", "HSL")
     var selectedColorTab by remember { mutableIntStateOf(0) }
 
     Column(
@@ -74,7 +74,7 @@ internal fun ColorTabControls(
                 }
 
                 else -> {
-                    PanelSectionCard(title = "Curves", subtitle = "Tap to add points / Drag to adjust") {
+                    PanelSectionCard(title = "Curves", subtitle = "Tap to add points / Drag to adjust / Double-tap to remove") {
                         CurvesEditor(
                             adjustments = adjustments,
                             histogramData = histogramData,

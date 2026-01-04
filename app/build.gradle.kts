@@ -80,6 +80,7 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.2")
     // Override Compose transitive to ensure 16 KB-aligned native library packaging.
     implementation("androidx.graphics:graphics-path:1.1.0-beta01")
+    implementation(libs.androidx.compose.runtime)
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
