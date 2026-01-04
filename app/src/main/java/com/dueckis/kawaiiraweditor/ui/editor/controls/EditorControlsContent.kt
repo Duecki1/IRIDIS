@@ -14,7 +14,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
@@ -30,8 +39,7 @@ import com.dueckis.kawaiiraweditor.data.model.vignetteSection
 import com.dueckis.kawaiiraweditor.domain.HistogramData
 import com.dueckis.kawaiiraweditor.ui.components.AdjustmentSlider
 import com.dueckis.kawaiiraweditor.ui.components.ToneMapperSection
-import java.util.Locale
-
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun EditorControlsContent(
     panelTab: EditorPanelTab,
@@ -119,54 +127,69 @@ internal fun EditorControlsContent(
                     EditorPanelTab.Adjustments -> {
                         CommonHeader(title = "Light & Tone")
 
-                        if (showToneCurveProfileSwitcher) {
-                            ExpressiveSectionContainer(title = "Tone Curve Profile") {
-                                ToneMapperSection(
-                                    toneMapper = adjustments.toneMapper,
-                                    exposure = adjustments.exposure,
-                                    onToneMapperChange = { mapper -> onAdjustmentsChange(adjustments.withToneMapper(mapper)) },
-                                    onExposureChange = { value -> onAdjustmentsChange(adjustments.copy(exposure = value)) },
-                                    onInteractionStart = onBeginEditInteraction,
-                                    onInteractionEnd = onEndEditInteraction
-                                )
-                            }
-                        }
+                        val lightToneTabs = adjustmentSections.map { it.first }
+                        var selectedLightToneTab by remember { mutableIntStateOf(0) }
 
-                        adjustmentSections.forEach { (sectionTitle, controls) ->
-                            Spacer(modifier = Modifier.height(8.dp))
-                            ExpressiveSectionContainer(title = sectionTitle) {
-                                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                                    if (sectionTitle.equals("Basics", ignoreCase = true)) {
-                                        AdjustmentSlider(
-                                            label = "Exposure",
-                                            value = adjustments.exposure,
-                                            range = -5f..5f,
-                                            step = 0.01f,
-                                            defaultValue = 0f,
-                                            formatter = { value -> String.format(Locale.US, "%.2f", value) },
-                                            onValueChange = { snapped ->
-                                                onAdjustmentsChange(adjustments.copy(exposure = snapped))
-                                            },
-                                            onInteractionStart = onBeginEditInteraction,
-                                            onInteractionEnd = onEndEditInteraction
-                                        )
+                        if (lightToneTabs.isNotEmpty()) {
+                            SingleChoiceSegmentedButtonRow(
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                lightToneTabs.forEachIndexed { index, title ->
+                                    SegmentedButton(
+                                        selected = selectedLightToneTab == index,
+                                        onClick = { selectedLightToneTab = index },
+                                        shape = SegmentedButtonDefaults.itemShape(
+                                            index = index,
+                                            count = lightToneTabs.size
+                                        ),
+                                        label = { Text(title) }
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            AnimatedContent(targetState = selectedLightToneTab, label = "LightToneTabs") { tabIndex ->
+                                val safeIndex = tabIndex.coerceIn(0, lightToneTabs.lastIndex)
+                                val (sectionTitle, controls) = adjustmentSections[safeIndex]
+
+                                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    if (sectionTitle.equals("Basic", ignoreCase = true) && showToneCurveProfileSwitcher) {
+                                        ExpressiveSectionContainer(title = "Tone Curve Profile") {
+                                            ToneMapperSection(
+                                                toneMapper = adjustments.toneMapper,
+                                                exposure = adjustments.exposure,
+                                                onToneMapperChange = { mapper ->
+                                                    onAdjustmentsChange(adjustments.withToneMapper(mapper))
+                                                },
+                                                onExposureChange = { value ->
+                                                    onAdjustmentsChange(adjustments.copy(exposure = value))
+                                                },
+                                                onInteractionStart = onBeginEditInteraction,
+                                                onInteractionEnd = onEndEditInteraction
+                                            )
+                                        }
                                     }
 
-                                    controls.forEach { control ->
-                                        val currentValue = adjustments.valueFor(control.field)
-                                        AdjustmentSlider(
-                                            label = control.label,
-                                            value = currentValue,
-                                            range = control.range,
-                                            step = control.step,
-                                            defaultValue = control.defaultValue,
-                                            formatter = control.formatter,
-                                            onValueChange = { snapped ->
-                                                onAdjustmentsChange(adjustments.withValue(control.field, snapped))
-                                            },
-                                            onInteractionStart = onBeginEditInteraction,
-                                            onInteractionEnd = onEndEditInteraction
-                                        )
+                                    ExpressiveSectionContainer(title = sectionTitle) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                            controls.forEach { control ->
+                                                val currentValue = adjustments.valueFor(control.field)
+                                                AdjustmentSlider(
+                                                    label = control.label,
+                                                    value = currentValue,
+                                                    range = control.range,
+                                                    step = control.step,
+                                                    defaultValue = control.defaultValue,
+                                                    formatter = control.formatter,
+                                                    onValueChange = { snapped ->
+                                                        onAdjustmentsChange(adjustments.withValue(control.field, snapped))
+                                                    },
+                                                    onInteractionStart = onBeginEditInteraction,
+                                                    onInteractionEnd = onEndEditInteraction
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
