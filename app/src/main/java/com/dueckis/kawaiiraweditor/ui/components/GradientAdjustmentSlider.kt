@@ -29,10 +29,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalDensity
-
+import androidx.compose.ui.graphics.drawscope.Stroke
 
 @Composable
 internal fun GradientAdjustmentSlider(
@@ -144,19 +145,20 @@ internal fun RoundGradientAdjustmentSlider(
     onInteractionStart: (() -> Unit)? = null,
     onInteractionEnd: (() -> Unit)? = null
 ) {
-    // Uses local private helper to avoid conflicts
     val snappedDefault = snapValueToStep(defaultValue, step, range)
     val density = LocalDensity.current
 
     // Dimensions
     val trackHeight = 28.dp
     val thumbStrokeWidth = 3.dp
-
     val trackHeightPx = with(density) { trackHeight.toPx() }
     val thumbStrokePx = with(density) { thumbStrokeWidth.toPx() }
-
-    // Radius is half height so it fits exactly
     val thumbRadiusPx = trackHeightPx / 2
+
+    // Use rememberUpdatedState for callbacks to ensure the gesture logic always uses latest lambdas
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val currentOnStart by rememberUpdatedState(onInteractionStart)
+    val currentOnEnd by rememberUpdatedState(onInteractionEnd)
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // Header
@@ -166,9 +168,9 @@ internal fun RoundGradientAdjustmentSlider(
                 .pointerInput(label, defaultValue) {
                     detectTapGestures(
                         onDoubleTap = {
-                            onInteractionStart?.invoke()
-                            onValueChange(defaultValue)
-                            onInteractionEnd?.invoke()
+                            currentOnStart?.invoke()
+                            currentOnValueChange(defaultValue)
+                            currentOnEnd?.invoke()
                         }
                     )
                 },
@@ -192,20 +194,21 @@ internal fun RoundGradientAdjustmentSlider(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(trackHeight)
-                .pointerInput(Unit) {
+                // KEY FIX: We pass range and currentOnValueChange as keys so the pointerInput refreshes
+                .pointerInput(range, snappedDefault) {
                     detectTapGestures(
                         onDoubleTap = {
-                            onInteractionStart?.invoke()
-                            onValueChange(snappedDefault)
-                            onInteractionEnd?.invoke()
+                            currentOnStart?.invoke()
+                            currentOnValueChange(snappedDefault)
+                            currentOnEnd?.invoke()
                         }
                     )
                 }
-                .pointerInput(Unit) {
+                .pointerInput(range) {
                     detectHorizontalDragGestures(
-                        onDragStart = { onInteractionStart?.invoke() },
-                        onDragEnd = { onInteractionEnd?.invoke() },
-                        onDragCancel = { onInteractionEnd?.invoke() }
+                        onDragStart = { currentOnStart?.invoke() },
+                        onDragEnd = { currentOnEnd?.invoke() },
+                        onDragCancel = { currentOnEnd?.invoke() }
                     ) { change, _ ->
                         change.consume()
                         val width = size.width
@@ -217,7 +220,7 @@ internal fun RoundGradientAdjustmentSlider(
                         val rawValue = range.start + (fraction * rangeSize)
 
                         val snapped = snapValueToStep(rawValue, step, range)
-                        onValueChange(snapped)
+                        currentOnValueChange(snapped)
                     }
                 }
         ) {
@@ -246,7 +249,7 @@ internal fun RoundGradientAdjustmentSlider(
                 val availableWidth = w - (thumbRadiusPx * 2)
                 val thumbX = thumbRadiusPx + (availableWidth * fraction)
 
-                // 3. Thumb Ring (Transparent Center)
+                // 3. Thumb Ring
                 val ringRadius = thumbRadiusPx - (thumbStrokePx / 2)
 
                 // Shadow
@@ -269,7 +272,6 @@ internal fun RoundGradientAdjustmentSlider(
     }
 }
 
-// Local helper to ensure self-containment
 private fun snapValueToStep(value: Float, step: Float, range: ClosedFloatingPointRange<Float>): Float {
     if (step == 0f) return value
     val stepped = Math.round(value / step) * step

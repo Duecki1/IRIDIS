@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -20,7 +21,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.model.HslState
 import com.dueckis.kawaiiraweditor.data.model.HueSatLumState
-import com.dueckis.kawaiiraweditor.ui.components.GradientAdjustmentSlider
 import com.dueckis.kawaiiraweditor.ui.components.RoundGradientAdjustmentSlider
 import kotlin.math.roundToInt
 
@@ -95,37 +95,25 @@ internal fun HslEditor(
     onBeginEditInteraction: () -> Unit,
     onEndEditInteraction: () -> Unit
 ) {
-    var activeChannel by remember { mutableStateOf(HslChannel.Reds) }
+    var activeChannel by rememberSaveable { mutableStateOf(HslChannel.Reds) }
     val current = hsl.valueFor(activeChannel)
     val formatterInt: (Float) -> String = { it.roundToInt().toString() }
 
-    // Brushes
     val hueBrush = remember(activeChannel) { hslHueTrackBrush(activeChannel) }
     val saturationBrush = remember(activeChannel) { hslSaturationTrackBrush(activeChannel) }
     val luminanceBrush = remember(activeChannel) { hslLuminanceTrackBrush(activeChannel) }
 
-    // Main Card
     ElevatedCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(300.dp),
+        modifier = Modifier.fillMaxWidth().height(300.dp),
         shape = RoundedCornerShape(16.dp),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-        )
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
     ) {
         Row(modifier = Modifier.fillMaxSize()) {
-
-            // --- LEFT COLUMN: Channel Selector ---
+            // LEFT COLUMN: Channel Selector
             Column(
-                modifier = Modifier
-                    .weight(0.3f)
-                    .fillMaxHeight()
-                    .padding(12.dp),
+                modifier = Modifier.weight(0.3f).fillMaxHeight().padding(12.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                // Header & Grid
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
                         text = "COLOR MIX",
@@ -134,20 +122,18 @@ internal fun HslEditor(
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
 
-                    // 2-Column Grid of Color Dots
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         HslChannel.entries.chunked(2).forEach { rowChannels ->
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp) // Space between columns
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 rowChannels.forEach { channel ->
-                                    val isActive = channel == activeChannel
                                     ColorChannelDot(
                                         color = channel.swatch,
-                                        isActive = isActive,
+                                        isActive = channel == activeChannel,
                                         onClick = { activeChannel = channel },
-                                        modifier = Modifier.weight(1f) // Equal width distribution
+                                        modifier = Modifier.weight(1f)
                                     )
                                 }
                             }
@@ -155,37 +141,26 @@ internal fun HslEditor(
                     }
                 }
 
-                // Reset Button
                 IconButton(
                     onClick = {
                         onBeginEditInteraction()
-                        onHslChange(hsl.withValue(activeChannel, HueSatLumState())) // Resets current channel
+                        onHslChange(hsl.withValue(activeChannel, HueSatLumState()))
                         onEndEditInteraction()
                     },
-                    modifier = Modifier.size(32.dp).align(Alignment.Start)
+                    modifier = Modifier.size(32.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Reset Channel",
-                        tint = activeChannel.swatch, // Icon takes channel color
-                        modifier = Modifier.size(20.dp)
-                    )
+                    Icon(Icons.Default.Refresh, contentDescription = "Reset", modifier = Modifier.size(20.dp))
                 }
             }
 
-            // --- RIGHT COLUMN: Sliders ---
+            // RIGHT COLUMN: Sliders
             Box(
-                modifier = Modifier
-                    .weight(0.7f)
-                    .fillMaxHeight()
+                modifier = Modifier.weight(0.7f).fillMaxHeight()
                     .background(MaterialTheme.colorScheme.surfaceContainer)
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(16.dp), // Comfortable spacing
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     RoundGradientAdjustmentSlider(
                         label = "Hue",
                         value = current.hue,
@@ -228,7 +203,6 @@ internal fun HslEditor(
     }
 }
 
-// --- Helper Component: Color Dot ---
 @Composable
 private fun ColorChannelDot(
     color: Color,
@@ -238,27 +212,21 @@ private fun ColorChannelDot(
 ) {
     Box(
         modifier = modifier
-            .height(32.dp) // Fixed height for touch target
+            .height(32.dp)
             .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
-            // If active, show a subtle background container
-            .background(if (isActive) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent),
+            .background(if (isActive) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+            .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        // The Dot
         Box(
             modifier = Modifier
-                .size(20.dp) // Dot size
+                .size(20.dp)
                 .clip(CircleShape)
                 .background(color)
-                .then(
-                    if (isActive) {
-                        // Active state border
-                        Modifier.border(2.dp, MaterialTheme.colorScheme.onSecondaryContainer, CircleShape)
-                    } else {
-                        // Inactive border for visibility on dark backgrounds
-                        Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), CircleShape)
-                    }
+                .border(
+                    width = if (isActive) 2.dp else 1.dp,
+                    color = if (isActive) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                    shape = CircleShape
                 )
         )
     }
