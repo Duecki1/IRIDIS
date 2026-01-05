@@ -567,6 +567,8 @@ internal fun GalleryScreen(
         coroutineScope.launch {
             var opened = false
             uris.forEach { uri ->
+                val fileName = displayNameForUri(context, uri)
+                if (!SupportedRawExtensions.hasSupportedExtension(fileName)) return@forEach
                 val openThis = openEditorOnImportEnabled && !opened
                 importUri(uri, openAfterImport = openThis)
                 if (openThis) opened = true
