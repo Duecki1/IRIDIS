@@ -12,8 +12,9 @@ internal class Mp4FrameEncoder(
     private val fps: Int,
     private val outFd: FileDescriptor
 ) {
-    fun encode(frames: List<PreparedFrame>, frameDurationUs: Long): Boolean {
-        if (frames.isEmpty() || width <= 0 || height <= 0 || fps <= 0) return false
+    fun encode(frames: Sequence<PreparedFrame>, frameDurationUs: Long): Boolean {
+        val iterator = frames.iterator()
+        if (!iterator.hasNext() || width <= 0 || height <= 0 || fps <= 0) return false
 
         val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
@@ -29,10 +30,10 @@ internal class Mp4FrameEncoder(
 
         val bufferInfo = MediaCodec.BufferInfo()
         var trackIndex = -1
-        var frameCursor = 0
         var inputDone = false
         var outputDone = false
-        val endTimeUs = frames.last().presentationTimeUs + frameDurationUs
+        var nextFrame: PreparedFrame? = iterator.next()
+        var lastPresentationUs = 0L
 
         try {
             while (!outputDone) {
@@ -40,13 +41,15 @@ internal class Mp4FrameEncoder(
                     val inputIndex = codec.dequeueInputBuffer(DEQUEUE_TIMEOUT_US)
                     if (inputIndex >= 0) {
                         val buffer = codec.getInputBuffer(inputIndex) ?: continue
-                        if (frameCursor < frames.size) {
-                            val frame = frames[frameCursor]
+                        val frame = nextFrame
+                        if (frame != null) {
                             buffer.clear()
                             buffer.put(frame.data)
                             codec.queueInputBuffer(inputIndex, 0, frame.data.size, frame.presentationTimeUs, 0)
-                            frameCursor += 1
+                            lastPresentationUs = frame.presentationTimeUs
+                            nextFrame = if (iterator.hasNext()) iterator.next() else null
                         } else {
+                            val endTimeUs = lastPresentationUs + frameDurationUs
                             codec.queueInputBuffer(inputIndex, 0, 0, endTimeUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                             inputDone = true
                         }
