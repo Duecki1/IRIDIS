@@ -118,7 +118,6 @@ internal fun EditorControlsContent(
 
             EditorPanelTab.CropTransform -> {
                 ScrollableControlsColumn(modifier = contentModifier) {
-                    CommonHeader(title = "Geometry")
                     ExpressiveSectionContainer(title = "Crop & Rotate") {
                         CropTransformControls(
                             adjustments = adjustments,
