@@ -20,15 +20,16 @@ internal fun buildMaskOverlayBitmap(
 ): Bitmap {
     data class BrushEvent(
         val order: Long,
-        val mode: SubMaskMode,
         val brushSize: Float,
         val feather: Float,
-        val points: List<MaskPoint>
+        val points: List<MaskPoint>,
+        val tool: BrushTool
     )
 
     val width = targetWidth.coerceAtLeast(1)
     val height = targetHeight.coerceAtLeast(1)
     val baseDim = minOf(width, height).toFloat()
+    val maskOpacity = (mask.opacity / 100f).coerceIn(0f, 1f)
 
     fun denorm(value: Float, max: Int): Float {
         val maxCoord = (max - 1).coerceAtLeast(1).toFloat()
@@ -52,6 +53,12 @@ internal fun buildMaskOverlayBitmap(
         val i = intensity.coerceIn(0, 255)
         val invI = 255 - i
         return ((c * invI + 127) / 255).coerceIn(0, 255)
+    }
+
+    fun scaleIntensity(value: Int): Int {
+        val clamped = value.coerceIn(0, 255)
+        if (maskOpacity >= 0.999f) return clamped
+        return (clamped * maskOpacity).roundToInt().coerceIn(0, 255)
     }
 
     fun alphaFor(intensity: Int): Int = (intensity.coerceIn(0, 255) * 170 / 255).coerceIn(0, 255)
@@ -229,13 +236,13 @@ internal fun buildMaskOverlayBitmap(
     fun brushEvents(sub: SubMaskState): List<BrushEvent> {
         return sub.lines.mapNotNull { line ->
             if (line.points.isEmpty()) return@mapNotNull null
-            val effectiveMode = if (line.tool == "eraser") SubMaskMode.Subtractive else sub.mode
+            val tool = if (line.tool == "eraser") BrushTool.Eraser else BrushTool.Brush
             BrushEvent(
                 order = line.order,
-                mode = effectiveMode,
                 brushSize = line.brushSize,
                 feather = line.feather,
-                points = line.points
+                points = line.points,
+                tool = tool
             )
         }.sortedBy { it.order }
     }
@@ -482,20 +489,13 @@ internal fun buildMaskOverlayBitmap(
         when (highlightSubMask.type) {
             SubMaskType.Brush.id -> {
                 val events = brushEvents(highlightSubMask)
-                if (highlightSubMask.mode == SubMaskMode.Additive) {
-                    events.forEach { event ->
-                        applyBrushStamps(event) { cx, cy, radius, feather ->
-                            if (event.mode == SubMaskMode.Additive) {
-                                applyFeatheredCircleScreen(layer, cx, cy, radius, feather)
-                            } else {
-                                applyFeatheredCircleSub(layer, cx, cy, radius, feather)
-                            }
-                        }
-                    }
-                } else {
-                    events.forEach { event ->
-                        applyBrushStamps(event) { cx, cy, radius, feather ->
+                events.forEach { event ->
+                    applyBrushStamps(event) { cx, cy, radius, feather ->
+                        val isEraser = event.tool == BrushTool.Eraser
+                        if (!isEraser) {
                             applyFeatheredCircleScreen(layer, cx, cy, radius, feather)
+                        } else {
+                            applyFeatheredCircleSub(layer, cx, cy, radius, feather)
                         }
                     }
                 }
@@ -532,7 +532,7 @@ internal fun buildMaskOverlayBitmap(
                 Triple(0, 120, 255)
             }
         for (i in overlayPixels.indices) {
-            val v = layer[i]
+            val v = scaleIntensity(layer[i])
             if (v == 0) continue
             overlayPixels[i] = argb(alphaFor(v), r, g, b)
         }
@@ -551,10 +551,19 @@ internal fun buildMaskOverlayBitmap(
                         val events = brushEvents(sub)
                         events.forEach { event ->
                             applyBrushStamps(event) { cx, cy, radius, feather ->
-                                if (event.mode == SubMaskMode.Additive) {
-                                    applyFeatheredCircleScreen(addLayer, cx, cy, radius, feather)
+                                val isEraser = event.tool == BrushTool.Eraser
+                                if (sub.mode == SubMaskMode.Additive) {
+                                    if (!isEraser) {
+                                        applyFeatheredCircleScreen(addLayer, cx, cy, radius, feather)
+                                    } else {
+                                        applyFeatheredCircleSub(addLayer, cx, cy, radius, feather)
+                                    }
                                 } else {
-                                    applyFeatheredCircleScreen(subLayer, cx, cy, radius, feather)
+                                    if (!isEraser) {
+                                        applyFeatheredCircleScreen(subLayer, cx, cy, radius, feather)
+                                    } else {
+                                        applyFeatheredCircleSub(subLayer, cx, cy, radius, feather)
+                                    }
                                 }
                             }
                         }
@@ -618,8 +627,8 @@ internal fun buildMaskOverlayBitmap(
 
             val overlayPixels = IntArray(width * height)
             for (i in overlayPixels.indices) {
-                val add = addLayer[i]
-                val sub = subLayer[i]
+                val add = scaleIntensity(addLayer[i])
+                val sub = scaleIntensity(subLayer[i])
                 if (add == 0 && sub == 0) continue
                 var out = 0
                 if (add > 0) out = over(out, argb(alphaFor(add), 255, 0, 0))
@@ -639,10 +648,19 @@ internal fun buildMaskOverlayBitmap(
                         val events = brushEvents(sub)
                         events.forEach { event ->
                             applyBrushStamps(event) { cx, cy, radius, feather ->
-                                if (event.mode == SubMaskMode.Additive) {
-                                    applyFeatheredCircleScreen(resultMask, cx, cy, radius, feather)
+                                val isEraser = event.tool == BrushTool.Eraser
+                                if (sub.mode == SubMaskMode.Additive) {
+                                    if (!isEraser) {
+                                        applyFeatheredCircleScreen(resultMask, cx, cy, radius, feather)
+                                    } else {
+                                        applyFeatheredCircleSub(resultMask, cx, cy, radius, feather)
+                                    }
                                 } else {
-                                    applyFeatheredCircleSub(resultMask, cx, cy, radius, feather)
+                                    if (!isEraser) {
+                                        applyFeatheredCircleSub(resultMask, cx, cy, radius, feather)
+                                    } else {
+                                        applyFeatheredCircleScreen(resultMask, cx, cy, radius, feather)
+                                    }
                                 }
                             }
                         }
@@ -710,7 +728,7 @@ internal fun buildMaskOverlayBitmap(
 
             val overlayPixels = IntArray(width * height)
             for (i in overlayPixels.indices) {
-                val v = resultMask[i]
+                val v = scaleIntensity(resultMask[i])
                 if (v == 0) continue
                 overlayPixels[i] = argb(alphaFor(v), 255, 0, 0)
             }

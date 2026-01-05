@@ -1232,10 +1232,16 @@ fn apply_feathered_circle_sub(target: &mut [u8], width: u32, height: u32, cx: f3
     }
 }
 
+#[derive(Clone, Copy)]
+enum BrushTool {
+    Brush,
+    Eraser,
+}
+
 #[derive(Clone)]
 struct BrushEvent {
     order: u64,
-    mode: SubMaskMode,
+    tool: BrushTool,
     feather: f32,
     base_radius: f32,
     points: Vec<(f32, f32, f32)>,
@@ -1274,10 +1280,10 @@ fn apply_brush_submask(target: &mut [u8], sub_mask: &SubMaskPayload, width: u32,
             continue;
         }
 
-        let effective_mode = if line.tool == "eraser" {
-            SubMaskMode::Subtractive
+        let tool = if line.tool == "eraser" {
+            BrushTool::Eraser
         } else {
-            sub_mask.mode
+            BrushTool::Brush
         };
 
         let brush_size_px = if line.brush_size <= 1.5 {
@@ -1296,7 +1302,7 @@ fn apply_brush_submask(target: &mut [u8], sub_mask: &SubMaskPayload, width: u32,
 
         events.push(BrushEvent {
             order: line.order,
-            mode: effective_mode,
+            tool,
             feather,
             base_radius,
             points,
@@ -1307,10 +1313,19 @@ fn apply_brush_submask(target: &mut [u8], sub_mask: &SubMaskPayload, width: u32,
 
     for event in events {
         let apply_circle = |mask: &mut [u8], cx: f32, cy: f32, radius: f32| {
-            if event.mode == SubMaskMode::Additive {
-                apply_feathered_circle_add(mask, width, height, cx, cy, radius, event.feather);
-            } else {
-                apply_feathered_circle_sub(mask, width, height, cx, cy, radius, event.feather);
+            match (sub_mask.mode, event.tool) {
+                (SubMaskMode::Additive, BrushTool::Brush) => {
+                    apply_feathered_circle_add(mask, width, height, cx, cy, radius, event.feather);
+                }
+                (SubMaskMode::Additive, BrushTool::Eraser) => {
+                    apply_feathered_circle_sub(mask, width, height, cx, cy, radius, event.feather);
+                }
+                (SubMaskMode::Subtractive, BrushTool::Brush) => {
+                    apply_feathered_circle_sub(mask, width, height, cx, cy, radius, event.feather);
+                }
+                (SubMaskMode::Subtractive, BrushTool::Eraser) => {
+                    apply_feathered_circle_add(mask, width, height, cx, cy, radius, event.feather);
+                }
             }
         };
 
@@ -1494,10 +1509,10 @@ fn apply_brush_submask_region(
             continue;
         }
 
-        let effective_mode = if line.tool == "eraser" {
-            SubMaskMode::Subtractive
+        let tool = if line.tool == "eraser" {
+            BrushTool::Eraser
         } else {
-            sub_mask.mode
+            BrushTool::Brush
         };
 
         let brush_size_px = if line.brush_size <= 1.5 {
@@ -1516,7 +1531,7 @@ fn apply_brush_submask_region(
 
         events.push(BrushEvent {
             order: line.order,
-            mode: effective_mode,
+            tool,
             feather,
             base_radius,
             points,
@@ -1527,10 +1542,19 @@ fn apply_brush_submask_region(
 
     for event in events {
         let apply_circle = |mask: &mut [u8], cx: f32, cy: f32, radius: f32| {
-            if event.mode == SubMaskMode::Additive {
-                apply_feathered_circle_add_region(mask, width, height, origin_x, origin_y, cx, cy, radius, event.feather);
-            } else {
-                apply_feathered_circle_sub_region(mask, width, height, origin_x, origin_y, cx, cy, radius, event.feather);
+            match (sub_mask.mode, event.tool) {
+                (SubMaskMode::Additive, BrushTool::Brush) => {
+                    apply_feathered_circle_add_region(mask, width, height, origin_x, origin_y, cx, cy, radius, event.feather);
+                }
+                (SubMaskMode::Additive, BrushTool::Eraser) => {
+                    apply_feathered_circle_sub_region(mask, width, height, origin_x, origin_y, cx, cy, radius, event.feather);
+                }
+                (SubMaskMode::Subtractive, BrushTool::Brush) => {
+                    apply_feathered_circle_sub_region(mask, width, height, origin_x, origin_y, cx, cy, radius, event.feather);
+                }
+                (SubMaskMode::Subtractive, BrushTool::Eraser) => {
+                    apply_feathered_circle_add_region(mask, width, height, origin_x, origin_y, cx, cy, radius, event.feather);
+                }
             }
         };
 
