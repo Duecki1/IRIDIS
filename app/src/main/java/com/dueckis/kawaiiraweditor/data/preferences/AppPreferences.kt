@@ -187,6 +187,15 @@ internal class AppPreferences(context: Context) {
         prefs.edit().putInt(KEY_GALLERY_GRID_COLUMNS, columns).apply()
     }
 
+    fun getReplayExportQuality(): ReplayExportQuality {
+        val raw = prefs.getString(KEY_REPLAY_EXPORT_QUALITY, null)
+        return ReplayExportQuality.fromPreference(raw)
+    }
+
+    fun setReplayExportQuality(quality: ReplayExportQuality) {
+        prefs.edit().putString(KEY_REPLAY_EXPORT_QUALITY, quality.preferenceValue).apply()
+    }
+
     fun ensureDefaultMaskRenameTagsSeeded() {
         if (!prefs.contains(KEY_MASK_RENAME_TAGS)) {
             setMaskRenameTags(DEFAULT_MASK_RENAME_TAGS)
@@ -216,6 +225,7 @@ internal class AppPreferences(context: Context) {
         private const val KEY_GALLERY_GRID_COLUMNS = "gallery_grid_columns"
         private const val KEY_TUTORIAL_COMPLETED = "tutorial_completed"
         private const val KEY_AI_ASSISTANCE_LEVEL = "ai_assistance_level"
+        private const val KEY_REPLAY_EXPORT_QUALITY = "replay_export_quality"
         private const val DEFAULT_IMMICH_LOCAL_EXPORT_RELATIVE_PATH = "Pictures/IRIDIS/Immich"
         private val DEFAULT_MASK_RENAME_TAGS = listOf(
             "Subject",

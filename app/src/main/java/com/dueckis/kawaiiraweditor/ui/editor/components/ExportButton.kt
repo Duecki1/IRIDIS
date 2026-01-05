@@ -154,6 +154,7 @@ internal fun ExportButton(
     onExportComplete: (Boolean, String) -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
+    val appPreferences = remember(context) { AppPreferences(context) }
     var showExportDialog by remember { mutableStateOf(false) }
     var showDestinationDialog by remember { mutableStateOf(false) }
     var showImmichAlbumDialog by remember { mutableStateOf(false) }
@@ -171,7 +172,8 @@ internal fun ExportButton(
         )
     }
     var exportProgressMessage by remember { mutableStateOf<String?>(null) }
-    val appPreferences = remember(context) { AppPreferences(context) }
+    var showReplayQualityDialog by remember { mutableStateOf(false) }
+    var replayQualitySelection by remember { mutableStateOf(appPreferences.getReplayExportQuality()) }
 
     fun startReplayExport() {
         if (isExporting || sessionHandle == 0L) return
@@ -180,6 +182,9 @@ internal fun ExportButton(
         showImmichAlbumDialog = false
         val currentAdjustments = adjustments
         val currentMasks = masks
+        val replayQuality = appPreferences.getReplayExportQuality()
+        replayQualitySelection = replayQuality
+        showReplayQualityDialog = false
         exportProgressMessage = "Creating replay video..."
         pendingImmichConfig = null
         pendingOptions = null
@@ -193,7 +198,8 @@ internal fun ExportButton(
                         sessionHandle = sessionHandle,
                         adjustments = currentAdjustments,
                         masks = currentMasks,
-                        nativeDispatcher = nativeDispatcher
+                        nativeDispatcher = nativeDispatcher,
+                        maxDimension = replayQuality.maxDimension
                     )
                 }
                 exportProgressMessage = null
@@ -212,6 +218,15 @@ internal fun ExportButton(
                 exportProgressMessage = null
             }
         }
+    }
+
+    fun promptReplayQualitySelection() {
+        if (isExporting || sessionHandle == 0L) return
+        showExportDialog = false
+        showDestinationDialog = false
+        showImmichAlbumDialog = false
+        replayQualitySelection = appPreferences.getReplayExportQuality()
+        showReplayQualityDialog = true
     }
 
     LaunchedEffect(originImmichAlbumId) {
@@ -392,7 +407,7 @@ internal fun ExportButton(
         ExportOptionsDialog(
             initial = lastOptions,
             isLoading = isExporting,
-            onExportReplay = if (isExporting) null else ::startReplayExport,
+            onExportReplay = if (isExporting) null else ::promptReplayQualitySelection,
             onDismissRequest = {
                 if (!isExporting) {
                     showExportDialog = false
@@ -471,7 +486,25 @@ internal fun ExportButton(
         }
     }
 
-    if (isExporting && !showExportDialog && !showDestinationDialog && !showImmichAlbumDialog) {
+    if (showReplayQualityDialog) {
+        ReplayQualityDialog(
+            current = replayQualitySelection,
+            isLoading = isExporting,
+            onConfirm = { quality ->
+                appPreferences.setReplayExportQuality(quality)
+                replayQualitySelection = quality
+                showReplayQualityDialog = false
+                startReplayExport()
+            },
+            onDismissRequest = {
+                if (!isExporting) {
+                    showReplayQualityDialog = false
+                }
+            }
+        )
+    }
+
+    if (isExporting && !showExportDialog && !showDestinationDialog && !showImmichAlbumDialog && !showReplayQualityDialog) {
         val message = exportProgressMessage
             ?: if (pendingImmichConfig != null) "Uploading to Immich..." else "Saving export..."
         ExportProgressDialog(message = message)
