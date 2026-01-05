@@ -125,8 +125,6 @@ internal fun EditorControlsContent(
                     }
 
                     EditorPanelTab.Adjustments -> {
-                        CommonHeader(title = "Light & Tone")
-
                         val lightToneTabs = adjustmentSections.map { it.first }
                         var selectedLightToneTab by remember { mutableIntStateOf(0) }
 
@@ -197,7 +195,6 @@ internal fun EditorControlsContent(
                     }
 
                     EditorPanelTab.Color -> {
-                        CommonHeader(title = "Color Grading")
                         ColorTabControls(
                             adjustments = adjustments,
                             histogramData = histogramData,
