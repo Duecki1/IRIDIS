@@ -133,7 +133,6 @@ internal fun EditorControlsContent(
                         val lightToneSections = adjustmentSections.map { (title, controls) ->
                             LightToneSection(
                                 key = title,
-                                title = title,
                                 compactLabel = title,
                                 controls = controls
                             )
@@ -187,7 +186,7 @@ internal fun EditorControlsContent(
                                             }
                                         }
 
-                                        PanelSectionCard(title = section.title) {
+                                        PanelSectionCard(title = null) {
                                             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                                                 section.controls.forEach { control ->
                                                     val currentValue = adjustments.valueFor(control.field)
@@ -292,7 +291,6 @@ internal fun EditorControlsContent(
 
 private data class LightToneSection(
     val key: String,
-    val title: String,
     val compactLabel: String,
     val controls: List<AdjustmentControl>
 )

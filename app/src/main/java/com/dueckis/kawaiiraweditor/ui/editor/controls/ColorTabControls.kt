@@ -32,11 +32,7 @@ internal fun ColorTabControls(
     onEndEditInteraction: () -> Unit
 ) {
     val colorTabs = remember {
-        listOf(
-            ColorTab(title = "Curves", compactLabel = "Curves"),
-            ColorTab(title = "Color Grading", compactLabel = "Grading"),
-            ColorTab(title = "HSL Mixer", compactLabel = "HSL")
-        )
+        listOf("Curves", "Grading", "HSL")
     }
     var selectedColorTab by remember { mutableIntStateOf(0) }
 
@@ -47,7 +43,7 @@ internal fun ColorTabControls(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         CompactTabRow(
-            labels = colorTabs.map { it.compactLabel },
+            labels = colorTabs,
             selectedIndex = safeIndex,
             onSelected = { selectedColorTab = it },
             modifier = Modifier.fillMaxWidth()
@@ -69,9 +65,7 @@ internal fun ColorTabControls(
                     .using(SizeTransform(clip = false))
             }
         ) { tabIndex ->
-            val tab = colorTabs[tabIndex]
-
-            PanelSectionCard(title = tab.title) {
+            PanelSectionCard(title = null) {
                 when (tabIndex) {
                     1 -> {
                         ColorGradingEditor(
@@ -107,5 +101,3 @@ internal fun ColorTabControls(
         }
     }
 }
-
-private data class ColorTab(val title: String, val compactLabel: String)
