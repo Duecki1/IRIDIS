@@ -7,6 +7,9 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.net.Uri
 import android.provider.MediaStore
 import android.view.animation.PathInterpolator
@@ -16,6 +19,7 @@ import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.sequences.SequenceScope
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -27,23 +31,12 @@ private const val DEFAULT_REPLAY_FPS = 30
 private const val DEFAULT_REPLAY_MAX_DIM = 1080
 private val DATE_FORMAT = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
 
-private const val OPENING_HOLD_SPLIT_SECONDS = 0.3
-private const val OPENING_WIPE_TO_EDITED_SECONDS = 0.7
-private const val OPENING_HOLD_EDITED_SECONDS = 0.2
-private const val OPENING_WIPE_TO_UNEDITED_SECONDS = 0.9
-private const val OPENING_HOLD_UNEDITED_SECONDS = 0.2
-private const val STAGE_HOLD_SECONDS = 0.25
-private const val STAGE_CROSSFADE_SECONDS = 0.65
-private const val FINAL_HOLD_SECONDS = 0.6
-private const val FINAL_FADE_TO_BLACK_SECONDS = 0.4
-private const val BLACK_HOLD_SECONDS = 0.1
-
-private const val LOGO_TOTAL_MS = 1_200f
-private const val LOGO_BLADE_MS = 360f
-private const val LOGO_BLADE_STAGGER_MS = 25f
-private const val LOGO_CENTER_MS = 330f
-private const val LOGO_HOLD_MS = 180f
-private const val LOGO_FADE_MS = 180f
+private const val LOGO_TOTAL_MS_BASE = 1_200f
+private const val LOGO_BLADE_MS_BASE = 360f
+private const val LOGO_BLADE_STAGGER_MS_BASE = 25f
+private const val LOGO_CENTER_MS_BASE = 330f
+private const val LOGO_HOLD_MS_BASE = 180f
+private const val LOGO_FADE_MS_BASE = 180f
 
 internal data class ReplayExportResult(
     val success: Boolean,
@@ -71,6 +64,39 @@ private enum class ReplayStage {
     Effects
 }
 
+data class ReplayTiming(
+    val fps: Int = DEFAULT_REPLAY_FPS,
+    val wipeHoldSec: Double = 1.0,
+    val wipeToEditedSec: Double = 1.6,
+    val editedHoldSec: Double = 0.8,
+    val wipeToOriginalSec: Double = 1.8,
+    val originalHoldSec: Double = 0.8,
+    val stageHoldSec: Double = 1.2,
+    val stageFadeSec: Double = 1.4,
+    val fadeToBlackSec: Double = 1.0,
+    val blackHoldSec: Double = 0.6,
+    val logoOutroSec: Double = 2.2
+)
+
+data class OverlayStyle(
+    val textScale: Float = 0.045f,
+    val marginScale: Float = 0.030f,
+    val padScale: Float = 0.018f,
+    val cornerScale: Float = 0.014f,
+    val bgAlpha: Int = 150
+)
+
+private data class LabelState(
+    val text: String,
+    val alpha: Float,
+    val topRight: Boolean = true
+)
+
+private data class StageFrame(
+    val stage: ReplayStage,
+    val bitmap: Bitmap
+)
+
 internal suspend fun exportReplayVideo(
     context: Context,
     sessionHandle: Long,
@@ -78,7 +104,8 @@ internal suspend fun exportReplayVideo(
     masks: List<MaskState>,
     nativeDispatcher: CoroutineDispatcher,
     maxDimension: Int = DEFAULT_REPLAY_MAX_DIM,
-    fps: Int = DEFAULT_REPLAY_FPS,
+    timing: ReplayTiming = ReplayTiming(),
+    overlayStyle: OverlayStyle = OverlayStyle(),
     lowRamMode: Boolean = false
 ): ReplayExportResult {
     if (sessionHandle == 0L) {
@@ -92,6 +119,8 @@ internal suspend fun exportReplayVideo(
 
     val renderedBitmaps = LinkedHashMap<ReplayStage, Bitmap>()
     val scaledBitmaps = LinkedHashMap<ReplayStage, Bitmap>()
+    val normalizedTiming = if (timing.fps <= 0) timing.copy(fps = DEFAULT_REPLAY_FPS) else timing
+    val fps = normalizedTiming.fps
 
     try {
         for ((stage, spec) in renderSpecs) {
@@ -117,7 +146,7 @@ internal suspend fun exportReplayVideo(
             }
         }
 
-        val frameGenerator = ReplayFrameGenerator(scaledBitmaps, fps)
+        val frameGenerator = ReplayFrameGenerator(scaledBitmaps, normalizedTiming, overlayStyle)
         val frameSequence = frameGenerator.frames()
         val frameDurationUs = 1_000_000L / fps
 
@@ -226,10 +255,63 @@ private fun scaleForVideo(bitmap: Bitmap, targetWidth: Int, targetHeight: Int): 
     return Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
 }
 
+private fun secondsToFrames(seconds: Double, fps: Int): Int {
+    if (seconds <= 0.0) return 0
+    return max(1, (seconds * fps).roundToInt())
+}
+
+private fun drawStageLabel(
+    canvas: Canvas,
+    label: String,
+    frameW: Int,
+    frameH: Int,
+    alpha01: Float = 1f,
+    style: OverlayStyle = OverlayStyle(),
+    topRight: Boolean = true
+) {
+    if (label.isBlank()) return
+    val labelAlpha = alpha01.coerceIn(0f, 1f)
+    if (labelAlpha <= 0.001f) return
+
+    val minDim = min(frameW, frameH).toFloat()
+    val textSize = (minDim * style.textScale).coerceAtLeast(18f)
+    val margin = minDim * style.marginScale
+    val pad = minDim * style.padScale
+    val radius = minDim * style.cornerScale
+
+    val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        this.textSize = textSize
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        this.alpha = (labelAlpha * 255f).roundToInt().coerceIn(0, 255)
+    }
+    val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.BLACK
+        this.alpha = (style.bgAlpha * labelAlpha).roundToInt().coerceIn(0, 255)
+    }
+
+    val textBounds = Rect()
+    textPaint.getTextBounds(label, 0, label.length, textBounds)
+    val textWidth = textPaint.measureText(label)
+    val textHeight = textBounds.height().toFloat()
+
+    val boxWidth = textWidth + pad * 2f
+    val boxHeight = textHeight + pad * 2f
+    val left = if (topRight) frameW - margin - boxWidth else margin
+    val top = margin
+    val rect = RectF(left, top, left + boxWidth, top + boxHeight)
+
+    canvas.drawRoundRect(rect, radius, radius, bgPaint)
+    val baseline = rect.top + pad - textBounds.top
+    canvas.drawText(label, rect.left + pad, baseline, textPaint)
+}
+
 private class ReplayFrameGenerator(
     private val bitmaps: Map<ReplayStage, Bitmap>,
-    private val fps: Int
+    private val timing: ReplayTiming,
+    private val overlayStyle: OverlayStyle
 ) {
+    private val fps = timing.fps.coerceAtLeast(1)
     private val frameDurationUs = 1_000_000L / fps
     private val fastOutSlowIn = PathInterpolator(0.4f, 0f, 0.2f, 1f)
 
@@ -239,6 +321,9 @@ private class ReplayFrameGenerator(
     fun frames(): Sequence<PreparedFrame> = sequence {
         val edited = bitmaps[ReplayStage.FinalEdited] ?: return@sequence
         val unedited = bitmaps[ReplayStage.Unedited] ?: return@sequence
+        val stageSequence = buildCrossfadeStages(bitmaps)
+        if (stageSequence.isEmpty()) return@sequence
+
         val width = edited.width
         val height = edited.height
         val working = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -247,103 +332,148 @@ private class ReplayFrameGenerator(
             strokeWidth = max(2f, width * 0.0025f)
         }
         val overlayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
-        val logoRenderer = LogoOutroRenderer(width, height)
-        val holdStageFrames = secondsToFrames(STAGE_HOLD_SECONDS, fps)
-        val crossfadeStageFrames = secondsToFrames(STAGE_CROSSFADE_SECONDS, fps)
-        val blackHoldFrames = secondsToFrames(BLACK_HOLD_SECONDS, fps)
         val blackBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.BLACK) }
+        val logoDurationMs = (timing.logoOutroSec * 1_000.0).toFloat().coerceAtLeast(1f)
+        val logoRenderer = LogoOutroRenderer(width, height, logoDurationMs)
 
-        var localFrameCount = 0
+        var localFrame = 0
 
-        suspend fun SequenceScope<PreparedFrame>.emitFrame(draw: () -> Unit) {
+        suspend fun SequenceScope<PreparedFrame>.emitFrame(labels: List<LabelState>, draw: () -> Unit) {
             draw()
-            val data = working.toI420()
-            yield(PreparedFrame(data, localFrameCount.toLong() * frameDurationUs))
-            localFrameCount += 1
-        }
-
-        try {
-            val holdSplitFrames = secondsToFrames(OPENING_HOLD_SPLIT_SECONDS, fps)
-            for (i in 0 until holdSplitFrames) {
-                emitFrame { drawWipeFrame(working, edited, unedited, width / 2f, dividerPaint) }
-            }
-
-            val toEditedFrames = secondsToFrames(OPENING_WIPE_TO_EDITED_SECONDS, fps)
-            for (i in 0 until toEditedFrames.coerceAtLeast(1)) {
-                val ratio = (i + 1).toFloat() / toEditedFrames.coerceAtLeast(1).toFloat()
-                val eased = fastOutSlowIn.getInterpolation(ratio)
-                val dividerX = (width / 2f) + (width / 2f) * eased
-                emitFrame { drawWipeFrame(working, edited, unedited, dividerX, dividerPaint) }
-            }
-
-            val holdEditedFrames = secondsToFrames(OPENING_HOLD_EDITED_SECONDS, fps)
-            for (i in 0 until holdEditedFrames) {
-                emitFrame { drawBitmapFrame(working, edited) }
-            }
-
-            val toUneditedFrames = secondsToFrames(OPENING_WIPE_TO_UNEDITED_SECONDS, fps)
-            for (i in 0 until toUneditedFrames.coerceAtLeast(1)) {
-                val ratio = (i + 1).toFloat() / toUneditedFrames.coerceAtLeast(1).toFloat()
-                val eased = fastOutSlowIn.getInterpolation(ratio)
-                val dividerX = width.toFloat() * (1f - eased)
-                emitFrame { drawWipeFrame(working, edited, unedited, dividerX, dividerPaint) }
-            }
-
-            val holdUneditedFrames = secondsToFrames(OPENING_HOLD_UNEDITED_SECONDS, fps)
-            for (i in 0 until holdUneditedFrames) {
-                emitFrame { drawBitmapFrame(working, unedited) }
-            }
-
-            val stageSequence = buildCrossfadeStages(bitmaps)
-            for (index in 0 until stageSequence.size - 1) {
-                val current = stageSequence[index]
-                val next = stageSequence[index + 1]
-
-                for (i in 0 until holdStageFrames) {
-                    emitFrame { drawBitmapFrame(working, current) }
-                }
-
-                if (current !== next) {
-                    val frames = crossfadeStageFrames.coerceAtLeast(1)
-                    for (i in 0 until frames) {
-                        val ratio = if (frames == 1) 1f else fastOutSlowIn.getInterpolation(i.toFloat() / (frames - 1).coerceAtLeast(1))
-                        emitFrame { drawCrossfadeFrame(working, current, next, ratio) }
+            if (labels.isNotEmpty()) {
+                val labelCanvas = Canvas(working)
+                labels.forEach { state ->
+                    if (state.alpha > 0.001f) {
+                        drawStageLabel(labelCanvas, state.text, width, height, state.alpha, overlayStyle, state.topRight)
                     }
                 }
             }
+            val data = working.toI420()
+            yield(PreparedFrame(data, localFrame.toLong() * frameDurationUs))
+            localFrame += 1
+        }
 
-            val finalStage = stageSequence.lastOrNull() ?: edited
-            val finalHoldFrames = secondsToFrames(FINAL_HOLD_SECONDS, fps)
-            for (i in 0 until finalHoldFrames) {
-                emitFrame { drawBitmapFrame(working, finalStage) }
+        try {
+            val finalLabel = labelForStage(ReplayStage.FinalEdited)
+            val originalLabel = labelForStage(ReplayStage.Unedited)
+
+            val holdSplitFrames = secondsToFrames(timing.wipeHoldSec, fps).coerceAtLeast(1)
+            repeat(holdSplitFrames) {
+                emitFrame(
+                    listOf(
+                        LabelState(finalLabel, 1f, topRight = true),
+                        LabelState(originalLabel, 1f, topRight = false)
+                    )
+                ) { drawWipeFrame(working, edited, unedited, width / 2f, dividerPaint) }
             }
 
-            val fadeFrames = secondsToFrames(FINAL_FADE_TO_BLACK_SECONDS, fps)
-            for (i in 0 until fadeFrames.coerceAtLeast(1)) {
-                val ratio = (i + 1).toFloat() / fadeFrames.coerceAtLeast(1).toFloat()
-                val eased = fastOutSlowIn.getInterpolation(ratio)
-                emitFrame { drawFadeToBlack(working, finalStage, eased, overlayPaint) }
+            val toEditedFrames = secondsToFrames(timing.wipeToEditedSec, fps)
+            for (i in 0 until toEditedFrames.coerceAtLeast(1)) {
+                val progress = if (toEditedFrames <= 1) 1f else (i + 1).toFloat() / toEditedFrames
+                val eased = fastOutSlowIn.getInterpolation(progress.coerceIn(0f, 1f))
+                val dividerX = (width / 2f) + (width / 2f) * eased
+                emitFrame(
+                    listOf(
+                        LabelState(finalLabel, 1f, topRight = true),
+                        LabelState(originalLabel, (1f - eased).coerceAtLeast(0f), topRight = false)
+                    )
+                ) { drawWipeFrame(working, edited, unedited, dividerX, dividerPaint) }
             }
 
-            for (i in 0 until blackHoldFrames) {
-                emitFrame { drawBitmapFrame(working, blackBitmap) }
+            val holdEditedFrames = secondsToFrames(timing.editedHoldSec, fps)
+            repeat(holdEditedFrames.coerceAtLeast(1)) {
+                emitFrame(listOf(LabelState(finalLabel, 1f, topRight = true))) { drawBitmapFrame(working, edited) }
             }
 
-            val totalLogoFrames = secondsToFrames(LOGO_TOTAL_MS / 1000.0, fps).coerceAtLeast(1)
+            val toOriginalFrames = secondsToFrames(timing.wipeToOriginalSec, fps)
+            for (i in 0 until toOriginalFrames.coerceAtLeast(1)) {
+                val progress = if (toOriginalFrames <= 1) 1f else (i + 1).toFloat() / toOriginalFrames
+                val eased = fastOutSlowIn.getInterpolation(progress.coerceIn(0f, 1f))
+                val dividerX = width.toFloat() * (1f - eased)
+                emitFrame(
+                    listOf(
+                        LabelState(finalLabel, (1f - eased).coerceAtLeast(0f), topRight = true),
+                        LabelState(originalLabel, 1f, topRight = false)
+                    )
+                ) { drawWipeFrame(working, edited, unedited, dividerX, dividerPaint) }
+            }
+
+            val holdOriginalFrames = secondsToFrames(timing.originalHoldSec, fps)
+            repeat(holdOriginalFrames.coerceAtLeast(1)) {
+                emitFrame(listOf(LabelState(originalLabel, 1f, topRight = false))) {
+                    drawBitmapFrame(working, unedited)
+                }
+            }
+
+            stageSequence.windowed(size = 2, step = 1, partialWindows = false).forEach { pair ->
+                val current = pair[0]
+                val next = pair[1]
+                val currentLabel = labelForStage(current.stage)
+                val nextLabel = labelForStage(next.stage)
+
+                val holdFrames = secondsToFrames(timing.stageHoldSec, fps)
+                repeat(holdFrames.coerceAtLeast(1)) {
+                    emitFrame(
+                        listOf(LabelState(currentLabel, 1f, isLabelTopRight(current.stage)))
+                    ) { drawBitmapFrame(working, current.bitmap) }
+                }
+
+                val fadeFrames = secondsToFrames(timing.stageFadeSec, fps)
+                val framesForFade = fadeFrames.coerceAtLeast(1)
+                for (i in 0 until framesForFade) {
+                    val progress = if (framesForFade <= 1) 1f else i.toFloat() / (framesForFade - 1)
+                    val eased = fastOutSlowIn.getInterpolation(progress.coerceIn(0f, 1f))
+                    val labels = listOfNotNull(
+                        LabelState(currentLabel, (1f - eased).coerceAtLeast(0f), isLabelTopRight(current.stage))
+                            .takeIf { it.alpha > 0.01f },
+                        LabelState(nextLabel, eased.coerceAtLeast(0f), isLabelTopRight(next.stage))
+                            .takeIf { it.alpha > 0.01f }
+                    )
+                    emitFrame(labels) { drawCrossfadeFrame(working, current.bitmap, next.bitmap, eased) }
+                }
+            }
+
+            val finalStageEntry = stageSequence.last()
+            val finalStageLabel = labelForStage(finalStageEntry.stage)
+            val finalHoldFrames = secondsToFrames(timing.stageHoldSec, fps)
+            repeat(finalHoldFrames.coerceAtLeast(1)) {
+                emitFrame(
+                    listOf(LabelState(finalStageLabel, 1f, isLabelTopRight(finalStageEntry.stage)))
+                ) { drawBitmapFrame(working, finalStageEntry.bitmap) }
+            }
+
+            val fadeFrames = secondsToFrames(timing.fadeToBlackSec, fps)
+            val fadeFrameCount = fadeFrames.coerceAtLeast(1)
+            for (i in 0 until fadeFrameCount) {
+                val progress = if (fadeFrameCount <= 1) 1f else (i + 1).toFloat() / fadeFrameCount
+                val eased = fastOutSlowIn.getInterpolation(progress.coerceIn(0f, 1f))
+                emitFrame(
+                    listOf(LabelState(finalStageLabel, (1f - eased).coerceAtLeast(0f), isLabelTopRight(finalStageEntry.stage)))
+                ) { drawFadeToBlack(working, finalStageEntry.bitmap, eased, overlayPaint) }
+            }
+
+            val blackHoldFrames = secondsToFrames(timing.blackHoldSec, fps)
+            repeat(blackHoldFrames) {
+                emitFrame(emptyList()) { drawBitmapFrame(working, blackBitmap) }
+            }
+
+            val totalLogoFrames = secondsToFrames(timing.logoOutroSec, fps).coerceAtLeast(1)
             val denominator = max(1, totalLogoFrames - 1)
             for (i in 0 until totalLogoFrames) {
-                val timeMs = LOGO_TOTAL_MS * (i.toFloat() / denominator.toFloat())
-                emitFrame { logoRenderer.render(working, timeMs.coerceIn(0f, LOGO_TOTAL_MS)) }
+                val timeMs = logoDurationMs * (i.toFloat() / denominator.toFloat())
+                emitFrame(emptyList()) {
+                    logoRenderer.render(working, timeMs.coerceIn(0f, logoRenderer.durationMs))
+                }
             }
         } finally {
-            frameCount = localFrameCount
+            frameCount = localFrame
             working.recycle()
             blackBitmap.recycle()
         }
     }
 }
 
-private fun buildCrossfadeStages(bitmaps: Map<ReplayStage, Bitmap>): List<Bitmap> {
+private fun buildCrossfadeStages(bitmaps: Map<ReplayStage, Bitmap>): List<StageFrame> {
     val orderedStages = listOf(
         ReplayStage.Unedited,
         ReplayStage.ColorOnly,
@@ -353,14 +483,42 @@ private fun buildCrossfadeStages(bitmaps: Map<ReplayStage, Bitmap>): List<Bitmap
         ReplayStage.Effects,
         ReplayStage.FinalEdited
     )
-    val sequence = ArrayList<Bitmap>()
+    val sequence = ArrayList<StageFrame>()
     orderedStages.forEach { stage ->
         val bitmap = bitmaps[stage]
-        if (bitmap != null && (sequence.isEmpty() || sequence.last() !== bitmap)) {
-            sequence += bitmap
+        if (bitmap != null && (sequence.isEmpty() || sequence.last().bitmap !== bitmap)) {
+            sequence += StageFrame(stage, bitmap)
         }
     }
-    return if (sequence.isEmpty()) listOfNotNull(bitmaps[ReplayStage.Unedited], bitmaps[ReplayStage.FinalEdited]) else sequence
+    if (sequence.isEmpty()) {
+        val unedited = bitmaps[ReplayStage.Unedited]
+        val edited = bitmaps[ReplayStage.FinalEdited]
+        return listOfNotNull(
+            unedited?.let { StageFrame(ReplayStage.Unedited, it) },
+            edited?.let { StageFrame(ReplayStage.FinalEdited, it) }
+        )
+    }
+    return sequence
+}
+
+private fun labelForStage(stage: ReplayStage): String = when (stage) {
+    ReplayStage.Unedited -> "Original"
+    ReplayStage.ColorOnly -> "Color"
+    ReplayStage.ToneOnly -> "Tone"
+    ReplayStage.ColorGrading -> "Color Grading"
+    ReplayStage.Masks -> "Masks"
+    ReplayStage.Effects -> "Effects"
+    ReplayStage.FinalEdited -> "Final"
+}
+
+private fun isLabelTopRight(stage: ReplayStage): Boolean = when (stage) {
+    ReplayStage.Unedited -> false
+    ReplayStage.ColorOnly -> true
+    ReplayStage.ToneOnly -> true
+    ReplayStage.ColorGrading -> true
+    ReplayStage.Masks -> true
+    ReplayStage.Effects -> true
+    ReplayStage.FinalEdited -> true
 }
 
 private fun drawBitmapFrame(target: Bitmap, source: Bitmap) {
@@ -399,13 +557,10 @@ private fun drawFadeToBlack(target: Bitmap, source: Bitmap, alpha: Float, overla
     canvas.drawRect(0f, 0f, target.width.toFloat(), target.height.toFloat(), overlayPaint)
 }
 
-private fun secondsToFrames(seconds: Double, fps: Int): Int {
-    return max(1, (seconds * fps).roundToInt())
-}
-
 private class LogoOutroRenderer(
     private val width: Int,
-    private val height: Int
+    private val height: Int,
+    totalDurationMs: Float
 ) {
     private val bladePath = Path().apply {
         moveTo(-10f, -150f)
@@ -437,12 +592,20 @@ private class LogoOutroRenderer(
     private val overshoot = PathInterpolator(0.3f, 0f, 0f, 1.3f)
 
     private val bladeCount = blades.size
-    private val bladeHalfDuration = LOGO_BLADE_MS / 2f
-    private val bladeSequenceEnd = LOGO_BLADE_MS + (bladeCount - 1) * LOGO_BLADE_STAGGER_MS
+    private val scaleFactor = if (LOGO_TOTAL_MS_BASE <= 0f) 1f else (totalDurationMs / LOGO_TOTAL_MS_BASE).coerceAtLeast(0.1f)
+    private val bladeDurationMs = LOGO_BLADE_MS_BASE * scaleFactor
+    private val bladeStaggerMs = LOGO_BLADE_STAGGER_MS_BASE * scaleFactor
+    private val centerDurationMs = LOGO_CENTER_MS_BASE * scaleFactor
+    private val holdDurationMs = LOGO_HOLD_MS_BASE * scaleFactor
+    private val fadeDurationMs = LOGO_FADE_MS_BASE * scaleFactor
+    private val bladeHalfDuration = bladeDurationMs / 2f
+    private val bladeSequenceEnd = bladeDurationMs + (bladeCount - 1) * bladeStaggerMs
     private val centerStart = bladeSequenceEnd
-    private val centerEnd = centerStart + LOGO_CENTER_MS
-    private val fadeStart = centerEnd + LOGO_HOLD_MS
-    private val fadeEnd = fadeStart + LOGO_FADE_MS
+    private val centerEnd = centerStart + centerDurationMs
+    private val fadeStart = centerEnd + holdDurationMs
+    private val fadeEnd = fadeStart + fadeDurationMs
+
+    val durationMs: Float = totalDurationMs
 
     fun render(target: Bitmap, timeMs: Float) {
         val canvas = Canvas(target)
@@ -481,19 +644,19 @@ private class LogoOutroRenderer(
     }
 
     private fun computeBladeTravel(timeMs: Float, index: Int): Float {
-        val start = index * LOGO_BLADE_STAGGER_MS
+        val start = index * bladeStaggerMs
         val elapsed = (timeMs - start).coerceAtLeast(0f)
         if (elapsed <= 0f) return 200f
-        if (elapsed >= LOGO_BLADE_MS) return 0f
-        val progress = (elapsed / LOGO_BLADE_MS).coerceIn(0f, 1f)
+        if (elapsed >= bladeDurationMs) return 0f
+        val progress = (elapsed / bladeDurationMs).coerceIn(0f, 1f)
         val eased = overshoot.getInterpolation(progress)
         return (1f - eased.coerceIn(0f, 1f)) * 200f
     }
 
     private fun computeBladeTilt(timeMs: Float, index: Int): Float {
-        val start = index * LOGO_BLADE_STAGGER_MS
+        val start = index * bladeStaggerMs
         val elapsed = timeMs - start
-        if (elapsed <= 0f || elapsed >= LOGO_BLADE_MS) return 0f
+        if (elapsed <= 0f || elapsed >= bladeDurationMs) return 0f
         return if (elapsed <= bladeHalfDuration) {
             val progress = (elapsed / bladeHalfDuration).coerceIn(0f, 1f)
             -15f * fastOutSlowIn.getInterpolation(progress)
@@ -506,21 +669,21 @@ private class LogoOutroRenderer(
     private fun computeCenterScale(timeMs: Float): Float {
         if (timeMs <= centerStart) return 0f
         if (timeMs >= centerEnd) return 1f
-        val progress = ((timeMs - centerStart) / LOGO_CENTER_MS).coerceIn(0f, 1f)
+        val progress = ((timeMs - centerStart) / centerDurationMs).coerceIn(0f, 1f)
         return overshoot.getInterpolation(progress).coerceIn(0f, 1.2f)
     }
 
     private fun computeCenterRotation(timeMs: Float): Float {
         if (timeMs <= centerStart) return 0f
         if (timeMs >= centerEnd) return 360f
-        val progress = ((timeMs - centerStart) / LOGO_CENTER_MS).coerceIn(0f, 1f)
+        val progress = ((timeMs - centerStart) / centerDurationMs).coerceIn(0f, 1f)
         return 360f * fastOutSlowIn.getInterpolation(progress)
     }
 
     private fun computeOverlayAlpha(timeMs: Float): Float {
         if (timeMs <= fadeStart) return 1f
         if (timeMs >= fadeEnd) return 0f
-        val progress = ((timeMs - fadeStart) / LOGO_FADE_MS).coerceIn(0f, 1f)
+        val progress = ((timeMs - fadeStart) / fadeDurationMs).coerceIn(0f, 1f)
         return 1f - fastOutSlowIn.getInterpolation(progress)
     }
 
