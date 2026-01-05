@@ -2841,7 +2841,53 @@ internal fun EditorScreen(
             val cropAspectRatio = if (isCropMode) adjustments.aspectRatio else null
             val configuration = LocalConfiguration.current
             val isTabletLayout = configuration.screenWidthDp >= 900
+            val isCompactHeight = configuration.screenHeightDp < 700
             val tabletControlsWidth = if (configuration.screenWidthDp >= 1200) 320.dp else 280.dp
+            val bottomControlsHeight = when {
+                isTabletLayout -> 0.dp
+                isCompactHeight -> 300.dp
+                else -> 360.dp
+            }
+            val bottomToolbarPadding = if (isCompactHeight) 8.dp else 16.dp
+
+            @Composable
+            fun ExportOverlayButton(
+                modifier: Modifier = Modifier,
+                content: @Composable () -> Unit
+            ) {
+                Box(modifier = modifier) {
+                    content()
+                    ExportButton(
+                        label = "",
+                        sessionHandle = sessionHandle,
+                        adjustments = adjustments,
+                        masks = exportMasks,
+                        originImmichAssetId = galleryItem.immichAssetId,
+                        originImmichAlbumId = galleryItem.immichAlbumId,
+                        sourceFileName = galleryItem.fileName,
+                        isExporting = isExporting,
+                        nativeDispatcher = renderDispatcher,
+                        context = context,
+                        onExportStart = { isExporting = true },
+                        onExportComplete = { success, message ->
+                            isExporting = false
+                            if (success) {
+                                if (message.startsWith("Saved to ")) {
+                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                    statusMessage = null
+                                } else {
+                                    statusMessage = message
+                                }
+                                errorMessage = null
+                            } else {
+                                errorMessage = message
+                                statusMessage = null
+                            }
+                        },
+                        modifier = Modifier.matchParentSize().alpha(0f)
+                    )
+                }
+            }
 
             @Composable
             fun PreviewPane(modifier: Modifier = Modifier) {
@@ -2911,6 +2957,120 @@ internal fun EditorScreen(
                                 endEditInteraction()
                             }
                         )
+
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 16.dp)
+                                .windowInsetsPadding(WindowInsets.statusBars)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            val req = lastImmichSidecarSyncRequest
+                                            if (req != null) {
+                                                uploadIridisSidecarToImmich(req, force = true, showToastOnFailure = true)
+                                            }
+                                            onBackClick()
+                                        }
+                                    },
+                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                                    )
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back",
+                                        tint = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                Surface(
+                                    modifier = Modifier.weight(1f),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
+                                    contentColor = MaterialTheme.colorScheme.onSurface,
+                                    shape = CircleShape
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = galleryItem.fileName,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        if (immichDescriptionSyncEnabled && isImmichSidecarSyncing) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            LoadingIndicator(
+                                                modifier = Modifier.size(12.dp),
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    if (isTabletLayout) {
+                                        ExportOverlayButton {
+                                            IconButton(
+                                                enabled = sessionHandle != 0L && !isExporting,
+                                                onClick = { },
+                                                colors = IconButtonDefaults.filledIconButtonColors(
+                                                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                                                )
+                                            ) {
+                                                Icon(
+                                                    Icons.Filled.Download,
+                                                    contentDescription = "Export",
+                                                    tint = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = { openEditTimeline() },
+                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                                        )
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.History,
+                                            contentDescription = "Edit timeline",
+                                            tint = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                    IconButton(
+                                        enabled = sessionHandle != 0L,
+                                        onClick = { showMetadataDialog = true },
+                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                                        )
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Info,
+                                            contentDescription = "Info",
+                                            tint = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                            }
+                        }
 
                         Surface(
                             modifier = Modifier
@@ -3013,6 +3173,8 @@ internal fun EditorScreen(
                     tonalElevation = 3.dp,
                     shape = if (isTabletLayout) RoundedCornerShape(topStart = 24.dp) else RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
                 ) {
+                    val controlSpacing = if (isCompactHeight) 8.dp else 12.dp
+                    val verticalPadding = if (isCompactHeight) 8.dp else 12.dp
                     AnimatedContent(
                         targetState = panelTab,
                         transitionSpec = {
@@ -3033,8 +3195,8 @@ internal fun EditorScreen(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .background(color = MaterialTheme.colorScheme.surface)
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                                .padding(horizontal = 16.dp, vertical = verticalPadding),
+                            verticalArrangement = Arrangement.spacedBy(controlSpacing)
                         ) {
                             errorMessage?.let { Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                             statusMessage?.let { Text(text = it, color = Color(0xFF1B5E20), style = MaterialTheme.typography.bodySmall) }
@@ -3101,45 +3263,6 @@ internal fun EditorScreen(
             }
 
             @Composable
-            fun ExportOverlayButton(
-                modifier: Modifier = Modifier,
-                content: @Composable () -> Unit
-            ) {
-                Box(modifier = modifier) {
-                    content()
-                    ExportButton(
-                        label = "",
-                        sessionHandle = sessionHandle,
-                        adjustments = adjustments,
-                        masks = exportMasks,
-                        originImmichAssetId = galleryItem.immichAssetId,
-                        originImmichAlbumId = galleryItem.immichAlbumId,
-                        sourceFileName = galleryItem.fileName,
-                        isExporting = isExporting,
-                        nativeDispatcher = renderDispatcher,
-                        context = context,
-                        onExportStart = { isExporting = true },
-                        onExportComplete = { success, message ->
-                            isExporting = false
-                            if (success) {
-                                if (message.startsWith("Saved to ")) {
-                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                                    statusMessage = null
-                                } else {
-                                    statusMessage = message
-                                }
-                                errorMessage = null
-                            } else {
-                                errorMessage = message
-                                statusMessage = null
-                            }
-                        },
-                        modifier = Modifier.matchParentSize().alpha(0f)
-                    )
-                }
-            }
-
-            @Composable
             fun PanelToolbar() {
                 HorizontalFloatingToolbar(
                     expanded = true,
@@ -3201,141 +3324,60 @@ internal fun EditorScreen(
 
             Box(modifier = Modifier.fillMaxSize()) {
 
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 8.dp, vertical = 8.dp)
-                                .windowInsetsPadding(WindowInsets.statusBars),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(
-                                onClick = {
-                                    coroutineScope.launch {
-                                        val req = lastImmichSidecarSyncRequest
-                                        if (req != null) {
-                                            uploadIridisSidecarToImmich(req, force = true, showToastOnFailure = true)
-                                        }
-                                        onBackClick()
-                                    }
-                                },
-                                colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))
-                            ) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurface)
-                            }
-                            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                                Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f), shape = CircleShape) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = galleryItem.fileName,
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        if (immichDescriptionSyncEnabled && isImmichSidecarSyncing) {
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            LoadingIndicator(
-                                                modifier = Modifier.size(12.dp),
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (isTabletLayout) {
-                                    ExportOverlayButton(
-                                        modifier = Modifier.padding(end = 8.dp)
-                                    ) {
-                                        IconButton(
-                                            enabled = sessionHandle != 0L && !isExporting,
-                                            onClick = { },
-                                            colors = IconButtonDefaults.filledIconButtonColors(
-                                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
-                                            )
-                                        ) {
-                                            Icon(
-                                                Icons.Filled.Download,
-                                                contentDescription = "Export",
-                                                tint = MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
-                                    }
-                                }
-                                IconButton(
-                                    onClick = { openEditTimeline() },
-                                    colors = IconButtonDefaults.filledIconButtonColors(
-                                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
-                                    )
-                                ) {
-                                    Icon(Icons.Filled.History, contentDescription = "Edit timeline", tint = MaterialTheme.colorScheme.onSurface)
-                                }
-                                IconButton(
-                                    enabled = sessionHandle != 0L,
-                                    onClick = { showMetadataDialog = true },
-                                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))
-                                ) {
-                                    Icon(Icons.Filled.Info, contentDescription = "Info", tint = MaterialTheme.colorScheme.onSurface)
-                                }
-                            }
-                        }
-
-                        Box(modifier = Modifier
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier
                             .fillMaxWidth()
-                            .weight(1f)) {
-                            if (isTabletLayout) {
-                                Row(modifier = Modifier.fillMaxSize()) {
-                                    PreviewPane(
-                                        Modifier
-                                            .weight(1f)
-                                            .fillMaxHeight()
-                                    )
-                                    Column(
-                                        modifier = Modifier
-                                            .width(tabletControlsWidth)
-                                            .fillMaxHeight()
-                                    ) {
-                                        ControlsPane(
-                                            Modifier
-                                                .weight(1f)
-                                                .fillMaxWidth()
-                                        )
-                                        TabletBottomBar(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                        )
-                                    }
-                                }
-                            } else {
-                                Column(modifier = Modifier.fillMaxSize()) {
-                                    PreviewPane(
-                                        Modifier
-                                            .weight(1f)
-                                            .fillMaxWidth()
-                                    )
+                            .weight(1f)
+                    ) {
+                        if (isTabletLayout) {
+                            Row(modifier = Modifier.fillMaxSize()) {
+                                PreviewPane(
+                                    Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                )
+                                Column(
+                                    modifier = Modifier
+                                        .width(tabletControlsWidth)
+                                        .fillMaxHeight()
+                                ) {
                                     ControlsPane(
                                         Modifier
+                                            .weight(1f)
                                             .fillMaxWidth()
-                                            .height(360.dp)
+                                    )
+                                    TabletBottomBar(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
                                     )
                                 }
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomCenter)
-                                        .padding(bottom = 16.dp)
-                                        .windowInsetsPadding(WindowInsets.navigationBars)
-                                        .zIndex(1f)
-                                ) {
-                                    PanelToolbar()
-                                }
+                            }
+                        } else {
+                            Column(modifier = Modifier.fillMaxSize()) {
+                                PreviewPane(
+                                    Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth()
+                                )
+                                ControlsPane(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .height(bottomControlsHeight)
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = bottomToolbarPadding)
+                                    .windowInsetsPadding(WindowInsets.navigationBars)
+                                    .zIndex(1f)
+                            ) {
+                                PanelToolbar()
                             }
                         }
                     }
+                }
 
 
                 Surface(
