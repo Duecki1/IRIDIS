@@ -82,6 +82,7 @@ Latest pre-release builds: https://github.com/Duecki1/IRIDIS/releases
 - Widget.
 - Mask tagging and naming.
 - Copy and paste adjustments (including ai environment masks)
+- Generate Replay video of edits
 
 ## Tech stack
 
@@ -128,12 +129,7 @@ Inspired by RapidRAW: https://github.com/CyberTimon/RapidRAW
 - Save calculated AI Masks
 - app should only open once
 - folder management
-- maybe video of adjustments to export
 - lens corrections?
-- Make the curves on the right, left side the L RGB  and reset (also add aniamtion when switching like bottom to top)
-- make the hsl more compact by putting hte colors on the left side in a vertical row
-- maybe try magnetic scrolling
-- fix color grading wheels tab on tablets
 
 ## License
 
