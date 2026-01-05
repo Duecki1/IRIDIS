@@ -140,7 +140,7 @@ internal class Mp4FrameEncoder(
     private fun calculateBitRate(): Int {
         val base = width.toLong() * height.toLong() * fps.toLong() * 6L
         val min = 1_500_000L
-        val max = 25_000_000L
+        val max = 50_000_000L
         return base.coerceAtLeast(min).coerceAtMost(max).toInt()
     }
 

@@ -30,7 +30,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 private const val DEFAULT_REPLAY_FPS = 30
-private const val DEFAULT_REPLAY_MAX_DIM = 1080
+private const val DEFAULT_REPLAY_MAX_DIM = 1440
 private val DATE_FORMAT = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
 
 private const val LOGO_TOTAL_MS_BASE = 1_200f

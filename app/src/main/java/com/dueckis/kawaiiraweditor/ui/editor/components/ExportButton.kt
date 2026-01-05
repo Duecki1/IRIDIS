@@ -5,8 +5,13 @@
 
 package com.dueckis.kawaiiraweditor.ui.editor.components
 
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Build
 import android.util.Base64
 import androidx.compose.foundation.layout.Arrangement
@@ -31,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.dueckis.kawaiiraweditor.data.immich.ImmichAuthMode
 import com.dueckis.kawaiiraweditor.data.immich.ImmichConfig
 import com.dueckis.kawaiiraweditor.data.immich.ImmichUploadResult
@@ -192,7 +198,13 @@ internal fun ExportButton(
                 }
                 exportProgressMessage = null
                 if (result.success && result.uri != null) {
-                    onExportComplete(true, "Saved to ${result.uri}")
+                    val shareShown = tryShareReplayVideo(context, result.uri)
+                    val message = if (shareShown) {
+                        "Saved to ${result.uri}"
+                    } else {
+                        "Saved to ${result.uri}. Unable to open share sheet."
+                    }
+                    onExportComplete(true, message)
                 } else {
                     onExportComplete(false, result.errorMessage ?: "Replay export failed.")
                 }
@@ -463,6 +475,27 @@ internal fun ExportButton(
         val message = exportProgressMessage
             ?: if (pendingImmichConfig != null) "Uploading to Immich..." else "Saving export..."
         ExportProgressDialog(message = message)
+    }
+}
+
+private fun tryShareReplayVideo(context: Context, uri: Uri): Boolean {
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "video/mp4"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        clipData = ClipData.newUri(context.contentResolver, "IRIDIS Replay", uri)
+    }
+    val chooser = Intent.createChooser(shareIntent, "Share replay")
+    if (context !is Activity) {
+        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    return try {
+        ContextCompat.startActivity(context, chooser, null)
+        true
+    } catch (_: ActivityNotFoundException) {
+        false
+    } catch (_: Throwable) {
+        false
     }
 }
 
