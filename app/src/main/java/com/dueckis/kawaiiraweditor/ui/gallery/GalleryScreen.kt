@@ -120,6 +120,7 @@ import com.dueckis.kawaiiraweditor.data.immich.downloadImmichOriginal
 import com.dueckis.kawaiiraweditor.data.immich.downloadImmichThumbnail
 import com.dueckis.kawaiiraweditor.data.immich.fetchImmichAlbumAssets
 import com.dueckis.kawaiiraweditor.data.immich.fetchImmichAlbums
+import com.dueckis.kawaiiraweditor.data.media.SupportedRawExtensions
 import com.dueckis.kawaiiraweditor.data.media.decodeToBitmap
 import com.dueckis.kawaiiraweditor.data.media.displayNameForUri
 import com.dueckis.kawaiiraweditor.data.media.parseRawMetadataForSearch
@@ -396,7 +397,10 @@ internal fun GalleryScreen(
         } else {
             immichAlbumAssets = emptyList()
             val loaded = fetchImmichAlbumAssets(immichConfig, immichSelectedAlbum!!.id)
-            immichAlbumAssets = loaded ?: emptyList()
+            immichAlbumAssets =
+                (loaded ?: emptyList()).filter { asset ->
+                    SupportedRawExtensions.hasSupportedExtension(asset.fileName)
+                }
             if (loaded == null) {
                 immichError = "Could not load Immich album."
             }
@@ -1658,7 +1662,7 @@ internal fun GalleryScreen(
                             ) {
                                 Text(
                                     text = if (queryLower.isNotBlank()) "No Immich matches"
-                                    else "No Immich images found",
+                                    else "No raw files found",
                                     style = MaterialTheme.typography.titleLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
