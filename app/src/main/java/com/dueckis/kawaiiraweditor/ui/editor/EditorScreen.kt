@@ -191,7 +191,7 @@ private data class PendingSubjectMaskCreation(
 internal fun EditorScreen(
     galleryItem: GalleryItem?,
     lowQualityPreviewEnabled: Boolean,
-    environmentMaskingEnabled: Boolean,
+    aiMaskingEnabled: Boolean,
     toneCurveProfileSwitcherEnabled: Boolean,
     immichDescriptionSyncEnabled: Boolean,
     initialPanelTab: EditorPanelTab = EditorPanelTab.Adjustments,
@@ -1308,9 +1308,11 @@ internal fun EditorScreen(
     }
 
     fun masksForRender(source: List<MaskState>): List<MaskState> {
-        if (environmentMaskingEnabled) return source
+        if (aiMaskingEnabled) return source
         return source.mapNotNull { mask ->
-            val remaining = mask.subMasks.filterNot { it.type == SubMaskType.AiEnvironment.id }
+            val remaining = mask.subMasks.filterNot {
+                it.type == SubMaskType.AiEnvironment.id || it.type == SubMaskType.AiSubject.id
+            }
             if (remaining.isEmpty()) null else mask.copy(subMasks = remaining)
         }
     }
@@ -1344,7 +1346,7 @@ internal fun EditorScreen(
     }
 
     var exportMasks by remember { mutableStateOf<List<MaskState>>(emptyList()) }
-    LaunchedEffect(masks, currentMaskTransform, environmentMaskingEnabled) {
+    LaunchedEffect(masks, currentMaskTransform, aiMaskingEnabled) {
         exportMasks =
             withContext(Dispatchers.Default) {
                 masksForRenderWithAiRemap(masks, currentMaskTransform, adjustments)
@@ -2320,13 +2322,15 @@ internal fun EditorScreen(
     val selectedMaskForEdit = masks.firstOrNull { it.id == selectedMaskId }
     val selectedSubMaskForEdit = selectedMaskForEdit?.subMasks?.firstOrNull { it.id == selectedSubMaskId }
     var selectedMaskForOverlay by remember { mutableStateOf<MaskState?>(null) }
-    LaunchedEffect(selectedMaskId, masks, currentMaskTransform, environmentMaskingEnabled) {
+    LaunchedEffect(selectedMaskId, masks, currentMaskTransform, aiMaskingEnabled) {
         val baseMask =
             selectedMaskForEdit?.let { mask ->
-                if (environmentMaskingEnabled) {
+                if (aiMaskingEnabled) {
                     mask
                 } else {
-                    val remaining = mask.subMasks.filterNot { it.type == SubMaskType.AiEnvironment.id }
+                    val remaining = mask.subMasks.filterNot {
+                        it.type == SubMaskType.AiEnvironment.id || it.type == SubMaskType.AiSubject.id
+                    }
                     if (remaining.isEmpty()) null else mask.copy(subMasks = remaining)
                 }
             }
@@ -2342,7 +2346,10 @@ internal fun EditorScreen(
     val isMaskMode = panelTab == EditorPanelTab.Masks
     val isInteractiveMaskingEnabled =
         isMaskMode && isPaintingMask && selectedMaskId != null && selectedSubMaskId != null &&
-                (selectedSubMaskForEdit?.type == SubMaskType.Brush.id || selectedSubMaskForEdit?.type == SubMaskType.AiSubject.id)
+                (
+                    selectedSubMaskForEdit?.type == SubMaskType.Brush.id ||
+                        (aiMaskingEnabled && selectedSubMaskForEdit?.type == SubMaskType.AiSubject.id)
+                )
 
     val onMaskTap: ((MaskPoint) -> Unit)? =
         if (!isMaskMode || maskTapMode == MaskTapMode.None) null
@@ -2422,8 +2429,8 @@ internal fun EditorScreen(
         showMaskOverlay = true
     }
 
-    val aiSubjectMaskGenerator = remember { AiSubjectMaskGenerator(context) }
-    val aiEnvironmentMaskGenerator = remember(environmentMaskingEnabled) { if (environmentMaskingEnabled) AiEnvironmentMaskGenerator(context) else null }
+    val aiSubjectMaskGenerator = remember(aiMaskingEnabled) { if (aiMaskingEnabled) AiSubjectMaskGenerator(context) else null }
+    val aiEnvironmentMaskGenerator = remember(aiMaskingEnabled) { if (aiMaskingEnabled) AiEnvironmentMaskGenerator(context) else null }
 
     var aiEnvironmentSourceBitmap by remember(galleryItem.projectId) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(sessionHandle) {
@@ -2474,6 +2481,7 @@ internal fun EditorScreen(
     }
 
     fun createMaskForType(type: SubMaskType) {
+        if (!aiMaskingEnabled && (type == SubMaskType.AiEnvironment || type == SubMaskType.AiSubject)) return
         val newMaskId = UUID.randomUUID().toString()
         val newSubId = UUID.randomUUID().toString()
         val subMask = newSubMaskState(newSubId, SubMaskMode.Additive, type)
@@ -2500,6 +2508,7 @@ internal fun EditorScreen(
     }
 
     fun addSubMaskToMask(maskId: String, mode: SubMaskMode, type: SubMaskType) {
+        if (!aiMaskingEnabled && (type == SubMaskType.AiEnvironment || type == SubMaskType.AiSubject)) return
         if (masks.none { it.id == maskId }) return
         val newSubId = UUID.randomUUID().toString()
         masks =
@@ -2515,7 +2524,8 @@ internal fun EditorScreen(
 
     fun startSubjectModelDownloadAndCreateMask(pending: PendingSubjectMaskCreation) {
         coroutineScope.launch {
-            val ready = runCatching { aiSubjectMaskGenerator.ensureModelReady() }.isSuccess
+            val generator = aiSubjectMaskGenerator ?: return@launch
+            val ready = runCatching { generator.ensureModelReady() }.isSuccess
             if (!ready) return@launch
             if (pending.createNewMask) {
                 createMaskForType(pending.type)
@@ -2532,12 +2542,13 @@ internal fun EditorScreen(
         val bmp = editedBitmap ?: return
         if (points.size < 3) return
 
+        val generator = aiSubjectMaskGenerator ?: return
         coroutineScope.launch {
             isGeneratingAiMask = true
             statusMessage = "Generating subject mask..."
             val dataUrl =
                 runCatching {
-                    aiSubjectMaskGenerator.generateSubjectMaskDataUrl(
+                    generator.generateSubjectMaskDataUrl(
                         previewBitmap = bmp,
                         lassoPoints = points.map { NormalizedPoint(it.x, it.y) }
                     )
@@ -2578,7 +2589,7 @@ internal fun EditorScreen(
     }
 
     fun startGenerateAiEnvironmentMask() {
-        if (!environmentMaskingEnabled) return
+        if (!aiMaskingEnabled) return
         val maskId = selectedMaskId ?: return
         val subId = selectedSubMaskId ?: return
         val handle = sessionHandle
@@ -2594,7 +2605,7 @@ internal fun EditorScreen(
             statusMessage = "Generating ${category.label.lowercase()} mask..."
             val result =
                 runCatching {
-                    val generator = aiEnvironmentMaskGenerator ?: error("Environment masking disabled.")
+                    val generator = aiEnvironmentMaskGenerator ?: error("AI masking disabled.")
                     val srcBmp = getAiEnvironmentSourceBitmap(handle) ?: error("Failed to render environment mask source.")
                     generator.generateEnvironmentMaskDataUrl(
                         previewBitmap = srcBmp,
@@ -2641,7 +2652,7 @@ internal fun EditorScreen(
     }
 
     fun startDetectAiEnvironmentCategories() {
-        if (!environmentMaskingEnabled) return
+        if (!aiMaskingEnabled) return
         if (isDetectingAiEnvironmentCategories) return
         if (detectedAiEnvironmentCategories != null) return
         val handle = sessionHandle
@@ -2702,7 +2713,7 @@ internal fun EditorScreen(
         startSubjectMaskGeneration(points)
     }
 
-    val onGenerateAiEnvironmentMask: (() -> Unit)? = if (!environmentMaskingEnabled) null else fun() {
+    val onGenerateAiEnvironmentMask: (() -> Unit)? = if (!aiMaskingEnabled) null else fun() {
         val maskId = selectedMaskId ?: return
         val subId = selectedSubMaskId ?: return
         val sub =
@@ -2714,7 +2725,7 @@ internal fun EditorScreen(
         startGenerateAiEnvironmentMask()
     }
 
-    val onDetectAiEnvironmentCategories: (() -> Unit)? = if (!environmentMaskingEnabled) null else fun() {
+    val onDetectAiEnvironmentCategories: (() -> Unit)? = if (!aiMaskingEnabled) null else fun() {
         if (isDetectingAiEnvironmentCategories) return
         if (detectedAiEnvironmentCategories != null) return
         val handle = sessionHandle
@@ -3070,7 +3081,7 @@ internal fun EditorScreen(
                                 onRotationDraftChange = { rotationDraft = it },
                                 isStraightenActive = isStraightenActive,
                                 onStraightenActiveChange = { isStraightenActive = it },
-                                environmentMaskingEnabled = environmentMaskingEnabled,
+                                aiMaskingEnabled = aiMaskingEnabled,
                                 isGeneratingAiMask = isGeneratingAiMask,
                                 onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask,
                                 detectedAiEnvironmentCategories = detectedAiEnvironmentCategories,

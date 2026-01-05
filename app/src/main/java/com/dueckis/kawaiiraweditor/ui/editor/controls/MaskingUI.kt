@@ -105,7 +105,7 @@ internal fun MaskingUI(
     onEraserSoftnessChange: (Float) -> Unit,
     maskTapMode: MaskTapMode,
     onMaskTapModeChange: (MaskTapMode) -> Unit,
-    environmentMaskingEnabled: Boolean,
+    aiMaskingEnabled: Boolean,
     isGeneratingAiMask: Boolean,
     onGenerateAiEnvironmentMask: (() -> Unit)?,
     detectedAiEnvironmentCategories: List<AiEnvironmentCategory>?,
@@ -116,11 +116,15 @@ internal fun MaskingUI(
     histogramData: HistogramData?,
     maskRenameTags: List<String>
 ) {
-    val availableSubMaskTypes = remember(environmentMaskingEnabled) {
-        if (environmentMaskingEnabled) {
-            listOf(SubMaskType.AiEnvironment, SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial)
-        } else {
-            listOf(SubMaskType.AiSubject, SubMaskType.Brush, SubMaskType.Linear, SubMaskType.Radial)
+    val availableSubMaskTypes = remember(aiMaskingEnabled) {
+        buildList {
+            if (aiMaskingEnabled) {
+                add(SubMaskType.AiEnvironment)
+                add(SubMaskType.AiSubject)
+            }
+            add(SubMaskType.Brush)
+            add(SubMaskType.Linear)
+            add(SubMaskType.Radial)
         }
     }
     var renamingMaskId by remember { mutableStateOf<String?>(null) }
@@ -599,7 +603,7 @@ internal fun MaskingUI(
                                 onMaskTapModeChange = onMaskTapModeChange,
                                 onPaintingMaskChange = onPaintingMaskChange,
                                 onShowMaskOverlayChange = onShowMaskOverlayChange,
-                                environmentMaskingEnabled = environmentMaskingEnabled,
+                                aiMaskingEnabled = aiMaskingEnabled,
                                 detectedAiEnvironmentCategories = detectedAiEnvironmentCategories,
                                 isDetectingAiEnvironmentCategories = isDetectingAiEnvironmentCategories,
                                 onDetectAiEnvironmentCategories = onDetectAiEnvironmentCategories,

@@ -10,7 +10,9 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.SegmentedButton
@@ -36,10 +38,7 @@ import com.dueckis.kawaiiraweditor.data.model.adjustmentSections
 import com.dueckis.kawaiiraweditor.data.model.vignetteSection
 import com.dueckis.kawaiiraweditor.domain.HistogramData
 import com.dueckis.kawaiiraweditor.ui.components.AdjustmentSlider
-import com.dueckis.kawaiiraweditor.ui.components.PanelSectionCard
 import com.dueckis.kawaiiraweditor.ui.components.ToneMapperSection
-
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun EditorControlsContent(
@@ -80,7 +79,7 @@ internal fun EditorControlsContent(
     onRotationDraftChange: (Float?) -> Unit,
     isStraightenActive: Boolean,
     onStraightenActiveChange: (Boolean) -> Unit,
-    environmentMaskingEnabled: Boolean,
+    aiMaskingEnabled: Boolean,
     isGeneratingAiMask: Boolean,
     onGenerateAiEnvironmentMask: (() -> Unit)?,
     detectedAiEnvironmentCategories: List<AiEnvironmentCategory>?,
@@ -132,47 +131,48 @@ internal fun EditorControlsContent(
                         var selectedLightToneTab by remember { mutableIntStateOf(0) }
 
                         if (lightToneTabs.isNotEmpty()) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            SingleChoiceSegmentedButtonRow(
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                                    lightToneTabs.forEachIndexed { index, title ->
-                                        SegmentedButton(
-                                            selected = selectedLightToneTab == index,
-                                            onClick = { selectedLightToneTab = index },
-                                            shape = SegmentedButtonDefaults.itemShape(
-                                                index = index,
-                                                count = lightToneTabs.size
-                                            ),
-                                            label = { Text(title) }
-                                        )
-                                    }
+                                lightToneTabs.forEachIndexed { index, title ->
+                                    SegmentedButton(
+                                        selected = selectedLightToneTab == index,
+                                        onClick = { selectedLightToneTab = index },
+                                        shape = SegmentedButtonDefaults.itemShape(
+                                            index = index,
+                                            count = lightToneTabs.size
+                                        ),
+                                        label = { Text(title) }
+                                    )
                                 }
+                            }
 
-                                AnimatedContent(targetState = selectedLightToneTab, label = "LightToneTabs") { tabIndex ->
-                                    val safeIndex = tabIndex.coerceIn(0, lightToneTabs.lastIndex)
-                                    val (sectionTitle, controls) = adjustmentSections[safeIndex]
+                            Spacer(modifier = Modifier.height(16.dp))
 
-                                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                        if (sectionTitle.equals("Basic", ignoreCase = true) && showToneCurveProfileSwitcher) {
-                                            PanelSectionCard(title = "Tone Curve Profile") {
-                                                ToneMapperSection(
-                                                    toneMapper = adjustments.toneMapper,
-                                                    exposure = adjustments.exposure,
-                                                    onToneMapperChange = { mapper ->
-                                                        onAdjustmentsChange(adjustments.withToneMapper(mapper))
-                                                    },
-                                                    onExposureChange = { value ->
-                                                        onAdjustmentsChange(adjustments.copy(exposure = value))
-                                                    },
-                                                    onInteractionStart = onBeginEditInteraction,
-                                                    onInteractionEnd = onEndEditInteraction
-                                                )
-                                            }
+                            AnimatedContent(targetState = selectedLightToneTab, label = "LightToneTabs") { tabIndex ->
+                                val safeIndex = tabIndex.coerceIn(0, lightToneTabs.lastIndex)
+                                val (sectionTitle, controls) = adjustmentSections[safeIndex]
+
+                                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    if (sectionTitle.equals("Basic", ignoreCase = true) && showToneCurveProfileSwitcher) {
+                                        ExpressiveSectionContainer(title = "Tone Curve Profile") {
+                                            ToneMapperSection(
+                                                toneMapper = adjustments.toneMapper,
+                                                exposure = adjustments.exposure,
+                                                onToneMapperChange = { mapper ->
+                                                    onAdjustmentsChange(adjustments.withToneMapper(mapper))
+                                                },
+                                                onExposureChange = { value ->
+                                                    onAdjustmentsChange(adjustments.copy(exposure = value))
+                                                },
+                                                onInteractionStart = onBeginEditInteraction,
+                                                onInteractionEnd = onEndEditInteraction
+                                            )
                                         }
+                                    }
 
-                                        PanelSectionCard(title = sectionTitle) {
+                                    ExpressiveSectionContainer(title = sectionTitle) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                                             controls.forEach { control ->
                                                 val currentValue = adjustments.valueFor(control.field)
                                                 AdjustmentSlider(
@@ -257,7 +257,7 @@ internal fun EditorControlsContent(
                             onEraserSoftnessChange = onEraserSoftnessChange,
                             maskTapMode = maskTapMode,
                             onMaskTapModeChange = onMaskTapModeChange,
-                            environmentMaskingEnabled = environmentMaskingEnabled,
+                            aiMaskingEnabled = aiMaskingEnabled,
                             isGeneratingAiMask = isGeneratingAiMask,
                             onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask,
                             detectedAiEnvironmentCategories = detectedAiEnvironmentCategories,

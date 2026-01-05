@@ -19,12 +19,6 @@ internal class AppPreferences(context: Context) {
         prefs.edit().putBoolean(KEY_AUTOMATIC_TAGGING_ENABLED, enabled).apply()
     }
 
-    fun isEnvironmentMaskingEnabled(): Boolean = prefs.getBoolean(KEY_ENVIRONMENT_MASKING_ENABLED, false)
-
-    fun setEnvironmentMaskingEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_ENVIRONMENT_MASKING_ENABLED, enabled).apply()
-    }
-
     fun isToneCurveProfileSwitcherEnabled(): Boolean =
         prefs.getBoolean(KEY_TONE_CURVE_PROFILE_SWITCHER_ENABLED, false)
 
@@ -100,6 +94,12 @@ internal class AppPreferences(context: Context) {
         Immich
     }
 
+    enum class AiAssistanceLevel {
+        None,
+        SelectionsOnly,
+        All
+    }
+
     fun getImmichWorkMode(): ImmichWorkMode {
         val raw = prefs.getString(KEY_IMMICH_WORK_MODE, null)?.trim().orEmpty()
         if (raw.equals("immich", ignoreCase = true)) return ImmichWorkMode.Immich
@@ -126,6 +126,30 @@ internal class AppPreferences(context: Context) {
 
     fun setImmichDescriptionSyncEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_IMMICH_DESCRIPTION_SYNC_ENABLED, enabled).apply()
+    }
+
+    fun isTutorialCompleted(): Boolean = prefs.getBoolean(KEY_TUTORIAL_COMPLETED, false)
+
+    fun setTutorialCompleted(completed: Boolean) {
+        prefs.edit().putBoolean(KEY_TUTORIAL_COMPLETED, completed).apply()
+    }
+
+    fun getAiAssistanceLevel(): AiAssistanceLevel {
+        val raw = prefs.getString(KEY_AI_ASSISTANCE_LEVEL, "").orEmpty().lowercase()
+        return when (raw) {
+            "none" -> AiAssistanceLevel.None
+            "selections_only" -> AiAssistanceLevel.SelectionsOnly
+            else -> AiAssistanceLevel.All
+        }
+    }
+
+    fun setAiAssistanceLevel(level: AiAssistanceLevel) {
+        val raw = when (level) {
+            AiAssistanceLevel.None -> "none"
+            AiAssistanceLevel.SelectionsOnly -> "selections_only"
+            AiAssistanceLevel.All -> "all"
+        }
+        prefs.edit().putString(KEY_AI_ASSISTANCE_LEVEL, raw).apply()
     }
     fun getMaskRenameTags(): List<String> {
         val raw = prefs.getString(KEY_MASK_RENAME_TAGS, null) ?: return emptyList()
@@ -174,7 +198,6 @@ internal class AppPreferences(context: Context) {
         private const val KEY_MASK_RENAME_TAGS = "mask_rename_tags"
         private const val KEY_LOW_QUALITY_PREVIEW_ENABLED = "low_quality_preview_enabled"
         private const val KEY_AUTOMATIC_TAGGING_ENABLED = "automatic_tagging_enabled"
-        private const val KEY_ENVIRONMENT_MASKING_ENABLED = "environment_masking_enabled"
         private const val KEY_TONE_CURVE_PROFILE_SWITCHER_ENABLED = "tone_curve_profile_switcher_enabled"
         private const val KEY_OPEN_EDITOR_ON_IMPORT_ENABLED = "open_editor_on_import_enabled"
         private const val KEY_IMMICH_SERVER_URL = "immich_server_url"
@@ -191,6 +214,8 @@ internal class AppPreferences(context: Context) {
         private const val KEY_GALLERY_SORT_FIELD = "gallery_sort_field"
         private const val KEY_GALLERY_SORT_ORDER = "gallery_sort_order"
         private const val KEY_GALLERY_GRID_COLUMNS = "gallery_grid_columns"
+        private const val KEY_TUTORIAL_COMPLETED = "tutorial_completed"
+        private const val KEY_AI_ASSISTANCE_LEVEL = "ai_assistance_level"
         private const val DEFAULT_IMMICH_LOCAL_EXPORT_RELATIVE_PATH = "Pictures/IRIDIS/Immich"
         private val DEFAULT_MASK_RENAME_TAGS = listOf(
             "Subject",

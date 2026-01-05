@@ -59,6 +59,9 @@ import com.dueckis.kawaiiraweditor.domain.ai.ClipAutoTagger
 import com.dueckis.kawaiiraweditor.ui.editor.EditorScreen
 import com.dueckis.kawaiiraweditor.ui.gallery.GalleryScreen
 import com.dueckis.kawaiiraweditor.ui.settings.SettingsScreen
+import com.dueckis.kawaiiraweditor.ui.tutorial.TutorialDialog
+import com.dueckis.kawaiiraweditor.ui.tutorial.TutorialOption
+import com.dueckis.kawaiiraweditor.ui.tutorial.TutorialStep
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.channels.Channel
@@ -94,7 +97,7 @@ fun KawaiiApp(
     val editorDismissProgress = remember { Animatable(0f) }
     var lowQualityPreviewEnabled by remember { mutableStateOf(appPreferences.isLowQualityPreviewEnabled()) }
     var automaticTaggingEnabled by remember { mutableStateOf(appPreferences.isAutomaticTaggingEnabled()) }
-    var environmentMaskingEnabled by remember { mutableStateOf(appPreferences.isEnvironmentMaskingEnabled()) }
+    var aiAssistanceLevel by remember { mutableStateOf(appPreferences.getAiAssistanceLevel()) }
     var toneCurveProfileSwitcherEnabled by remember {
         mutableStateOf(appPreferences.isToneCurveProfileSwitcherEnabled())
     }
@@ -107,6 +110,11 @@ fun KawaiiApp(
     var immichDescriptionSyncEnabled by remember {
         mutableStateOf(appPreferences.isImmichDescriptionSyncEnabled())
     }
+
+    val tutorialSteps = remember { buildTutorialSteps() }
+    var tutorialCompleted by remember { mutableStateOf(appPreferences.isTutorialCompleted()) }
+    var tutorialStepIndex by remember { mutableIntStateOf(0) }
+    val tutorialAnswers = remember { mutableStateMapOf<String, String>() }
 
     appPreferences.ensureDefaultMaskRenameTagsSeeded()
     var maskRenameTags by remember { mutableStateOf(appPreferences.getMaskRenameTags()) }
@@ -473,7 +481,7 @@ fun KawaiiApp(
                         EditorScreen(
                             galleryItem = selectedItem,
                             lowQualityPreviewEnabled = lowQualityPreviewEnabled,
-                            environmentMaskingEnabled = environmentMaskingEnabled,
+                            aiMaskingEnabled = aiAssistanceLevel != AppPreferences.AiAssistanceLevel.None,
                             toneCurveProfileSwitcherEnabled = toneCurveProfileSwitcherEnabled,
                             immichDescriptionSyncEnabled = immichDescriptionSyncEnabled,
                             initialPanelTab = editorInitialTab ?: EditorPanelTab.Adjustments,
@@ -503,7 +511,7 @@ fun KawaiiApp(
                     SettingsScreen(
                         lowQualityPreviewEnabled = lowQualityPreviewEnabled,
                         automaticTaggingEnabled = automaticTaggingEnabled,
-                        environmentMaskingEnabled = environmentMaskingEnabled,
+                        aiAssistanceLevel = aiAssistanceLevel,
                         toneCurveProfileSwitcherEnabled = toneCurveProfileSwitcherEnabled,
                         openEditorOnImportEnabled = openEditorOnImportEnabled,
                         maskRenameTags = maskRenameTags,
@@ -519,9 +527,9 @@ fun KawaiiApp(
                             automaticTaggingEnabled = enabled
                             appPreferences.setAutomaticTaggingEnabled(enabled)
                         },
-                        onEnvironmentMaskingEnabledChange = { enabled ->
-                            environmentMaskingEnabled = enabled
-                            appPreferences.setEnvironmentMaskingEnabled(enabled)
+                        onAiAssistanceLevelChange = { level ->
+                            aiAssistanceLevel = level
+                            appPreferences.setAiAssistanceLevel(level)
                         },
                         onToneCurveProfileSwitcherEnabledChange = { enabled ->
                             toneCurveProfileSwitcherEnabled = enabled
@@ -582,7 +590,106 @@ fun KawaiiApp(
                         onBackClick = { currentScreen = Screen.Gallery }
                     )
                 }
+
+                val activeTutorialStep = if (!tutorialCompleted) {
+                    tutorialSteps.getOrNull(tutorialStepIndex)
+                } else {
+                    null
+                }
+
+                if (activeTutorialStep != null) {
+                    if (activeTutorialStep.id == TUTORIAL_STEP_AI_USAGE && tutorialAnswers[activeTutorialStep.id] == null) {
+                        tutorialAnswers[activeTutorialStep.id] = aiLevelToOptionId(aiAssistanceLevel)
+                    }
+                    val selectedOptionId = tutorialAnswers[activeTutorialStep.id]
+                    TutorialDialog(
+                        step = activeTutorialStep,
+                        selectedOptionId = selectedOptionId,
+                        continueEnabled = selectedOptionId != null || activeTutorialStep !is TutorialStep.MultipleChoice,
+                        onOptionSelected = { optionId ->
+                            tutorialAnswers[activeTutorialStep.id] = optionId
+                            if (activeTutorialStep.id == TUTORIAL_STEP_AI_USAGE) {
+                                val level = aiOptionIdToLevel(optionId)
+                                aiAssistanceLevel = level
+                                appPreferences.setAiAssistanceLevel(level)
+                            }
+                        },
+                        onContinue = {
+                            val nextIndex = tutorialStepIndex + 1
+                            if (nextIndex >= tutorialSteps.size) {
+                                appPreferences.setTutorialCompleted(true)
+                                tutorialStepIndex = 0
+                                tutorialCompleted = true
+                                tutorialAnswers.clear()
+                            } else {
+                                tutorialStepIndex = nextIndex
+                            }
+                        },
+                        onBack = if (tutorialStepIndex > 0) {
+                            { tutorialStepIndex-- }
+                        } else {
+                            null
+                        }
+                    )
+                }
             }
         }
     }
+}
+
+private const val TUTORIAL_STEP_CREDITS = "tutorial_credits"
+private const val TUTORIAL_STEP_AI_USAGE = "tutorial_ai_usage"
+private const val OPTION_AI_NONE = "ai_none"
+private const val OPTION_AI_SELECTIONS = "ai_selections"
+private const val OPTION_AI_ALL = "ai_all"
+
+private fun buildTutorialSteps(): List<TutorialStep> = listOf(
+    TutorialStep.Info(
+        id = TUTORIAL_STEP_CREDITS,
+        title = "Welcome to Kawaii RAW Editor",
+        body = listOf(
+            "Kawaii RAW Editor builds on the open-source RapidRAW project.",
+            "RAW decoding and processing is powered by the rawler library.",
+            "Huge thanks to both communities for making this possible."
+        ),
+        continueLabel = "Next"
+    ),
+    TutorialStep.MultipleChoice(
+        id = TUTORIAL_STEP_AI_USAGE,
+        title = "Choose AI Assistance",
+        body = listOf(
+            "How much AI assistance would you like to enable by default?"
+        ),
+        options = listOf(
+            TutorialOption(
+                id = OPTION_AI_NONE,
+                title = "None",
+                description = "Disable AI-assisted features."
+            ),
+            TutorialOption(
+                id = OPTION_AI_SELECTIONS,
+                title = "Only for selections",
+                description = "Allow AI selection helpers while keeping other tools manual."
+            ),
+            TutorialOption(
+                id = OPTION_AI_ALL,
+                title = "All",
+                description = "Enable AI assistance wherever it is available."
+            )
+        ),
+        continueLabel = "Save"
+    )
+)
+
+private fun aiOptionIdToLevel(optionId: String): AppPreferences.AiAssistanceLevel = when (optionId) {
+    OPTION_AI_NONE -> AppPreferences.AiAssistanceLevel.None
+    OPTION_AI_SELECTIONS -> AppPreferences.AiAssistanceLevel.SelectionsOnly
+    OPTION_AI_ALL -> AppPreferences.AiAssistanceLevel.All
+    else -> AppPreferences.AiAssistanceLevel.All
+}
+
+private fun aiLevelToOptionId(level: AppPreferences.AiAssistanceLevel): String = when (level) {
+    AppPreferences.AiAssistanceLevel.None -> OPTION_AI_NONE
+    AppPreferences.AiAssistanceLevel.SelectionsOnly -> OPTION_AI_SELECTIONS
+    AppPreferences.AiAssistanceLevel.All -> OPTION_AI_ALL
 }

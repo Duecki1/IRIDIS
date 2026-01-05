@@ -32,6 +32,9 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -50,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.immich.ImmichAuthMode
 import com.dueckis.kawaiiraweditor.data.immich.ImmichLoginResult
 import com.dueckis.kawaiiraweditor.data.immich.ImmichOAuthStartResult
+import com.dueckis.kawaiiraweditor.data.preferences.AppPreferences
 import com.dueckis.kawaiiraweditor.ui.dialogs.AboutDialog
 import kotlinx.coroutines.launch
 
@@ -57,7 +61,7 @@ import kotlinx.coroutines.launch
 internal fun SettingsScreen(
     lowQualityPreviewEnabled: Boolean,
     automaticTaggingEnabled: Boolean,
-    environmentMaskingEnabled: Boolean,
+    aiAssistanceLevel: AppPreferences.AiAssistanceLevel,
     toneCurveProfileSwitcherEnabled: Boolean,
     openEditorOnImportEnabled: Boolean,
     maskRenameTags: List<String>,
@@ -69,7 +73,7 @@ internal fun SettingsScreen(
     immichApiKey: String,
     onLowQualityPreviewEnabledChange: (Boolean) -> Unit,
     onAutomaticTaggingEnabledChange: (Boolean) -> Unit,
-    onEnvironmentMaskingEnabledChange: (Boolean) -> Unit,
+    onAiAssistanceLevelChange: (AppPreferences.AiAssistanceLevel) -> Unit,
     onToneCurveProfileSwitcherEnabledChange: (Boolean) -> Unit,
     onOpenEditorOnImportEnabledChange: (Boolean) -> Unit,
     onMaskRenameTagsChange: (List<String>) -> Unit,
@@ -158,21 +162,37 @@ internal fun SettingsScreen(
                 modifier = Modifier.clickable { onAutomaticTaggingEnabledChange(!automaticTaggingEnabled) }
             )
             ListItem(
-                headlineContent = { Text("Enable environment AI masks") },
+                headlineContent = { Text("AI assistance") },
                 supportingContent = {
-                    Text(
-                        "Adds an AI-driven environment mask tool that detects scene elements and generates masks. This is disabled by default.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                },
-                trailingContent = {
-                    Switch(
-                        checked = environmentMaskingEnabled,
-                        onCheckedChange = onEnvironmentMaskingEnabledChange
-                    )
-                },
-                modifier = Modifier.clickable { onEnvironmentMaskingEnabledChange(!environmentMaskingEnabled) }
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            "Choose how much AI support to enable across tools.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        val aiOptions = listOf(
+                            Triple("None", AppPreferences.AiAssistanceLevel.None, "Disable AI-driven helpers."),
+                            Triple("Selections only", AppPreferences.AiAssistanceLevel.SelectionsOnly, "Allow AI for mask selections only."),
+                            Triple("All", AppPreferences.AiAssistanceLevel.All, "Enable AI everywhere it's available.")
+                        )
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            aiOptions.forEachIndexed { index, (label, level, _) ->
+                                SegmentedButton(
+                                    selected = aiAssistanceLevel == level,
+                                    onClick = { onAiAssistanceLevelChange(level) },
+                                    shape = SegmentedButtonDefaults.itemShape(index = index, count = aiOptions.size)
+                                ) {
+                                    Text(label)
+                                }
+                            }
+                        }
+                        Text(
+                            aiOptions.firstOrNull { it.second == aiAssistanceLevel }?.third.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             )
             ListItem(
                 headlineContent = { Text("Show tone curve profile switcher") },

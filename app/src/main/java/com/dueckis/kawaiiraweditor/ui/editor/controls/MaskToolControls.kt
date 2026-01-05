@@ -59,7 +59,7 @@ internal fun MaskToolControls(
     onMaskTapModeChange: (MaskTapMode) -> Unit,
     onPaintingMaskChange: (Boolean) -> Unit,
     onShowMaskOverlayChange: (Boolean) -> Unit,
-    environmentMaskingEnabled: Boolean,
+    aiMaskingEnabled: Boolean,
     detectedAiEnvironmentCategories: List<AiEnvironmentCategory>?,
     isDetectingAiEnvironmentCategories: Boolean,
     onDetectAiEnvironmentCategories: (() -> Unit)?,
@@ -130,71 +130,75 @@ internal fun MaskToolControls(
         }
 
         SubMaskType.AiSubject.id -> {
-            Text("Draw loosely over subject to detect.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(
-                "Softness: ${(selectedSubMask.aiSubject.softness.coerceIn(0f, 1f) * 100f).roundToInt()}%",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Slider(
-                value = selectedSubMask.aiSubject.softness.coerceIn(0f, 1f),
-                onValueChange = { v ->
-                    onBeginEditInteraction()
-                    val updated =
-                        masks.map { m ->
+            if (!aiMaskingEnabled) {
+                Text("AI masks are disabled in settings.", color = MaterialTheme.colorScheme.error)
+            } else {
+                Text("Draw loosely over subject to detect.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    "Softness: ${(selectedSubMask.aiSubject.softness.coerceIn(0f, 1f) * 100f).roundToInt()}%",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Slider(
+                    value = selectedSubMask.aiSubject.softness.coerceIn(0f, 1f),
+                    onValueChange = { v ->
+                        onBeginEditInteraction()
+                        val updated =
+                            masks.map { m ->
+                                if (m.id != selectedMask.id) m
+                                else
+                                    m.copy(
+                                        subMasks =
+                                            m.subMasks.map { s ->
+                                                if (s.id != selectedSubMask.id) s else s.copy(aiSubject = s.aiSubject.copy(softness = v))
+                                            }
+                                    )
+                            }
+                        onMasksChange(updated)
+                    },
+                    onValueChangeFinished = onEndEditInteraction,
+                    valueRange = 0f..1f
+                )
+                val subjectFeather = selectedSubMask.aiSubject.feather.coerceIn(-1f, 1f)
+                val subjectFeatherPct = (subjectFeather * 100f).roundToInt()
+                val subjectFeatherLabel = if (subjectFeatherPct >= 0) "+$subjectFeatherPct%" else "$subjectFeatherPct%"
+                Text(
+                    "Expand/Shrink: $subjectFeatherLabel",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Slider(
+                    value = subjectFeather,
+                    onValueChange = { v ->
+                        onBeginEditInteraction()
+                        val updated =
+                            masks.map { m ->
+                                if (m.id != selectedMask.id) m
+                                else
+                                    m.copy(
+                                        subMasks =
+                                            m.subMasks.map { s ->
+                                                if (s.id != selectedSubMask.id) s else s.copy(aiSubject = s.aiSubject.copy(feather = v))
+                                            }
+                                    )
+                            }
+                        onMasksChange(updated)
+                    },
+                    onValueChangeFinished = onEndEditInteraction,
+                    valueRange = -1f..1f
+                )
+                Button(
+                    onClick = {
+                        val updated = masks.map { m ->
                             if (m.id != selectedMask.id) m
-                            else
-                                m.copy(
-                                    subMasks =
-                                        m.subMasks.map { s ->
-                                            if (s.id != selectedSubMask.id) s else s.copy(aiSubject = s.aiSubject.copy(softness = v))
-                                        }
-                                )
+                            else m.copy(subMasks = m.subMasks.map { s -> if (s.id != selectedSubMask.id) s else s.copy(aiSubject = s.aiSubject.copy(maskDataBase64 = null)) })
                         }
-                    onMasksChange(updated)
-                },
-                onValueChangeFinished = onEndEditInteraction,
-                valueRange = 0f..1f
-            )
-            val subjectFeather = selectedSubMask.aiSubject.feather.coerceIn(-1f, 1f)
-            val subjectFeatherPct = (subjectFeather * 100f).roundToInt()
-            val subjectFeatherLabel = if (subjectFeatherPct >= 0) "+$subjectFeatherPct%" else "$subjectFeatherPct%"
-            Text(
-                "Expand/Shrink: $subjectFeatherLabel",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Slider(
-                value = subjectFeather,
-                onValueChange = { v ->
-                    onBeginEditInteraction()
-                    val updated =
-                        masks.map { m ->
-                            if (m.id != selectedMask.id) m
-                            else
-                                m.copy(
-                                    subMasks =
-                                        m.subMasks.map { s ->
-                                            if (s.id != selectedSubMask.id) s else s.copy(aiSubject = s.aiSubject.copy(feather = v))
-                                        }
-                                )
-                        }
-                    onMasksChange(updated)
-                },
-                onValueChangeFinished = onEndEditInteraction,
-                valueRange = -1f..1f
-            )
-            Button(
-                onClick = {
-                    val updated = masks.map { m ->
-                        if (m.id != selectedMask.id) m
-                        else m.copy(subMasks = m.subMasks.map { s -> if (s.id != selectedSubMask.id) s else s.copy(aiSubject = s.aiSubject.copy(maskDataBase64 = null)) })
-                    }
-                    onMasksChange(updated)
-                    onShowMaskOverlayChange(true)
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Clear & Redraw") }
+                        onMasksChange(updated)
+                        onShowMaskOverlayChange(true)
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Clear & Redraw") }
+            }
         }
 
         SubMaskType.Radial.id -> {
@@ -251,8 +255,8 @@ internal fun MaskToolControls(
         }
 
         SubMaskType.AiEnvironment.id -> {
-            if (!environmentMaskingEnabled) {
-                Text("Environment masking is disabled in settings.", color = MaterialTheme.colorScheme.error)
+            if (!aiMaskingEnabled) {
+                Text("AI masks are disabled in settings.", color = MaterialTheme.colorScheme.error)
             } else {
                 val selectedCategory = AiEnvironmentCategory.fromId(selectedSubMask.aiEnvironment.category)
                 var expanded by remember { mutableStateOf(false) }
