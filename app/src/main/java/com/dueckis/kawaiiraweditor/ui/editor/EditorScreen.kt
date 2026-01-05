@@ -3032,7 +3032,6 @@ internal fun EditorScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .verticalScroll(rememberScrollState())
                                 .background(color = MaterialTheme.colorScheme.surface)
                                 .padding(horizontal = 16.dp, vertical = 12.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -3040,56 +3039,62 @@ internal fun EditorScreen(
                             errorMessage?.let { Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                             statusMessage?.let { Text(text = it, color = Color(0xFF1B5E20), style = MaterialTheme.typography.bodySmall) }
 
-                            EditorControlsContent(
-                                panelTab = currentTab,
-                                adjustments = adjustments,
-                                onAdjustmentsChange = { applyAdjustmentsPreservingMasks(it) },
-                                onBeginEditInteraction = ::beginEditInteraction,
-                                onEndEditInteraction = ::endEditInteraction,
-                                showToneCurveProfileSwitcher = toneCurveProfileSwitcherEnabled,
-                                histogramData = histogramData,
-                                masks = masks,
-                                onMasksChange = { updated ->
-                                    if (panelTab == EditorPanelTab.Masks && showMaskOverlay) showMaskOverlay = false
-                                    masks = updated
-                                },
-                                maskNumbers = maskNumbers,
-                                selectedMaskId = selectedMaskId,
-                                onSelectedMaskIdChange = { selectedMaskId = it },
-                                selectedSubMaskId = selectedSubMaskId,
-                                onSelectedSubMaskIdChange = { selectedSubMaskId = it },
-                                isPaintingMask = isPaintingMask,
-                                onPaintingMaskChange = { isPaintingMask = it },
-                                showMaskOverlay = showMaskOverlay,
-                                onShowMaskOverlayChange = { showMaskOverlay = it },
-                                onRequestMaskOverlayBlink = ::requestMaskOverlayBlink,
-                                onCreateMask = onCreateMask,
-                                onCreateSubMask = onCreateSubMask,
-                                brushSize = brushSize,
-                                onBrushSizeChange = { brushSize = it },
-                                brushTool = brushTool,
-                                onBrushToolChange = { brushTool = it },
-                                brushSoftness = brushSoftness,
-                                onBrushSoftnessChange = { brushSoftness = it },
-                                eraserSoftness = eraserSoftness,
-                                onEraserSoftnessChange = { eraserSoftness = it },
-                                maskTapMode = maskTapMode,
-                                onMaskTapModeChange = { maskTapMode = it },
-                                cropBaseWidthPx = cropBaseWidthPx,
-                                cropBaseHeightPx = cropBaseHeightPx,
-                                rotationDraft = rotationDraft,
-                                onRotationDraftChange = { rotationDraft = it },
-                                isStraightenActive = isStraightenActive,
-                                onStraightenActiveChange = { isStraightenActive = it },
-                                aiMaskingEnabled = aiMaskingEnabled,
-                                isGeneratingAiMask = isGeneratingAiMask,
-                                onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask,
-                                detectedAiEnvironmentCategories = detectedAiEnvironmentCategories,
-                                isDetectingAiEnvironmentCategories = isDetectingAiEnvironmentCategories,
-                                onDetectAiEnvironmentCategories = onDetectAiEnvironmentCategories,
-                                maskRenameTags = maskRenameTags
-                            )
-                            Spacer(modifier = Modifier.height(100.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f, fill = true)
+                            ) {
+                                EditorControlsContent(
+                                    panelTab = currentTab,
+                                    adjustments = adjustments,
+                                    onAdjustmentsChange = { applyAdjustmentsPreservingMasks(it) },
+                                    onBeginEditInteraction = ::beginEditInteraction,
+                                    onEndEditInteraction = ::endEditInteraction,
+                                    showToneCurveProfileSwitcher = toneCurveProfileSwitcherEnabled,
+                                    histogramData = histogramData,
+                                    masks = masks,
+                                    onMasksChange = { updated ->
+                                        if (panelTab == EditorPanelTab.Masks && showMaskOverlay) showMaskOverlay = false
+                                        masks = updated
+                                    },
+                                    maskNumbers = maskNumbers,
+                                    selectedMaskId = selectedMaskId,
+                                    onSelectedMaskIdChange = { selectedMaskId = it },
+                                    selectedSubMaskId = selectedSubMaskId,
+                                    onSelectedSubMaskIdChange = { selectedSubMaskId = it },
+                                    isPaintingMask = isPaintingMask,
+                                    onPaintingMaskChange = { isPaintingMask = it },
+                                    showMaskOverlay = showMaskOverlay,
+                                    onShowMaskOverlayChange = { showMaskOverlay = it },
+                                    onRequestMaskOverlayBlink = ::requestMaskOverlayBlink,
+                                    onCreateMask = onCreateMask,
+                                    onCreateSubMask = onCreateSubMask,
+                                    brushSize = brushSize,
+                                    onBrushSizeChange = { brushSize = it },
+                                    brushTool = brushTool,
+                                    onBrushToolChange = { brushTool = it },
+                                    brushSoftness = brushSoftness,
+                                    onBrushSoftnessChange = { brushSoftness = it },
+                                    eraserSoftness = eraserSoftness,
+                                    onEraserSoftnessChange = { eraserSoftness = it },
+                                    maskTapMode = maskTapMode,
+                                    onMaskTapModeChange = { maskTapMode = it },
+                                    cropBaseWidthPx = cropBaseWidthPx,
+                                    cropBaseHeightPx = cropBaseHeightPx,
+                                    rotationDraft = rotationDraft,
+                                    onRotationDraftChange = { rotationDraft = it },
+                                    isStraightenActive = isStraightenActive,
+                                    onStraightenActiveChange = { isStraightenActive = it },
+                                    aiMaskingEnabled = aiMaskingEnabled,
+                                    isGeneratingAiMask = isGeneratingAiMask,
+                                    onGenerateAiEnvironmentMask = onGenerateAiEnvironmentMask,
+                                    detectedAiEnvironmentCategories = detectedAiEnvironmentCategories,
+                                    isDetectingAiEnvironmentCategories = isDetectingAiEnvironmentCategories,
+                                    onDetectAiEnvironmentCategories = onDetectAiEnvironmentCategories,
+                                    maskRenameTags = maskRenameTags,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
                     }
                 }

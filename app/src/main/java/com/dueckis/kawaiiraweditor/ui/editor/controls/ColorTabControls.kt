@@ -1,29 +1,25 @@
 package com.dueckis.kawaiiraweditor.ui.editor.controls
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
 import com.dueckis.kawaiiraweditor.domain.HistogramData
 import com.dueckis.kawaiiraweditor.ui.components.CompactTabRow
 import com.dueckis.kawaiiraweditor.ui.components.PanelSectionCard
+import kotlinx.coroutines.launch
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 internal fun ColorTabControls(
     adjustments: AdjustmentState,
     histogramData: HistogramData?,
@@ -34,9 +30,9 @@ internal fun ColorTabControls(
     val colorTabs = remember {
         listOf("Curves", "Grading", "HSL")
     }
-    var selectedColorTab by remember { mutableIntStateOf(0) }
 
-    val safeIndex = selectedColorTab.coerceIn(0, colorTabs.lastIndex)
+    val pagerState = rememberPagerState(pageCount = { colorTabs.size })
+    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -44,29 +40,36 @@ internal fun ColorTabControls(
     ) {
         CompactTabRow(
             labels = colorTabs,
-            selectedIndex = safeIndex,
-            onSelected = { selectedColorTab = it },
+            selectedIndex = pagerState.currentPage,
+            onSelected = { index ->
+                scope.launch {
+                    pagerState.animateScrollToPage(index)
+                }
+            },
             modifier = Modifier.fillMaxWidth()
         )
 
-        AnimatedContent(
-            targetState = safeIndex,
-            label = "ColorTabs",
-            transitionSpec = {
-                // Determine if we are moving forward (to the right) or backward (to the left)
-                val isMovingForward = targetState > initialState
-                val direction = if (isMovingForward) 1 else -1
-                val animSpec = tween<androidx.compose.ui.unit.IntOffset>(durationMillis = 350)
-
-                // New content slides in from the direction (bottom/top)
-                // Old content slides out to the opposite direction
-                (slideInVertically(animationSpec = animSpec) { height -> direction * height / 4 } + fadeIn())
-                    .togetherWith(slideOutVertically(animationSpec = animSpec) { height -> -direction * height / 4 } + fadeOut())
-                    .using(SizeTransform(clip = false))
-            }
-        ) { tabIndex ->
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxWidth(),
+            pageSpacing = 16.dp,
+            // FIX: Force content to stay at the top so it doesn't jump vertically
+            verticalAlignment = Alignment.Top,
+            // FIX: Provide a stable key based on the index
+            key = { it },
+            userScrollEnabled = true
+        ) { pageIndex ->
             PanelSectionCard(title = null) {
-                when (tabIndex) {
+                when (pageIndex) {
+                    0 -> {
+                        CurvesEditor(
+                            adjustments = adjustments,
+                            histogramData = histogramData,
+                            onAdjustmentsChange = onAdjustmentsChange,
+                            onBeginEditInteraction = onBeginEditInteraction,
+                            onEndEditInteraction = onEndEditInteraction
+                        )
+                    }
                     1 -> {
                         ColorGradingEditor(
                             colorGrading = adjustments.colorGrading,
@@ -77,21 +80,10 @@ internal fun ColorTabControls(
                             onEndEditInteraction = onEndEditInteraction
                         )
                     }
-
                     2 -> {
                         HslEditor(
                             hsl = adjustments.hsl,
                             onHslChange = { updated -> onAdjustmentsChange(adjustments.copy(hsl = updated)) },
-                            onBeginEditInteraction = onBeginEditInteraction,
-                            onEndEditInteraction = onEndEditInteraction
-                        )
-                    }
-
-                    else -> {
-                        CurvesEditor(
-                            adjustments = adjustments,
-                            histogramData = histogramData,
-                            onAdjustmentsChange = onAdjustmentsChange,
                             onBeginEditInteraction = onBeginEditInteraction,
                             onEndEditInteraction = onEndEditInteraction
                         )
