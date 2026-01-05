@@ -20,36 +20,36 @@ Latest pre-release builds: https://github.com/Duecki1/IRIDIS/releases
     <td align="center">    
       <img    
         alt="Editor"    
-        src="https://github.com/user-attachments/assets/02e336a3-2a0d-4f2a-a3f5-41bece9de03e"    
+        src="https://github.com/user-attachments/assets/a0c9e22b-df89-45cb-8f49-0d39a020a320"    
         width="260"    
-      />    
+      />
       <br/>    
       <sub><b>Editor (Light & Tone)</b></sub>    
     </td>    
     <td align="center">    
       <img    
         alt="Editor (extra screenshot slot)"    
-        src="https://github.com/user-attachments/assets/6e63a75a-7d51-423c-a813-76eade9e6047"    
+        src="https://github.com/user-attachments/assets/dc7a58b0-feb0-4728-89dc-3ad63e103159"    
         width="260"    
-      />    
+      />
       <br/>    
       <sub><b>Editor (Color Grading)</b></sub>    
     </td>    
       <td align="center">    
       <img    
         alt="Editor (extra screenshot slot)"    
-        src="https://github.com/user-attachments/assets/00798813-4560-41fd-a362-5861aa66709e"    
+        src="https://github.com/user-attachments/assets/f1e5bb74-d509-406e-af5f-3b10b9e6ca5f"    
         width="260"    
-      />    
+      />
       <br/>    
       <sub><b>Masks (AI Train Mask)</b></sub>    
     </td>    
       <td align="center">    
       <img    
         alt="Editor (extra screenshot slot)"    
-        src="https://github.com/user-attachments/assets/9352b80c-d35e-4182-859c-824c97e8772e"    
+        src="https://github.com/user-attachments/assets/034202d8-8830-4edb-9ccf-d304af680a97"    
         width="260"    
-      />    
+      />
       <br/>    
       <sub><b>Masks (AI Sky Mask)</b></sub>    
     </td>    
