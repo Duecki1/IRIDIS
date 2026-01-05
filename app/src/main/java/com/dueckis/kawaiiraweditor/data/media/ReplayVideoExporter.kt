@@ -198,27 +198,41 @@ private fun buildRenderSpecs(
     specs[ReplayStage.FinalEdited] = finalSpec
     specs[ReplayStage.Unedited] = ReplayRenderSpec(adjustments = base, masks = emptyList())
 
-    val colorOnly = withColorOnly(base, adjustments)
-    if (colorOnly != base) {
-        specs[ReplayStage.ColorOnly] = ReplayRenderSpec(colorOnly, emptyList())
+    var currentState = base
+
+    val toneState = withTone(base, adjustments)
+    if (toneState != currentState) {
+        specs[ReplayStage.ToneOnly] = ReplayRenderSpec(toneState, emptyList())
+        currentState = toneState
     }
 
-    val toneOnly = withTone(base, adjustments)
-    if (toneOnly != base) {
-        specs[ReplayStage.ToneOnly] = ReplayRenderSpec(toneOnly, emptyList())
+    val colorState = withColorOnly(currentState, adjustments)
+    if (colorState != currentState) {
+        specs[ReplayStage.ColorOnly] = ReplayRenderSpec(colorState, emptyList())
+        currentState = colorState
     }
 
-    if (!adjustments.colorGrading.isDefault()) {
-        specs[ReplayStage.ColorGrading] = ReplayRenderSpec(withColorGrading(base, adjustments), emptyList())
+    val gradingState = if (!adjustments.colorGrading.isDefault()) {
+        val graded = withColorGrading(currentState, adjustments)
+        if (graded != currentState) {
+            specs[ReplayStage.ColorGrading] = ReplayRenderSpec(graded, emptyList())
+        }
+        graded
+    } else {
+        currentState
     }
 
+    currentState = gradingState
+
+    val maskList = if (masks.isNotEmpty()) masks else emptyList()
     if (masks.isNotEmpty()) {
-        specs[ReplayStage.Masks] = finalSpec
+        specs[ReplayStage.Masks] = ReplayRenderSpec(currentState, maskList)
     }
 
-    val effects = withEffects(base, adjustments)
-    if (effects != base) {
-        specs[ReplayStage.Effects] = ReplayRenderSpec(effects, emptyList())
+    val effectsState = withEffects(currentState, adjustments)
+    if (effectsState != currentState) {
+        specs[ReplayStage.Effects] = ReplayRenderSpec(effectsState, maskList)
+        currentState = effectsState
     }
 
     return specs
@@ -475,9 +489,8 @@ private class ReplayFrameGenerator(
 
 private fun buildCrossfadeStages(bitmaps: Map<ReplayStage, Bitmap>): List<StageFrame> {
     val orderedStages = listOf(
-        ReplayStage.Unedited,
-        ReplayStage.ColorOnly,
         ReplayStage.ToneOnly,
+        ReplayStage.ColorOnly,
         ReplayStage.ColorGrading,
         ReplayStage.Masks,
         ReplayStage.Effects,
@@ -503,11 +516,11 @@ private fun buildCrossfadeStages(bitmaps: Map<ReplayStage, Bitmap>): List<StageF
 
 private fun labelForStage(stage: ReplayStage): String = when (stage) {
     ReplayStage.Unedited -> "Original"
-    ReplayStage.ColorOnly -> "Color"
     ReplayStage.ToneOnly -> "Tone"
-    ReplayStage.ColorGrading -> "Color Grading"
-    ReplayStage.Masks -> "Masks"
-    ReplayStage.Effects -> "Effects"
+    ReplayStage.ColorOnly -> "Tone + Color"
+    ReplayStage.ColorGrading -> "Tone + Color + Grading"
+    ReplayStage.Masks -> "Tone + Color + Grading + Masks"
+    ReplayStage.Effects -> "Tone + Color + Grading + Masks + Effects"
     ReplayStage.FinalEdited -> "Final"
 }
 
