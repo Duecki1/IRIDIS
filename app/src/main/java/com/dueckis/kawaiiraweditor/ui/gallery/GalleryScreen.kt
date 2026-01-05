@@ -355,10 +355,14 @@ internal fun GalleryScreen(
 
         if (urisToImport.isNotEmpty()) {
             var opened = false
+            var skipped = false
             urisToImport.forEach { uri ->
                 val openThis = openEditorOnImportEnabled && !opened
                 val imported = importUri(uri, openAfterImport = openThis)
-                if (imported && openThis) opened = true
+                if (imported && openThis) opened = true else if (!imported) skipped = true
+            }
+            if (skipped) {
+                Toast.makeText(context, "Some files were not RAW or not supported.", Toast.LENGTH_SHORT).show()
             }
             intent.action = null
             intent.data = null
@@ -577,10 +581,14 @@ internal fun GalleryScreen(
         if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
         coroutineScope.launch {
             var opened = false
+            var skipped = false
             uris.forEach { uri ->
                 val openThis = openEditorOnImportEnabled && !opened
                 val imported = importUri(uri, openAfterImport = openThis)
-                if (imported && openThis) opened = true
+                if (imported && openThis) opened = true else if (!imported) skipped = true
+            }
+            if (skipped) {
+                Toast.makeText(context, "Some files were not RAW or not supported.", Toast.LENGTH_SHORT).show()
             }
         }
     }
