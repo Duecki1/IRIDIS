@@ -275,14 +275,13 @@ class ProjectStorage(private val context: Context) {
         return File(projectsDir, "$projectId/edits_history.json")
     }
     
-    fun saveThumbnail(projectId: String, thumbnailBytes: ByteArray) {
+    fun saveThumbnail(projectId: String, thumbnailBytes: ByteArray, markModified: Boolean = false) {
         val projectDir = File(projectsDir, projectId)
         if (!projectDir.exists()) return
         
         val thumbnailFile = File(projectDir, "thumbnail.jpg")
         thumbnailFile.writeBytes(thumbnailBytes)
-        
-        updateProjectModifiedTime(projectId)
+        if (markModified) updateProjectModifiedTime(projectId)
     }
     
     fun loadThumbnail(projectId: String): ByteArray? {

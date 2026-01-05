@@ -89,8 +89,17 @@ internal fun EditorControlsContent(
         AnimatedContent(
             targetState = panelTab,
             transitionSpec = {
-                (fadeIn(animationSpec = tween(300)) + slideInVertically { height -> height / 10 })
-                    .togetherWith(fadeOut(animationSpec = tween(300)) + slideOutVertically { height -> -height / 10 })
+                val isMovingForward = targetState.ordinal > initialState.ordinal
+                val slideDirection = if (isMovingForward) 1 else -1
+                val animSpec = tween<androidx.compose.ui.unit.IntOffset>(400)
+                val fadeSpec = tween<Float>(400)
+
+                (slideInVertically(animationSpec = animSpec) { height -> slideDirection * height / 10 } +
+                        fadeIn(animationSpec = fadeSpec))
+                    .togetherWith(
+                        slideOutVertically(animationSpec = animSpec) { height -> -slideDirection * height / 10 } +
+                                fadeOut(animationSpec = fadeSpec)
+                    )
                     .using(SizeTransform(clip = false))
             },
             label = "EditorControlsTransition"
@@ -143,7 +152,21 @@ internal fun EditorControlsContent(
                                     modifier = Modifier.fillMaxWidth()
                                 )
 
-                                AnimatedContent(targetState = selectedIndex, label = "LightToneTabs") { tabIndex ->
+                                // FIX: Updated Inner Tab Transition for "Basic, Color, Details"
+                                AnimatedContent(
+                                    targetState = selectedIndex,
+                                    label = "LightToneTabs",
+                                    transitionSpec = {
+                                        val isMovingForward = targetState > initialState
+                                        val direction = if (isMovingForward) 1 else -1
+                                        val animSpec = tween<androidx.compose.ui.unit.IntOffset>(350)
+
+                                        // We use height / 4 to make the slide feel contained within the card
+                                        (slideInVertically(animationSpec = animSpec) { h -> direction * h / 4 } + fadeIn())
+                                            .togetherWith(slideOutVertically(animationSpec = animSpec) { h -> -direction * h / 4 } + fadeOut())
+                                            .using(SizeTransform(clip = false))
+                                    }
+                                ) { tabIndex ->
                                     val section = lightToneSections[tabIndex]
 
                                     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {

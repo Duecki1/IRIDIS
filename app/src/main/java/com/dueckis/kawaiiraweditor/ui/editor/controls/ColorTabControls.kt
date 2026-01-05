@@ -1,6 +1,13 @@
 package com.dueckis.kawaiiraweditor.ui.editor.controls
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -46,7 +53,22 @@ internal fun ColorTabControls(
             modifier = Modifier.fillMaxWidth()
         )
 
-        AnimatedContent(targetState = safeIndex, label = "ColorTabs") { tabIndex ->
+        AnimatedContent(
+            targetState = safeIndex,
+            label = "ColorTabs",
+            transitionSpec = {
+                // Determine if we are moving forward (to the right) or backward (to the left)
+                val isMovingForward = targetState > initialState
+                val direction = if (isMovingForward) 1 else -1
+                val animSpec = tween<androidx.compose.ui.unit.IntOffset>(durationMillis = 350)
+
+                // New content slides in from the direction (bottom/top)
+                // Old content slides out to the opposite direction
+                (slideInVertically(animationSpec = animSpec) { height -> direction * height / 4 } + fadeIn())
+                    .togetherWith(slideOutVertically(animationSpec = animSpec) { height -> -direction * height / 4 } + fadeOut())
+                    .using(SizeTransform(clip = false))
+            }
+        ) { tabIndex ->
             val tab = colorTabs[tabIndex]
 
             PanelSectionCard(title = tab.title) {
