@@ -109,7 +109,8 @@ internal suspend fun exportReplayVideo(
     maxDimension: Int = DEFAULT_REPLAY_MAX_DIM,
     timing: ReplayTiming = ReplayTiming(),
     overlayStyle: OverlayStyle = OverlayStyle(),
-    lowRamMode: Boolean = false
+    lowRamMode: Boolean = false,
+    onProgress: ((current: Int, total: Int) -> Unit)? = null
 ): ReplayExportResult {
     if (sessionHandle == 0L) {
         return ReplayExportResult(success = false, errorMessage = "Session is unavailable.")
@@ -154,6 +155,20 @@ internal suspend fun exportReplayVideo(
         watermarkIcon = loadWatermarkIcon(context, min(targetSize.first, targetSize.second))
         val frameGenerator = ReplayFrameGenerator(scaledBitmaps, normalizedTiming, overlayStyle, watermarkIcon)
         val frameSequence = frameGenerator.frames()
+        val totalFramesEstimate = frameGenerator.estimatedFrameCount
+        val trackedSequence = if (onProgress != null && totalFramesEstimate > 0) {
+            sequence {
+                var produced = 0
+                onProgress.invoke(0, totalFramesEstimate)
+                for (frame in frameSequence) {
+                    produced += 1
+                    onProgress.invoke(produced, totalFramesEstimate)
+                    yield(frame)
+                }
+            }
+        } else {
+            frameSequence
+        }
         val frameDurationUs = 1_000_000L / fps
 
         val displayName = "IRIDIS_REPLAY_${DATE_FORMAT.format(Date())}.mp4"
@@ -169,7 +184,7 @@ internal suspend fun exportReplayVideo(
                 fps = fps,
                 outFd = fd
             )
-            encoder.encode(frameSequence, frameDurationUs)
+            encoder.encode(trackedSequence, frameDurationUs)
         }
 
         if (uri != null) {
@@ -454,50 +469,54 @@ private class ReplayFrameGenerator(
 
     var frameCount: Int = 0
         private set
+    var estimatedFrameCount: Int = 0
+        private set
 
-    fun frames(): Sequence<PreparedFrame> = sequence {
-        val edited = bitmaps[ReplayStage.FinalEdited] ?: return@sequence
-        val unedited = bitmaps[ReplayStage.Unedited] ?: return@sequence
+    fun frames(): Sequence<PreparedFrame> {
+        val edited = bitmaps[ReplayStage.FinalEdited] ?: return emptySequence()
+        val unedited = bitmaps[ReplayStage.Unedited] ?: return emptySequence()
         val stageSequence = buildCrossfadeStages(bitmaps)
-        if (stageSequence.isEmpty()) return@sequence
-        val logoStartFrame = computeLogoStartFrame(stageSequence)
+        if (stageSequence.isEmpty()) return emptySequence()
+        estimatedFrameCount = estimateFrameTotal(stageSequence)
+        return sequence {
+            val logoStartFrame = computeLogoStartFrame(stageSequence)
 
-        val width = edited.width
-        val height = edited.height
-        val working = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            strokeWidth = max(2f, width * 0.0025f)
-        }
-        val overlayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
-        val blackBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.BLACK) }
-        val logoDurationMs = (timing.logoOutroSec * 1_000.0).toFloat().coerceAtLeast(1f)
-        val logoRenderer = LogoOutroRenderer(width, height, logoDurationMs)
+            val width = edited.width
+            val height = edited.height
+            val working = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                strokeWidth = max(2f, width * 0.0025f)
+            }
+            val overlayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+            val blackBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.BLACK) }
+            val logoDurationMs = (timing.logoOutroSec * 1_000.0).toFloat().coerceAtLeast(1f)
+            val logoRenderer = LogoOutroRenderer(width, height, logoDurationMs)
 
-        var localFrame = 0
+            var localFrame = 0
 
-        suspend fun SequenceScope<PreparedFrame>.emitFrame(labels: List<LabelState>, draw: () -> Unit) {
-            draw()
-            if (labels.isNotEmpty()) {
-                val labelCanvas = Canvas(working)
-                labels.forEach { state ->
-                    if (state.alpha > 0.001f) {
-                        drawStageLabel(labelCanvas, state.text, width, height, state.alpha, overlayStyle, state.topRight)
+            suspend fun SequenceScope<PreparedFrame>.emitFrame(labels: List<LabelState>, draw: () -> Unit) {
+                draw()
+                if (labels.isNotEmpty()) {
+                    val labelCanvas = Canvas(working)
+                    labels.forEach { state ->
+                        if (state.alpha > 0.001f) {
+                            drawStageLabel(labelCanvas, state.text, width, height, state.alpha, overlayStyle, state.topRight)
+                        }
                     }
                 }
+                val watermarkOpacity = watermarkAlpha(localFrame, logoStartFrame)
+                if (watermarkOpacity > 0f) {
+                    drawWatermark(working, overlayStyle, watermarkIcon, watermarkOpacity)
+                }
+                val data = working.toI420()
+                yield(PreparedFrame(data, localFrame.toLong() * frameDurationUs))
+                localFrame += 1
             }
-            val watermarkOpacity = watermarkAlpha(localFrame, logoStartFrame)
-            if (watermarkOpacity > 0f) {
-                drawWatermark(working, overlayStyle, watermarkIcon, watermarkOpacity)
-            }
-            val data = working.toI420()
-            yield(PreparedFrame(data, localFrame.toLong() * frameDurationUs))
-            localFrame += 1
-        }
 
-        try {
-            val finalLabel = labelForStage(ReplayStage.FinalEdited)
-            val originalLabel = labelForStage(ReplayStage.Unedited)
+            try {
+                val finalLabel = labelForStage(ReplayStage.FinalEdited)
+                val originalLabel = labelForStage(ReplayStage.Unedited)
 
             val holdSplitFrames = secondsToFrames(timing.wipeHoldSec, fps).coerceAtLeast(1)
             repeat(holdSplitFrames) {
@@ -607,10 +626,11 @@ private class ReplayFrameGenerator(
                     logoRenderer.render(working, timeMs.coerceIn(0f, logoRenderer.durationMs))
                 }
             }
-        } finally {
-            frameCount = localFrame
-            working.recycle()
-            blackBitmap.recycle()
+            } finally {
+                frameCount = localFrame
+                working.recycle()
+                blackBitmap.recycle()
+            }
         }
     }
 
@@ -642,6 +662,31 @@ private class ReplayFrameGenerator(
         val blackHold = secondsToFrames(timing.blackHoldSec, fps).coerceAtLeast(0)
 
         return holdSplit + toEdited + holdEdited + toOriginal + holdOriginal + stageFrames + fadeToBlack + blackHold
+    }
+
+    private fun estimateFrameTotal(stageSequence: List<StageFrame>): Int {
+        fun holdFrames(seconds: Double): Int = secondsToFrames(seconds, fps).coerceAtLeast(1)
+
+        var total = 0
+        total += holdFrames(timing.wipeHoldSec)
+        total += holdFrames(timing.wipeToEditedSec)
+        total += holdFrames(timing.editedHoldSec)
+        total += holdFrames(timing.wipeToOriginalSec)
+        total += holdFrames(timing.originalHoldSec)
+
+        val stageCount = stageSequence.size
+        if (stageCount > 0) {
+            val stageHold = holdFrames(timing.stageHoldSec)
+            val stageFade = holdFrames(timing.stageFadeSec)
+            total += stageCount * stageHold
+            total += (stageCount - 1).coerceAtLeast(0) * stageFade
+        }
+
+        total += holdFrames(timing.fadeToBlackSec)
+        total += secondsToFrames(timing.blackHoldSec, fps)
+        total += holdFrames(timing.logoOutroSec)
+
+        return total
     }
 }
 

@@ -13,6 +13,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.util.Base64
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
@@ -51,6 +52,7 @@ import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
 import com.dueckis.kawaiiraweditor.data.model.MaskState
 import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
 import com.dueckis.kawaiiraweditor.data.preferences.AppPreferences
+import com.dueckis.kawaiiraweditor.data.preferences.ReplayExportQuality
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -192,6 +194,8 @@ internal fun ExportButton(
 
         coroutineScope.launch {
             try {
+                val startRealtime = SystemClock.elapsedRealtime()
+                var lastUpdateMs = startRealtime
                 val result = withContext(Dispatchers.IO) {
                     exportReplayVideo(
                         context = context,
@@ -199,7 +203,26 @@ internal fun ExportButton(
                         adjustments = currentAdjustments,
                         masks = currentMasks,
                         nativeDispatcher = nativeDispatcher,
-                        maxDimension = replayQuality.maxDimension
+                        maxDimension = replayQuality.maxDimension,
+                        onProgress = { current, total ->
+                            if (total <= 0) return@exportReplayVideo
+                            val now = SystemClock.elapsedRealtime()
+                            val shouldUpdate = current == total || current == 1 || now - lastUpdateMs >= 120L
+                            if (!shouldUpdate) return@exportReplayVideo
+                            lastUpdateMs = now
+                            val elapsedMs = (now - startRealtime).coerceAtLeast(1L)
+                            val remainingFrames = (total - current).coerceAtLeast(0)
+                            val etaMs = if (current > 0 && remainingFrames > 0) {
+                                (elapsedMs.toDouble() / current.toDouble() * remainingFrames.toDouble()).toLong().coerceAtLeast(0L)
+                            } else {
+                                0L
+                            }
+                            val percent = ((current.toDouble() / total.toDouble()) * 100.0).toInt().coerceIn(0, 100)
+                            val etaText = formatEta(etaMs)
+                            coroutineScope.launch {
+                                exportProgressMessage = "Rendering replay... $percent% (ETA $etaText)"
+                            }
+                        }
                     )
                 }
                 exportProgressMessage = null
@@ -550,4 +573,16 @@ private fun ExportProgressDialog(message: String) {
             }
         }
     )
+}
+
+private fun formatEta(etaMs: Long): String {
+    if (etaMs <= 500L) return "<1s"
+    val seconds = (etaMs / 1000L).coerceAtLeast(1L)
+    val minutes = seconds / 60L
+    val remainingSeconds = (seconds % 60L).toInt()
+    return if (minutes > 0) {
+        String.format(Locale.US, "%d:%02d", minutes, remainingSeconds)
+    } else {
+        "${remainingSeconds}s"
+    }
 }
