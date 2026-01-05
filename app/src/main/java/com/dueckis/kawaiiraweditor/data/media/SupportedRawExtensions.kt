@@ -40,8 +40,38 @@ internal object SupportedRawExtensions {
     )
 
     fun hasSupportedExtension(fileName: String): Boolean {
+        return extractExtension(fileName)?.let { rawExtensions.contains(it) } ?: false
+    }
+
+    fun isSupported(fileName: String?, mimeType: String?): Boolean {
+        return normalizeFileName(fileName, mimeType) != null
+    }
+
+    fun normalizeFileName(fileName: String?, mimeType: String?): String? {
+        val trimmed = fileName?.trim().takeUnless { it.isNullOrEmpty() } ?: return null
+        val currentExt = extractExtension(trimmed)
+        if (currentExt != null && rawExtensions.contains(currentExt)) return trimmed
+
+        val mimeExt = extractExtensionFromMime(mimeType)
+        if (mimeExt != null) {
+            val base = if (currentExt == null) trimmed else trimmed.substringBeforeLast('.')
+            return if (base.isBlank()) null else "$base.$mimeExt"
+        }
+
+        return null
+    }
+
+    private fun extractExtension(fileName: String): String? {
         val segment = fileName.substringAfterLast('.', missingDelimiterValue = "")
-        if (segment.isBlank()) return false
-        return rawExtensions.contains(segment.lowercase(Locale.US))
+        if (segment.isBlank()) return null
+        return segment.lowercase(Locale.US)
+    }
+
+    private fun extractExtensionFromMime(mimeType: String?): String? {
+        val typePart = mimeType?.substringAfter('/', missingDelimiterValue = "")?.lowercase(Locale.US)
+            ?.takeUnless { it.isBlank() }
+            ?: return null
+        val candidates = typePart.split('-', '_', '.').asReversed()
+        return candidates.firstOrNull { rawExtensions.contains(it) }
     }
 }

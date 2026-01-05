@@ -218,10 +218,15 @@ internal fun GalleryScreen(
         openAfterImport: Boolean,
         immichAssetId: String? = null,
         immichAlbumId: String? = null
-    ) {
+    ): Boolean {
+        val trimmedName = name.trim()
+        if (trimmedName.isEmpty() || !SupportedRawExtensions.hasSupportedExtension(trimmedName)) {
+            return false
+        }
+
         val projectId = withContext(Dispatchers.IO) {
             storage.importRawFile(
-                name,
+                trimmedName,
                 bytes,
                 immichAssetId = immichAssetId,
                 immichAlbumId = immichAlbumId
@@ -230,7 +235,7 @@ internal fun GalleryScreen(
         val now = System.currentTimeMillis()
         val item = GalleryItem(
             projectId = projectId,
-            fileName = name,
+            fileName = trimmedName,
             thumbnail = null,
             tags = emptyList(),
             rawMetadata = emptyMap(),
@@ -304,16 +309,22 @@ internal fun GalleryScreen(
                 }
             }
         }
+        return true
     }
 
-    suspend fun importUri(uri: Uri, openAfterImport: Boolean) {
-        val bytes = withContext(Dispatchers.IO) {
-            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+    suspend fun importUri(uri: Uri, openAfterImport: Boolean): Boolean {
+        val resolver = context.contentResolver
+        val (name, mimeType, bytes) = withContext(Dispatchers.IO) {
+            val fileName = displayNameForUri(context, uri)
+            val type = resolver.getType(uri)
+            val data = resolver.openInputStream(uri)?.use { it.readBytes() }
+            Triple(fileName, type, data)
         }
+        val normalizedName = SupportedRawExtensions.normalizeFileName(name, mimeType) ?: return false
         if (bytes != null) {
-            val name = displayNameForUri(context, uri)
-            importBytes(name, bytes, openAfterImport)
+            return importBytes(normalizedName, bytes, openAfterImport)
         }
+        return false
     }
 
     val activity = context as? Activity
@@ -346,8 +357,8 @@ internal fun GalleryScreen(
             var opened = false
             urisToImport.forEach { uri ->
                 val openThis = openEditorOnImportEnabled && !opened
-                importUri(uri, openAfterImport = openThis)
-                if (openThis) opened = true
+                val imported = importUri(uri, openAfterImport = openThis)
+                if (imported && openThis) opened = true
             }
             intent.action = null
             intent.data = null
@@ -567,11 +578,9 @@ internal fun GalleryScreen(
         coroutineScope.launch {
             var opened = false
             uris.forEach { uri ->
-                val fileName = displayNameForUri(context, uri)
-                if (!SupportedRawExtensions.hasSupportedExtension(fileName)) return@forEach
                 val openThis = openEditorOnImportEnabled && !opened
-                importUri(uri, openAfterImport = openThis)
-                if (openThis) opened = true
+                val imported = importUri(uri, openAfterImport = openThis)
+                if (imported && openThis) opened = true
             }
         }
     }
@@ -1040,13 +1049,17 @@ internal fun GalleryScreen(
                     Toast.makeText(context, "Immich download failed.", Toast.LENGTH_SHORT).show()
                     return@launch
                 }
-                importBytes(
-                    asset.fileName,
-                    bytes,
-                    openAfterImport = true,
-                    immichAssetId = asset.id,
-                    immichAlbumId = immichSelectedAlbum?.id
-                )
+                val imported =
+                    importBytes(
+                        asset.fileName,
+                        bytes,
+                        openAfterImport = true,
+                        immichAssetId = asset.id,
+                        immichAlbumId = immichSelectedAlbum?.id
+                    )
+                if (!imported) {
+                    Toast.makeText(context, "Unsupported Immich file type.", Toast.LENGTH_SHORT).show()
+                }
             } finally {
                 immichDownloadInFlight.remove(asset.id)
             }
