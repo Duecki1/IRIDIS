@@ -13,9 +13,11 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.provider.MediaStore
 import android.view.animation.PathInterpolator
+import com.dueckis.kawaiiraweditor.R
 import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
 import com.dueckis.kawaiiraweditor.data.model.MaskState
 import com.dueckis.kawaiiraweditor.data.native.LibRawDecoder
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -75,7 +77,8 @@ data class ReplayTiming(
     val stageFadeSec: Double = 1.4,
     val fadeToBlackSec: Double = 1.0,
     val blackHoldSec: Double = 0.6,
-    val logoOutroSec: Double = 2.2
+    val logoOutroSec: Double = 2.2,
+    val watermarkFadeSec: Double = 0.5
 )
 
 data class OverlayStyle(
@@ -122,6 +125,8 @@ internal suspend fun exportReplayVideo(
     val normalizedTiming = if (timing.fps <= 0) timing.copy(fps = DEFAULT_REPLAY_FPS) else timing
     val fps = normalizedTiming.fps
 
+    var watermarkIcon: Bitmap? = null
+
     try {
         for ((stage, spec) in renderSpecs) {
             val bitmap = renderStageBitmap(
@@ -146,7 +151,8 @@ internal suspend fun exportReplayVideo(
             }
         }
 
-        val frameGenerator = ReplayFrameGenerator(scaledBitmaps, normalizedTiming, overlayStyle)
+        watermarkIcon = loadWatermarkIcon(context, min(targetSize.first, targetSize.second))
+        val frameGenerator = ReplayFrameGenerator(scaledBitmaps, normalizedTiming, overlayStyle, watermarkIcon)
         val frameSequence = frameGenerator.frames()
         val frameDurationUs = 1_000_000L / fps
 
@@ -182,6 +188,10 @@ internal suspend fun exportReplayVideo(
     } catch (t: Throwable) {
         return ReplayExportResult(success = false, errorMessage = t.message ?: "Replay export failed.")
     } finally {
+        watermarkIcon?.let {
+            if (!it.isRecycled) it.recycle()
+        }
+        watermarkIcon = null
         scaledBitmaps.values.forEach { if (!it.isRecycled) it.recycle() }
         renderedBitmaps.values.forEach { if (!it.isRecycled) it.recycle() }
     }
@@ -320,14 +330,127 @@ private fun drawStageLabel(
     canvas.drawText(label, rect.left + pad, baseline, textPaint)
 }
 
+private fun loadWatermarkIcon(context: Context, frameMinDimension: Int): Bitmap? {
+    val baseSize = (frameMinDimension * 0.12f).roundToInt().coerceIn(48, 256)
+    val drawable = ContextCompat.getDrawable(context, R.mipmap.ic_launcher) ?: return null
+    val width = drawable.intrinsicWidth.takeIf { it > 0 } ?: baseSize
+    val height = drawable.intrinsicHeight.takeIf { it > 0 } ?: baseSize
+    val scale = baseSize / max(width, height).toFloat()
+    val targetWidth = (width * scale).roundToInt().coerceAtLeast(24)
+    val targetHeight = (height * scale).roundToInt().coerceAtLeast(24)
+    val bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    drawable.setBounds(0, 0, targetWidth, targetHeight)
+    drawable.draw(canvas)
+    return bitmap
+}
+
+private fun drawWatermark(bitmap: Bitmap, overlayStyle: OverlayStyle, iconBitmap: Bitmap?, alpha: Float) {
+    val width = bitmap.width
+    val height = bitmap.height
+    if (width <= 0 || height <= 0) return
+
+    val minDim = min(width, height).toFloat()
+    val margin = minDim * 0.02f
+    val innerPad = margin * 0.6f
+    val iconSize = (minDim * 0.085f).coerceAtLeast(40f)
+    val titleSize = (minDim * 0.028f).coerceAtLeast(16f)
+    val subtitleSize = (titleSize * 0.58f).coerceAtLeast(11f)
+    val subtitleSpacing = subtitleSize * 0.45f
+    val textBlockHeight = titleSize + subtitleSpacing + subtitleSize
+    val contentHeight = max(iconSize, textBlockHeight)
+    val bgHeight = contentHeight + innerPad * 2f
+    val bgTop = height - margin - bgHeight
+    if (bgTop < 0f) return
+    val bgLeft = margin
+    val brandText = "IRIDIS"
+    val taglineText = "Open-source raw editor for android"
+
+    val opacity = alpha.coerceIn(0f, 1f)
+
+    val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textSize = titleSize
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        this.alpha = (opacity * 255f).roundToInt().coerceIn(0, 255)
+    }
+    val subtitlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        this.alpha = ((overlayStyle.bgAlpha * 0.85f) * opacity).roundToInt().coerceIn(0, 255)
+        textSize = subtitleSize
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+    }
+
+    val titleWidth = textPaint.measureText(brandText)
+    val subtitleWidth = subtitlePaint.measureText(taglineText)
+    val maxTextWidth = max(titleWidth, subtitleWidth)
+    val contentWidth = iconSize + innerPad + maxTextWidth
+    val bgWidth = contentWidth + innerPad * 2f
+    val bgRight = (bgLeft + bgWidth).coerceAtMost(width - margin)
+    val adjustedContentWidth = bgRight - bgLeft - innerPad * 2f
+    val textScale = if (adjustedContentWidth < contentWidth) adjustedContentWidth / contentWidth else 1f
+    if (textScale < 1f) {
+        textPaint.textSize *= textScale
+        subtitlePaint.textSize *= textScale
+    }
+
+    val canvas = Canvas(bitmap)
+    val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.BLACK
+        this.alpha = ((overlayStyle.bgAlpha * 0.85f) * opacity).roundToInt().coerceIn(0, 255)
+    }
+    val radius = bgHeight * 0.22f
+    val bgRect = RectF(bgLeft, bgTop, bgRight, bgTop + bgHeight)
+    canvas.drawRoundRect(bgRect, radius, radius, bgPaint)
+
+    val iconLeft = bgRect.left + innerPad
+    val iconTop = bgRect.top + innerPad + (contentHeight - iconSize) / 2f
+    val iconRect = RectF(iconLeft, iconTop, iconLeft + iconSize, iconTop + iconSize)
+
+    val icon = iconBitmap
+    if (icon != null && !icon.isRecycled) {
+        val srcRect = Rect(0, 0, icon.width, icon.height)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.alpha = (opacity * 255f).roundToInt().coerceIn(0, 255) }
+        canvas.drawBitmap(icon, srcRect, iconRect, paint)
+    } else {
+        val iconBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#FF7AC4")
+            this.alpha = (opacity * 255f).roundToInt().coerceIn(0, 255)
+        }
+        canvas.drawRoundRect(iconRect, iconSize * 0.2f, iconSize * 0.2f, iconBgPaint)
+
+        val iconCenterX = iconRect.centerX()
+        val iconCenterY = iconRect.centerY()
+        val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeWidth = iconSize * 0.12f
+            this.alpha = (opacity * 255f).roundToInt().coerceIn(0, 255)
+        }
+        canvas.drawCircle(iconCenterX, iconCenterY, iconSize * 0.28f, ringPaint)
+        ringPaint.style = Paint.Style.FILL
+        ringPaint.alpha = (180 * opacity).roundToInt().coerceIn(0, 255)
+        canvas.drawCircle(iconCenterX, iconCenterY, iconSize * 0.14f, ringPaint)
+    }
+
+    val textStartX = iconRect.right + innerPad
+    val textBlockTop = bgRect.top + innerPad + (contentHeight - textBlockHeight) / 2f
+    val titleBaseline = textBlockTop + textPaint.textSize
+    val subtitleBaseline = titleBaseline + subtitleSpacing + subtitlePaint.textSize
+    canvas.drawText(brandText, textStartX, titleBaseline, textPaint)
+    canvas.drawText(taglineText, textStartX, subtitleBaseline, subtitlePaint)
+}
+
 private class ReplayFrameGenerator(
     private val bitmaps: Map<ReplayStage, Bitmap>,
     private val timing: ReplayTiming,
-    private val overlayStyle: OverlayStyle
+    private val overlayStyle: OverlayStyle,
+    private val watermarkIcon: Bitmap?
 ) {
     private val fps = timing.fps.coerceAtLeast(1)
     private val frameDurationUs = 1_000_000L / fps
     private val fastOutSlowIn = PathInterpolator(0.4f, 0f, 0.2f, 1f)
+    private val watermarkFadeFrames = secondsToFrames(timing.watermarkFadeSec, fps)
 
     var frameCount: Int = 0
         private set
@@ -337,6 +460,7 @@ private class ReplayFrameGenerator(
         val unedited = bitmaps[ReplayStage.Unedited] ?: return@sequence
         val stageSequence = buildCrossfadeStages(bitmaps)
         if (stageSequence.isEmpty()) return@sequence
+        val logoStartFrame = computeLogoStartFrame(stageSequence)
 
         val width = edited.width
         val height = edited.height
@@ -361,6 +485,10 @@ private class ReplayFrameGenerator(
                         drawStageLabel(labelCanvas, state.text, width, height, state.alpha, overlayStyle, state.topRight)
                     }
                 }
+            }
+            val watermarkOpacity = watermarkAlpha(localFrame, logoStartFrame)
+            if (watermarkOpacity > 0f) {
+                drawWatermark(working, overlayStyle, watermarkIcon, watermarkOpacity)
             }
             val data = working.toI420()
             yield(PreparedFrame(data, localFrame.toLong() * frameDurationUs))
@@ -485,6 +613,36 @@ private class ReplayFrameGenerator(
             blackBitmap.recycle()
         }
     }
+
+    private fun watermarkAlpha(frameIndex: Int, logoStartFrame: Int): Float {
+        val fadeFrames = watermarkFadeFrames.coerceAtLeast(1)
+        val fadeStart = (logoStartFrame - fadeFrames).coerceAtLeast(0)
+        return when {
+            frameIndex >= logoStartFrame -> 0f
+            frameIndex <= fadeStart -> 1f
+            else -> 1f - ((frameIndex - fadeStart).toFloat() / fadeFrames.toFloat()).coerceIn(0f, 1f)
+        }
+    }
+
+    private fun computeLogoStartFrame(stageSequence: List<StageFrame>): Int {
+        fun positiveFrames(raw: Int): Int = raw.coerceAtLeast(1)
+
+        val holdSplit = positiveFrames(secondsToFrames(timing.wipeHoldSec, fps))
+        val toEdited = positiveFrames(secondsToFrames(timing.wipeToEditedSec, fps))
+        val holdEdited = positiveFrames(secondsToFrames(timing.editedHoldSec, fps))
+        val toOriginal = positiveFrames(secondsToFrames(timing.wipeToOriginalSec, fps))
+        val holdOriginal = positiveFrames(secondsToFrames(timing.originalHoldSec, fps))
+
+        val pairCount = (stageSequence.size - 1).coerceAtLeast(0)
+        val stageHold = positiveFrames(secondsToFrames(timing.stageHoldSec, fps))
+        val stageFade = positiveFrames(secondsToFrames(timing.stageFadeSec, fps))
+        val stageFrames = pairCount * (stageHold + stageFade) + stageHold
+
+        val fadeToBlack = positiveFrames(secondsToFrames(timing.fadeToBlackSec, fps))
+        val blackHold = secondsToFrames(timing.blackHoldSec, fps).coerceAtLeast(0)
+
+        return holdSplit + toEdited + holdEdited + toOriginal + holdOriginal + stageFrames + fadeToBlack + blackHold
+    }
 }
 
 private fun buildCrossfadeStages(bitmaps: Map<ReplayStage, Bitmap>): List<StageFrame> {
@@ -503,11 +661,15 @@ private fun buildCrossfadeStages(bitmaps: Map<ReplayStage, Bitmap>): List<StageF
             sequence += StageFrame(stage, bitmap)
         }
     }
+    val unedited = bitmaps[ReplayStage.Unedited]
+    if (unedited != null && (sequence.isEmpty() || sequence.first().bitmap !== unedited)) {
+        sequence.add(0, StageFrame(ReplayStage.Unedited, unedited))
+    }
     if (sequence.isEmpty()) {
-        val unedited = bitmaps[ReplayStage.Unedited]
+        val fallbackUnedited = bitmaps[ReplayStage.Unedited]
         val edited = bitmaps[ReplayStage.FinalEdited]
         return listOfNotNull(
-            unedited?.let { StageFrame(ReplayStage.Unedited, it) },
+            fallbackUnedited?.let { StageFrame(ReplayStage.Unedited, it) },
             edited?.let { StageFrame(ReplayStage.FinalEdited, it) }
         )
     }
@@ -517,10 +679,10 @@ private fun buildCrossfadeStages(bitmaps: Map<ReplayStage, Bitmap>): List<StageF
 private fun labelForStage(stage: ReplayStage): String = when (stage) {
     ReplayStage.Unedited -> "Original"
     ReplayStage.ToneOnly -> "Tone"
-    ReplayStage.ColorOnly -> "Tone + Color"
-    ReplayStage.ColorGrading -> "Tone + Color + Grading"
-    ReplayStage.Masks -> "Tone + Color + Grading + Masks"
-    ReplayStage.Effects -> "Tone + Color + Grading + Masks + Effects"
+    ReplayStage.ColorOnly -> "Color"
+    ReplayStage.ColorGrading -> "Color Grading"
+    ReplayStage.Masks -> "Masks"
+    ReplayStage.Effects -> "Effects"
     ReplayStage.FinalEdited -> "Final"
 }
 
