@@ -8,6 +8,8 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.util.Log
+import java.io.FileDescriptor
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -94,6 +96,57 @@ internal fun saveBitmapToPictures(
             return null
         }
     }
+    return uri
+}
+
+internal fun saveMp4ToMovies(
+    context: Context,
+    displayName: String,
+    relativePath: String? = null,
+    durationMs: Long = 0L,
+    write: (FileDescriptor) -> Boolean
+): Uri? {
+    val contentValues = ContentValues().apply {
+        put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+        put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+        put(MediaStore.Video.VideoColumns.DATE_TAKEN, System.currentTimeMillis())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            put(
+                MediaStore.MediaColumns.RELATIVE_PATH,
+                relativePath?.takeIf { !it.isNullOrBlank() } ?: "Movies/IRIDIS"
+            )
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+    }
+    val resolver = context.contentResolver
+    val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues) ?: return null
+    val pfd = resolver.openFileDescriptor(uri, "rw")
+    if (pfd == null) {
+        resolver.delete(uri, null, null)
+        return null
+    }
+
+    val success = pfd.use { descriptor ->
+        runCatching { write(descriptor.fileDescriptor) }.getOrElse {
+            Log.e("MediaUtils", "Failed to write MP4", it)
+            false
+        }
+    }
+
+    if (!success) {
+        resolver.delete(uri, null, null)
+        return null
+    }
+
+    val updateValues = ContentValues().apply {
+        if (durationMs > 0) {
+            put(MediaStore.Video.VideoColumns.DURATION, durationMs)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            put(MediaStore.MediaColumns.IS_PENDING, 0)
+        }
+    }
+    resolver.update(uri, updateValues, null, null)
     return uri
 }
 

@@ -38,6 +38,7 @@ import com.dueckis.kawaiiraweditor.data.immich.addImmichAssetsToAlbum
 import com.dueckis.kawaiiraweditor.data.immich.uploadImmichAsset
 import com.dueckis.kawaiiraweditor.data.media.ExportImageFormat
 import com.dueckis.kawaiiraweditor.data.media.decodeToBitmap
+import com.dueckis.kawaiiraweditor.data.media.exportReplayVideo
 import com.dueckis.kawaiiraweditor.data.media.saveBitmapToPictures
 import com.dueckis.kawaiiraweditor.data.media.saveJpegToPictures
 import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
@@ -163,7 +164,43 @@ internal fun ExportButton(
             )
         )
     }
+    var exportProgressMessage by remember { mutableStateOf<String?>(null) }
     val appPreferences = remember(context) { AppPreferences(context) }
+
+    fun startReplayExport() {
+        if (isExporting || sessionHandle == 0L) return
+        showExportDialog = false
+        showDestinationDialog = false
+        showImmichAlbumDialog = false
+        val currentAdjustments = adjustments
+        val currentMasks = masks
+        exportProgressMessage = "Creating replay video..."
+        pendingImmichConfig = null
+        pendingOptions = null
+        onExportStart()
+
+        coroutineScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    exportReplayVideo(
+                        context = context,
+                        sessionHandle = sessionHandle,
+                        adjustments = currentAdjustments,
+                        masks = currentMasks,
+                        nativeDispatcher = nativeDispatcher
+                    )
+                }
+                exportProgressMessage = null
+                if (result.success && result.uri != null) {
+                    onExportComplete(true, "Saved to ${result.uri}")
+                } else {
+                    onExportComplete(false, result.errorMessage ?: "Replay export failed.")
+                }
+            } finally {
+                exportProgressMessage = null
+            }
+        }
+    }
 
     LaunchedEffect(originImmichAlbumId) {
         if (!originImmichAlbumId.isNullOrBlank()) {
@@ -200,6 +237,8 @@ internal fun ExportButton(
         val currentAdjustments = adjustments
         val currentMasks = masks
         onExportStart()
+        exportProgressMessage =
+            if (destination == ExportDestination.Immich) "Uploading to Immich..." else "Saving export..."
 
         coroutineScope.launch {
             try {
@@ -313,6 +352,7 @@ internal fun ExportButton(
                     }
                 }
             } finally {
+                exportProgressMessage = null
                 showExportDialog = false
             }
         }
@@ -340,6 +380,7 @@ internal fun ExportButton(
         ExportOptionsDialog(
             initial = lastOptions,
             isLoading = isExporting,
+            onExportReplay = if (isExporting) null else ::startReplayExport,
             onDismissRequest = {
                 if (!isExporting) {
                     showExportDialog = false
@@ -419,8 +460,8 @@ internal fun ExportButton(
     }
 
     if (isExporting && !showExportDialog && !showDestinationDialog && !showImmichAlbumDialog) {
-        val isImmichTarget = pendingImmichConfig != null
-        val message = if (isImmichTarget) "Uploading to Immich..." else "Saving export..."
+        val message = exportProgressMessage
+            ?: if (pendingImmichConfig != null) "Uploading to Immich..." else "Saving export..."
         ExportProgressDialog(message = message)
     }
 }

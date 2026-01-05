@@ -8,8 +8,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -35,6 +39,7 @@ import com.dueckis.kawaiiraweditor.ui.components.doubleTapSliderThumbToReset
 internal fun ExportOptionsDialog(
     initial: ExportOptions,
     isLoading: Boolean,
+    onExportReplay: (() -> Unit)? = null,
     onDismissRequest: () -> Unit,
     onConfirm: (ExportOptions) -> Unit
 ) {
@@ -50,7 +55,23 @@ internal fun ExportOptionsDialog(
 
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismissRequest() },
-        title = { Text("Export") },
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Export")
+                if (onExportReplay != null) {
+                    IconButton(
+                        enabled = !isLoading,
+                        onClick = onExportReplay
+                    ) {
+                        Icon(imageVector = Icons.Filled.Movie, contentDescription = "Export replay video")
+                    }
+                }
+            }
+        },
         text = {
             Box(contentAlignment = Alignment.Center) {
                 Column(
