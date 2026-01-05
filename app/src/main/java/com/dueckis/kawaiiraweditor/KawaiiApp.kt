@@ -111,6 +111,9 @@ fun KawaiiApp(
         mutableStateOf(appPreferences.isImmichDescriptionSyncEnabled())
     }
 
+    val automaticTaggingActive =
+        automaticTaggingEnabled && aiAssistanceLevel == AppPreferences.AiAssistanceLevel.All
+
     val tutorialSteps = remember { buildTutorialSteps() }
     var tutorialCompleted by remember { mutableStateOf(appPreferences.isTutorialCompleted()) }
     var tutorialStepIndex by remember { mutableIntStateOf(0) }
@@ -130,10 +133,6 @@ fun KawaiiApp(
         maybeRequestPostNotificationsPermission(context) { permission ->
             notificationPermissionLauncher.launch(permission)
         }
-    }
-
-    LaunchedEffect(Unit) {
-        requestNotificationPermissionIfNeeded()
     }
 
     val tagBackfillQueue = remember { Channel<String>(capacity = Channel.UNLIMITED) }
@@ -190,37 +189,36 @@ fun KawaiiApp(
         galleryItems = galleryItems.updateById(projectId) { item -> item.copy(rawMetadata = map) }
     }
 
-    LaunchedEffect(Unit) {
-        if (automaticTaggingEnabled) {
-            for (projectId in tagBackfillQueue) {
-                tagBackfillQueued.remove(projectId)
-                setTaggingInFlight(projectId, true)
-                try {
-                    val projectMeta = withContext(Dispatchers.IO) {
-                        storage.getAllProjects().firstOrNull { it.id == projectId }
-                    } ?: continue
-                    if (!projectMeta.tags.isNullOrEmpty() && !projectMeta.rawMetadata.isNullOrEmpty()) continue
+    LaunchedEffect(automaticTaggingActive) {
+        if (!automaticTaggingActive) return@LaunchedEffect
+        for (projectId in tagBackfillQueue) {
+            tagBackfillQueued.remove(projectId)
+            setTaggingInFlight(projectId, true)
+            try {
+                val projectMeta = withContext(Dispatchers.IO) {
+                    storage.getAllProjects().firstOrNull { it.id == projectId }
+                } ?: continue
+                if (!projectMeta.tags.isNullOrEmpty() && !projectMeta.rawMetadata.isNullOrEmpty()) continue
 
-                    val rawBytes = withContext(Dispatchers.IO) { storage.loadRawBytes(projectId) } ?: continue
+                val rawBytes = withContext(Dispatchers.IO) { storage.loadRawBytes(projectId) } ?: continue
 
-                    if (projectMeta.rawMetadata.isNullOrEmpty()) {
-                        runCatching { computeAndPersistRawMetadata(projectId, rawBytes) }
-                    }
-
-                    val tags = withContext(Dispatchers.Default) {
-                        runCatching {
-                            val previewBytes = decodePreviewBytesForTagging(rawBytes, lowQualityPreviewEnabled)
-                            val bmp = previewBytes?.decodeToBitmap()
-                            if (bmp == null) emptyList()
-                            else tagger.generateTags(bmp, onProgress = { p -> setTagProgress(projectId, p) })
-                        }.getOrDefault(emptyList())
-                    }
-                    if (tags.isEmpty()) continue
-                    withContext(Dispatchers.IO) { storage.setTags(projectId, tags) }
-                    galleryItems = galleryItems.updateById(projectId) { item -> item.copy(tags = tags) }
-                } finally {
-                    setTaggingInFlight(projectId, false)
+                if (projectMeta.rawMetadata.isNullOrEmpty()) {
+                    runCatching { computeAndPersistRawMetadata(projectId, rawBytes) }
                 }
+
+                val tags = withContext(Dispatchers.Default) {
+                    runCatching {
+                        val previewBytes = decodePreviewBytesForTagging(rawBytes, lowQualityPreviewEnabled)
+                        val bmp = previewBytes?.decodeToBitmap()
+                        if (bmp == null) emptyList()
+                        else tagger.generateTags(bmp, onProgress = { p -> setTagProgress(projectId, p) })
+                    }.getOrDefault(emptyList())
+                }
+                if (tags.isEmpty()) continue
+                withContext(Dispatchers.IO) { storage.setTags(projectId, tags) }
+                galleryItems = galleryItems.updateById(projectId) { item -> item.copy(tags = tags) }
+            } finally {
+                setTaggingInFlight(projectId, false)
             }
         }
     }
@@ -334,7 +332,7 @@ fun KawaiiApp(
         }
 
         val missingTagIds = projects.filter { it.tags.isNullOrEmpty() }.map { it.id }
-        if (missingTagIds.isNotEmpty() && automaticTaggingEnabled) {
+        if (missingTagIds.isNotEmpty() && automaticTaggingActive && tutorialCompleted) {
             requestNotificationPermissionIfNeeded()
         }
         missingTagIds.forEach { id ->
@@ -392,7 +390,7 @@ fun KawaiiApp(
                         items = galleryItems,
                         tagger = tagger,
                         lowQualityPreviewEnabled = lowQualityPreviewEnabled,
-                        automaticTaggingEnabled = automaticTaggingEnabled,
+                        automaticTaggingEnabled = automaticTaggingActive,
                         openEditorOnImportEnabled = openEditorOnImportEnabled,
                         immichDescriptionSyncEnabled = immichDescriptionSyncEnabled,
                         immichServerUrl = immichServerUrl,
@@ -615,6 +613,9 @@ fun KawaiiApp(
                             }
                         },
                         onContinue = {
+                            if (activeTutorialStep.id == TUTORIAL_STEP_NOTIFICATIONS) {
+                                requestNotificationPermissionIfNeeded()
+                            }
                             val nextIndex = tutorialStepIndex + 1
                             if (nextIndex >= tutorialSteps.size) {
                                 appPreferences.setTutorialCompleted(true)
@@ -637,6 +638,7 @@ fun KawaiiApp(
     }
 }
 
+private const val TUTORIAL_STEP_NOTIFICATIONS = "tutorial_notifications"
 private const val TUTORIAL_STEP_CREDITS = "tutorial_credits"
 private const val TUTORIAL_STEP_AI_USAGE = "tutorial_ai_usage"
 private const val OPTION_AI_NONE = "ai_none"
@@ -646,13 +648,21 @@ private const val OPTION_AI_ALL = "ai_all"
 private fun buildTutorialSteps(): List<TutorialStep> = listOf(
     TutorialStep.Info(
         id = TUTORIAL_STEP_CREDITS,
-        title = "Welcome to Kawaii RAW Editor",
+        title = "Welcome to IRIDIS",
         body = listOf(
-            "Kawaii RAW Editor builds on the open-source RapidRAW project.",
-            "RAW decoding and processing is powered by the rawler library.",
+            "IRIDIS builds on the open-source RapidRAW project.",
+            "RAW decoding is powered by the rawler library.",
             "Huge thanks to both communities for making this possible."
         ),
         continueLabel = "Next"
+    ),
+    TutorialStep.Info(
+        id = TUTORIAL_STEP_NOTIFICATIONS,
+        title = "Enable Notifications",
+        body = listOf(
+            "IRIDIS will send you notifications for status updates of various processes.",
+        ),
+        continueLabel = "Allow Notifications"
     ),
     TutorialStep.MultipleChoice(
         id = TUTORIAL_STEP_AI_USAGE,

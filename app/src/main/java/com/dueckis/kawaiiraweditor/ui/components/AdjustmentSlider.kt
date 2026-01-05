@@ -38,53 +38,64 @@ internal fun AdjustmentSlider(
 ) {
     val colors = SliderDefaults.colors(
         activeTrackColor = MaterialTheme.colorScheme.primary,
-        inactiveTrackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+        inactiveTrackColor = MaterialTheme.colorScheme.onSurfaceVariant,
         thumbColor = MaterialTheme.colorScheme.primary
     )
-
-    // GUARD: Prevents the slider from jumping back to the touch position after reset
-    var lastResetTime by remember { mutableLongStateOf(0L) }
-    val snappedDefault = snapValueToStepLocal(defaultValue, step, range)
-
-    val performReset = {
-        lastResetTime = System.currentTimeMillis()
-        onInteractionStart?.invoke()
-        onValueChange(snappedDefault)
-        onInteractionEnd?.invoke()
-    }
-
+    val snappedDefault = snapToStep(defaultValue, step, range)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        // Double tap on text header
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .pointerInput(Unit) {
-                    detectTapGestures(onDoubleTap = { performReset() })
+                .pointerInput(label, defaultValue) {
+                    detectTapGestures(
+                        onDoubleTap = {
+                            onInteractionStart?.invoke()
+                            onValueChange(defaultValue)
+                            onInteractionEnd?.invoke()
+                        }
+                    )
                 },
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(text = label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(text = formatter(value), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = formatter(value),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
-
-        Slider(
-            modifier = Modifier
-                .fillMaxWidth()
-                .interceptDoubleTapToReset { performReset() }, // NEW INTERCEPTOR
-            value = value,
-            onValueChange = { newValue ->
-                // Guard: Ignore seek events for 250ms after a reset
-                if (System.currentTimeMillis() - lastResetTime > 250) {
-                    val snapped = snapValueToStepLocal(newValue, step, range)
+        Box(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .doubleTapSliderThumbToReset(
+                        value = value,
+                        valueRange = range,
+                        onReset = {
+                            onInteractionStart?.invoke()
+                            onValueChange(snappedDefault)
+                            onInteractionEnd?.invoke()
+                        }
+                    )
+        ) {
+            Slider(
+                modifier = Modifier.fillMaxWidth(),
+                value = value,
+                onValueChange = { newValue ->
+                    val snapped = snapToStep(newValue, step, range)
                     onInteractionStart?.invoke()
                     onValueChange(snapped)
-                }
-            },
-            onValueChangeFinished = { onInteractionEnd?.invoke() },
-            valueRange = range,
-            colors = colors
-        )
+                },
+                onValueChangeFinished = { onInteractionEnd?.invoke() },
+                valueRange = range,
+                colors = colors
+            )
+        }
     }
 }
 
