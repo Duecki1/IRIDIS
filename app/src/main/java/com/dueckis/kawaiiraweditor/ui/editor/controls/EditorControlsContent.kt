@@ -10,15 +10,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -26,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.dueckis.kawaiiraweditor.data.model.AdjustmentControl
 import com.dueckis.kawaiiraweditor.data.model.AdjustmentState
 import com.dueckis.kawaiiraweditor.data.model.AiEnvironmentCategory
 import com.dueckis.kawaiiraweditor.data.model.BrushTool
@@ -38,8 +32,10 @@ import com.dueckis.kawaiiraweditor.data.model.adjustmentSections
 import com.dueckis.kawaiiraweditor.data.model.vignetteSection
 import com.dueckis.kawaiiraweditor.domain.HistogramData
 import com.dueckis.kawaiiraweditor.ui.components.AdjustmentSlider
+import com.dueckis.kawaiiraweditor.ui.components.CompactTabRow
+import com.dueckis.kawaiiraweditor.ui.components.PanelSectionCard
 import com.dueckis.kawaiiraweditor.ui.components.ToneMapperSection
-@OptIn(ExperimentalMaterial3Api::class)
+
 @Composable
 internal fun EditorControlsContent(
     panelTab: EditorPanelTab,
@@ -125,67 +121,67 @@ internal fun EditorControlsContent(
                     }
 
                     EditorPanelTab.Adjustments -> {
-                        val lightToneTabs = adjustmentSections.map { it.first }
+                        val lightToneSections = adjustmentSections.map { (title, controls) ->
+                            LightToneSection(
+                                key = title,
+                                title = title,
+                                compactLabel = title,
+                                controls = controls
+                            )
+                        }
                         var selectedLightToneTab by remember { mutableIntStateOf(0) }
 
-                        if (lightToneTabs.isNotEmpty()) {
-                            SingleChoiceSegmentedButtonRow(
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                lightToneTabs.forEachIndexed { index, title ->
-                                    SegmentedButton(
-                                        selected = selectedLightToneTab == index,
-                                        onClick = { selectedLightToneTab = index },
-                                        shape = SegmentedButtonDefaults.itemShape(
-                                            index = index,
-                                            count = lightToneTabs.size
-                                        ),
-                                        label = { Text(title) }
-                                    )
-                                }
-                            }
+                        if (lightToneSections.isNotEmpty()) {
+                            val tabLabels = lightToneSections.map { it.compactLabel }
+                            val selectedIndex = selectedLightToneTab.coerceIn(0, lightToneSections.lastIndex)
 
-                            Spacer(modifier = Modifier.height(16.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                CompactTabRow(
+                                    labels = tabLabels,
+                                    selectedIndex = selectedIndex,
+                                    onSelected = { selectedLightToneTab = it },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
 
-                            AnimatedContent(targetState = selectedLightToneTab, label = "LightToneTabs") { tabIndex ->
-                                val safeIndex = tabIndex.coerceIn(0, lightToneTabs.lastIndex)
-                                val (sectionTitle, controls) = adjustmentSections[safeIndex]
+                                AnimatedContent(targetState = selectedIndex, label = "LightToneTabs") { tabIndex ->
+                                    val section = lightToneSections[tabIndex]
 
-                                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    if (sectionTitle.equals("Basic", ignoreCase = true) && showToneCurveProfileSwitcher) {
-                                        ExpressiveSectionContainer(title = "Tone Curve Profile") {
-                                            ToneMapperSection(
-                                                toneMapper = adjustments.toneMapper,
-                                                exposure = adjustments.exposure,
-                                                onToneMapperChange = { mapper ->
-                                                    onAdjustmentsChange(adjustments.withToneMapper(mapper))
-                                                },
-                                                onExposureChange = { value ->
-                                                    onAdjustmentsChange(adjustments.copy(exposure = value))
-                                                },
-                                                onInteractionStart = onBeginEditInteraction,
-                                                onInteractionEnd = onEndEditInteraction
-                                            )
-                                        }
-                                    }
-
-                                    ExpressiveSectionContainer(title = sectionTitle) {
-                                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                                            controls.forEach { control ->
-                                                val currentValue = adjustments.valueFor(control.field)
-                                                AdjustmentSlider(
-                                                    label = control.label,
-                                                    value = currentValue,
-                                                    range = control.range,
-                                                    step = control.step,
-                                                    defaultValue = control.defaultValue,
-                                                    formatter = control.formatter,
-                                                    onValueChange = { snapped ->
-                                                        onAdjustmentsChange(adjustments.withValue(control.field, snapped))
+                                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                        if (section.key.equals("Basic", ignoreCase = true) && showToneCurveProfileSwitcher) {
+                                            PanelSectionCard(title = "Tone Curve Profile") {
+                                                ToneMapperSection(
+                                                    toneMapper = adjustments.toneMapper,
+                                                    exposure = adjustments.exposure,
+                                                    onToneMapperChange = { mapper ->
+                                                        onAdjustmentsChange(adjustments.withToneMapper(mapper))
+                                                    },
+                                                    onExposureChange = { value ->
+                                                        onAdjustmentsChange(adjustments.copy(exposure = value))
                                                     },
                                                     onInteractionStart = onBeginEditInteraction,
                                                     onInteractionEnd = onEndEditInteraction
                                                 )
+                                            }
+                                        }
+
+                                        PanelSectionCard(title = section.title) {
+                                            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                                section.controls.forEach { control ->
+                                                    val currentValue = adjustments.valueFor(control.field)
+                                                    AdjustmentSlider(
+                                                        label = control.label,
+                                                        value = currentValue,
+                                                        range = control.range,
+                                                        step = control.step,
+                                                        defaultValue = control.defaultValue,
+                                                        formatter = control.formatter,
+                                                        onValueChange = { snapped ->
+                                                            onAdjustmentsChange(adjustments.withValue(control.field, snapped))
+                                                        },
+                                                        onInteractionStart = onBeginEditInteraction,
+                                                        onInteractionEnd = onEndEditInteraction
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -205,7 +201,6 @@ internal fun EditorControlsContent(
                     }
 
                     EditorPanelTab.Effects -> {
-                        CommonHeader(title = "Effects")
                         ExpressiveSectionContainer(title = "Vignette", subtitle = "Post-crop styling") {
                             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                                 vignetteSection.forEach { control ->
@@ -271,3 +266,10 @@ internal fun EditorControlsContent(
         }
     }
 }
+
+private data class LightToneSection(
+    val key: String,
+    val title: String,
+    val compactLabel: String,
+    val controls: List<AdjustmentControl>
+)
