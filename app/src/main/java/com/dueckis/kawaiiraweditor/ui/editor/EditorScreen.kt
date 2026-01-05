@@ -52,6 +52,8 @@ import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.automirrored.rounded.Redo
 import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.AlertDialog
@@ -813,6 +815,7 @@ internal fun EditorScreen(
     var brushSoftness by remember { mutableStateOf(0.5f) }
     var eraserSoftness by remember { mutableStateOf(0.5f) }
     var showMaskOverlay by remember { mutableStateOf(false) }
+    var isPreviewFullscreen by remember(galleryItem.projectId) { mutableStateOf(false) }
     var maskOverlayBlinkKey by remember { mutableStateOf(0L) }
     var maskOverlayBlinkSubMaskId by remember { mutableStateOf<String?>(null) }
     fun requestMaskOverlayBlink(highlightSubMaskId: String?) {
@@ -2969,105 +2972,124 @@ internal fun EditorScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                IconButton(
-                                    onClick = {
-                                        coroutineScope.launch {
-                                            val req = lastImmichSidecarSyncRequest
-                                            if (req != null) {
-                                                uploadIridisSidecarToImmich(req, force = true, showToastOnFailure = true)
+                                if (!isPreviewFullscreen) {
+                                    IconButton(
+                                        onClick = {
+                                            coroutineScope.launch {
+                                                val req = lastImmichSidecarSyncRequest
+                                                if (req != null) {
+                                                    uploadIridisSidecarToImmich(req, force = true, showToastOnFailure = true)
+                                                }
+                                                onBackClick()
                                             }
-                                            onBackClick()
+                                        },
+                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                                        )
+                                    ) {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.ArrowBack,
+                                            contentDescription = "Back",
+                                            tint = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
+                                        contentColor = MaterialTheme.colorScheme.onSurface,
+                                        shape = CircleShape
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = galleryItem.fileName,
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            if (immichDescriptionSyncEnabled && isImmichSidecarSyncing) {
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                LoadingIndicator(
+                                                    modifier = Modifier.size(12.dp),
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
                                         }
-                                    },
+                                    }
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        if (isTabletLayout) {
+                                            ExportOverlayButton {
+                                                IconButton(
+                                                    enabled = sessionHandle != 0L && !isExporting,
+                                                    onClick = { },
+                                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                                                    )
+                                                ) {
+                                                    Icon(
+                                                        Icons.Filled.Download,
+                                                        contentDescription = "Export",
+                                                        tint = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        IconButton(
+                                            onClick = { openEditTimeline() },
+                                            colors = IconButtonDefaults.filledIconButtonColors(
+                                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                                            )
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.History,
+                                                contentDescription = "Edit timeline",
+                                                tint = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                        IconButton(
+                                            enabled = sessionHandle != 0L,
+                                            onClick = { showMetadataDialog = true },
+                                            colors = IconButtonDefaults.filledIconButtonColors(
+                                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                                            )
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Info,
+                                                contentDescription = "Info",
+                                                tint = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                } else {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+
+                                IconButton(
+                                    onClick = { isPreviewFullscreen = !isPreviewFullscreen },
                                     colors = IconButtonDefaults.filledIconButtonColors(
                                         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
                                     )
                                 ) {
                                     Icon(
-                                        Icons.AutoMirrored.Filled.ArrowBack,
-                                        contentDescription = "Back",
+                                        imageVector = if (isPreviewFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+                                        contentDescription = if (isPreviewFullscreen) "Exit fullscreen" else "Enter fullscreen",
                                         tint = MaterialTheme.colorScheme.onSurface
                                     )
-                                }
-
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                Surface(
-                                    modifier = Modifier.weight(1f),
-                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
-                                    contentColor = MaterialTheme.colorScheme.onSurface,
-                                    shape = CircleShape
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = galleryItem.fileName,
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        if (immichDescriptionSyncEnabled && isImmichSidecarSyncing) {
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            LoadingIndicator(
-                                                modifier = Modifier.size(12.dp),
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                        }
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    if (isTabletLayout) {
-                                        ExportOverlayButton {
-                                            IconButton(
-                                                enabled = sessionHandle != 0L && !isExporting,
-                                                onClick = { },
-                                                colors = IconButtonDefaults.filledIconButtonColors(
-                                                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
-                                                )
-                                            ) {
-                                                Icon(
-                                                    Icons.Filled.Download,
-                                                    contentDescription = "Export",
-                                                    tint = MaterialTheme.colorScheme.onSurface
-                                                )
-                                            }
-                                        }
-                                    }
-                                    IconButton(
-                                        onClick = { openEditTimeline() },
-                                        colors = IconButtonDefaults.filledIconButtonColors(
-                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
-                                        )
-                                    ) {
-                                        Icon(
-                                            Icons.Filled.History,
-                                            contentDescription = "Edit timeline",
-                                            tint = MaterialTheme.colorScheme.onSurface
-                                        )
-                                    }
-                                    IconButton(
-                                        enabled = sessionHandle != 0L,
-                                        onClick = { showMetadataDialog = true },
-                                        colors = IconButtonDefaults.filledIconButtonColors(
-                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
-                                        )
-                                    ) {
-                                        Icon(
-                                            Icons.Filled.Info,
-                                            contentDescription = "Info",
-                                            tint = MaterialTheme.colorScheme.onSurface
-                                        )
-                                    }
                                 }
                             }
                         }
@@ -3331,26 +3353,33 @@ internal fun EditorScreen(
                             .weight(1f)
                     ) {
                         if (isTabletLayout) {
-                            Row(modifier = Modifier.fillMaxSize()) {
+                            if (isPreviewFullscreen) {
                                 PreviewPane(
                                     Modifier
-                                        .weight(1f)
-                                        .fillMaxHeight()
+                                        .fillMaxSize()
                                 )
-                                Column(
-                                    modifier = Modifier
-                                        .width(tabletControlsWidth)
-                                        .fillMaxHeight()
-                                ) {
-                                    ControlsPane(
+                            } else {
+                                Row(modifier = Modifier.fillMaxSize()) {
+                                    PreviewPane(
                                         Modifier
                                             .weight(1f)
-                                            .fillMaxWidth()
+                                            .fillMaxHeight()
                                     )
-                                    TabletBottomBar(
+                                    Column(
                                         modifier = Modifier
-                                            .fillMaxWidth()
-                                    )
+                                            .width(tabletControlsWidth)
+                                            .fillMaxHeight()
+                                    ) {
+                                        ControlsPane(
+                                            Modifier
+                                                .weight(1f)
+                                                .fillMaxWidth()
+                                        )
+                                        TabletBottomBar(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                        )
+                                    }
                                 }
                             }
                         } else {
@@ -3360,20 +3389,24 @@ internal fun EditorScreen(
                                         .weight(1f)
                                         .fillMaxWidth()
                                 )
-                                ControlsPane(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .height(bottomControlsHeight)
-                                )
+                                if (!isPreviewFullscreen) {
+                                    ControlsPane(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .height(bottomControlsHeight)
+                                    )
+                                }
                             }
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .padding(bottom = bottomToolbarPadding)
-                                    .windowInsetsPadding(WindowInsets.navigationBars)
-                                    .zIndex(1f)
-                            ) {
-                                PanelToolbar()
+                            if (!isPreviewFullscreen) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .padding(bottom = bottomToolbarPadding)
+                                        .windowInsetsPadding(WindowInsets.navigationBars)
+                                        .zIndex(1f)
+                                ) {
+                                    PanelToolbar()
+                                }
                             }
                         }
                     }
