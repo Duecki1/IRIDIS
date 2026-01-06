@@ -1884,48 +1884,32 @@ fn apply_highlights_adjustment(mut colors: [f32; 3], highlights: f32) -> [f32; 3
     if highlights.abs() < 0.00001 {
         return colors;
     }
-    
+
     let luma = get_luma(colors).max(0.0);
-    let mask_input = (luma * 1.5).tanh();
-    let highlight_mask = smoothstep(0.3, 0.95, mask_input);
-    
-    if highlight_mask < 0.001 {
+    let threshold = 0.5;
+    let mask = smoothstep(threshold, 1.2, luma);
+
+    if mask < 0.001 {
         return colors;
     }
-    
+
     if highlights < 0.0 {
-        let new_luma = if luma <= 1.0 {
-            let gamma = 1.0 - highlights * 1.75;
-            luma.powf(gamma)
-        } else {
-            let luma_excess = luma - 1.0;
-            let compression_strength = -highlights * 6.0;
-            let compressed_excess = luma_excess / (1.0 + luma_excess * compression_strength);
-            1.0 + compressed_excess
-        };
-        
-        let tonally_adjusted = [
-            colors[0] * (new_luma / luma.max(0.0001)),
-            colors[1] * (new_luma / luma.max(0.0001)),
-            colors[2] * (new_luma / luma.max(0.0001)),
-        ];
-        
-        let desaturation_amount = smoothstep(1.0, 10.0, luma);
-        let white_point = [new_luma, new_luma, new_luma];
-        
-        for i in 0..3 {
-            let final_adjusted = tonally_adjusted[i] + (white_point[i] - tonally_adjusted[i]) * desaturation_amount;
-            colors[i] = colors[i] + (final_adjusted - colors[i]) * highlight_mask;
-        }
+        // Multiplicative recovery keeps chroma while darkening clipped highlights.
+        let recovery_strength = 1.0 + (highlights * 0.5);
+        let factor = 1.0 * (1.0 - mask) + recovery_strength * mask;
+
+        colors[0] *= factor;
+        colors[1] *= factor;
+        colors[2] *= factor;
     } else {
         let adjustment = highlights * 1.75;
         let factor = 2f32.powf(adjustment);
         for i in 0..3 {
             let final_adjusted = colors[i] * factor;
-            colors[i] = colors[i] + (final_adjusted - colors[i]) * highlight_mask;
+            colors[i] = colors[i] + (final_adjusted - colors[i]) * mask;
         }
     }
-    
+
     colors
 }
 
@@ -2282,41 +2266,46 @@ fn apply_default_raw_processing(colors: [f32; 3], use_basic_tone_mapper: bool) -
     if !use_basic_tone_mapper {
         return colors; // AgX doesn't need default processing
     }
-    
-    // RapidRAW applies default brightness and contrast to RAW images
-    // when using Basic tone mapper
+
+    // RapidRAW applies default brightness and contrast to RAW images when using the Basic tone mapper.
     const BRIGHTNESS_GAMMA: f32 = 1.1;
     const CONTRAST_MIX: f32 = 0.75;
-    
-    // Convert to sRGB (clamped to display range for the "basic look" curve).
+
+    // Keep HDR headroom by only removing negative values before applying the display-style curve.
     let srgb = [
-        linear_to_srgb(colors[0].clamp(0.0, 1.0)),
-        linear_to_srgb(colors[1].clamp(0.0, 1.0)),
-        linear_to_srgb(colors[2].clamp(0.0, 1.0)),
+        linear_to_srgb(colors[0].max(0.0)),
+        linear_to_srgb(colors[1].max(0.0)),
+        linear_to_srgb(colors[2].max(0.0)),
     ];
-    
+
     // Apply brightness gamma
     let brightened = [
-        srgb[0].powf(1.0 / BRIGHTNESS_GAMMA),
-        srgb[1].powf(1.0 / BRIGHTNESS_GAMMA),
-        srgb[2].powf(1.0 / BRIGHTNESS_GAMMA),
+        srgb[0].signum() * srgb[0].abs().powf(1.0 / BRIGHTNESS_GAMMA),
+        srgb[1].signum() * srgb[1].abs().powf(1.0 / BRIGHTNESS_GAMMA),
+        srgb[2].signum() * srgb[2].abs().powf(1.0 / BRIGHTNESS_GAMMA),
     ];
-    
-    // Apply contrast S-curve
+
+    // Apply contrast S-curve while leaving >1.0 values untouched by the non-linear section.
+    let apply_contrast = |v: f32| -> f32 {
+        if v <= 1.0 {
+            v * v * (3.0 - 2.0 * v)
+        } else {
+            v
+        }
+    };
+
     let contrast_curve = [
-        brightened[0] * brightened[0] * (3.0 - 2.0 * brightened[0]),
-        brightened[1] * brightened[1] * (3.0 - 2.0 * brightened[1]),
-        brightened[2] * brightened[2] * (3.0 - 2.0 * brightened[2]),
+        apply_contrast(brightened[0]),
+        apply_contrast(brightened[1]),
+        apply_contrast(brightened[2]),
     ];
-    
-    // Mix in the contrast
+
     let contrasted = [
         brightened[0] + (contrast_curve[0] - brightened[0]) * CONTRAST_MIX,
         brightened[1] + (contrast_curve[1] - brightened[1]) * CONTRAST_MIX,
         brightened[2] + (contrast_curve[2] - brightened[2]) * CONTRAST_MIX,
     ];
-    
-    // Convert back to linear
+
     [
         srgb_to_linear(contrasted[0]),
         srgb_to_linear(contrasted[1]),

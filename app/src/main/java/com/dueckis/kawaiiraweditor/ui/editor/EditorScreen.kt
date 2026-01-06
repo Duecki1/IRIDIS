@@ -10,15 +10,20 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -2190,8 +2195,6 @@ internal fun EditorScreen(
             }
     }
 
-    LaunchedEffect(isDraggingMaskHandle) { if (isDraggingMaskHandle) beginEditInteraction() else endEditInteraction() }
-
     LaunchedEffect(sessionHandle) {
         val handle = sessionHandle
         if (handle == 0L) return@LaunchedEffect
@@ -2915,7 +2918,10 @@ internal fun EditorScreen(
                             onBrushStrokeFinished = onBrushStrokeFinished,
                             onLassoFinished = onLassoFinished,
                             onSubMaskHandleDrag = onSubMaskHandleDrag,
-                            onSubMaskHandleDragStateChange = { isDraggingMaskHandle = it },
+                            onSubMaskHandleDragStateChange = { dragging ->
+                                if (dragging) beginEditInteraction() else endEditInteraction()
+                                isDraggingMaskHandle = dragging
+                            },
                             onRequestAiSubjectOverride = {
                                 val maskId = selectedMaskId
                                 val subId = selectedSubMaskId
@@ -2961,228 +2967,7 @@ internal fun EditorScreen(
                             }
                         )
 
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 16.dp)
-                                .windowInsetsPadding(WindowInsets.statusBars)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (!isPreviewFullscreen) {
-                                    IconButton(
-                                        onClick = {
-                                            coroutineScope.launch {
-                                                val req = lastImmichSidecarSyncRequest
-                                                if (req != null) {
-                                                    uploadIridisSidecarToImmich(req, force = true, showToastOnFailure = true)
-                                                }
-                                                onBackClick()
-                                            }
-                                        },
-                                        colors = IconButtonDefaults.filledIconButtonColors(
-                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
-                                        )
-                                    ) {
-                                        Icon(
-                                            Icons.AutoMirrored.Filled.ArrowBack,
-                                            contentDescription = "Back",
-                                            tint = MaterialTheme.colorScheme.onSurface
-                                        )
-                                    }
-
-                                    Spacer(modifier = Modifier.width(8.dp))
-
-                                    Surface(
-                                        modifier = Modifier.weight(1f),
-                                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
-                                        contentColor = MaterialTheme.colorScheme.onSurface,
-                                        shape = CircleShape
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = galleryItem.fileName,
-                                                style = MaterialTheme.typography.labelLarge,
-                                                color = MaterialTheme.colorScheme.onSurface,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                            if (immichDescriptionSyncEnabled && isImmichSidecarSyncing) {
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                LoadingIndicator(
-                                                    modifier = Modifier.size(12.dp),
-                                                    color = MaterialTheme.colorScheme.primary
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    Spacer(modifier = Modifier.width(8.dp))
-
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        if (isTabletLayout) {
-                                            ExportOverlayButton {
-                                                IconButton(
-                                                    enabled = sessionHandle != 0L && !isExporting,
-                                                    onClick = { },
-                                                    colors = IconButtonDefaults.filledIconButtonColors(
-                                                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
-                                                    )
-                                                ) {
-                                                    Icon(
-                                                        Icons.Filled.Download,
-                                                        contentDescription = "Export",
-                                                        tint = MaterialTheme.colorScheme.onSurface
-                                                    )
-                                                }
-                                            }
-                                        }
-                                        IconButton(
-                                            onClick = { openEditTimeline() },
-                                            colors = IconButtonDefaults.filledIconButtonColors(
-                                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
-                                            )
-                                        ) {
-                                            Icon(
-                                                Icons.Filled.History,
-                                                contentDescription = "Edit timeline",
-                                                tint = MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
-                                        IconButton(
-                                            enabled = sessionHandle != 0L,
-                                            onClick = { showMetadataDialog = true },
-                                            colors = IconButtonDefaults.filledIconButtonColors(
-                                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
-                                            )
-                                        ) {
-                                            Icon(
-                                                Icons.Filled.Info,
-                                                contentDescription = "Info",
-                                                tint = MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
-                                    }
-
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                } else {
-                                    Spacer(modifier = Modifier.weight(1f))
-                                }
-
-                                IconButton(
-                                    onClick = { isPreviewFullscreen = !isPreviewFullscreen },
-                                    colors = IconButtonDefaults.filledIconButtonColors(
-                                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
-                                    )
-                                ) {
-                                    Icon(
-                                        imageVector = if (isPreviewFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-                                        contentDescription = if (isPreviewFullscreen) "Exit fullscreen" else "Enter fullscreen",
-                                        tint = MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-                            }
-                        }
-
-                        Surface(
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .padding(16.dp),
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
-                            contentColor = Color.White
-                        ) {
-                            Row(
-                                modifier = Modifier.height(IntrinsicSize.Min),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                IconButton(
-                                    onClick = ::undo,
-                                    enabled = canUndo,
-                                    colors = IconButtonDefaults.iconButtonColors(
-                                        contentColor = MaterialTheme.colorScheme.onSurface,
-                                        disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                    ),
-                                    modifier = Modifier.size(48.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Rounded.Undo,
-                                        contentDescription = "Undo",
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-
-                                VerticalDivider(
-                                    thickness = 1.dp,
-                                    color = Color.White.copy(alpha = 0.15f),
-                                    modifier = Modifier
-                                        .padding(vertical = 12.dp)
-                                        .fillMaxHeight()
-                                )
-
-                                IconButton(
-                                    onClick = ::redo,
-                                    enabled = canRedo,
-                                    colors = IconButtonDefaults.iconButtonColors(
-                                        contentColor = MaterialTheme.colorScheme.onSurface,
-                                        disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                    ),
-                                    modifier = Modifier.size(48.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Rounded.Redo,
-                                        contentDescription = "Redo",
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .padding(16.dp)
-                        ) {
-                            val interactionSource = remember { MutableInteractionSource() }
-                            val isPressed by interactionSource.collectIsPressedAsState()
-
-                            LaunchedEffect(isPressed) {
-                                isComparingOriginal = isPressed
-                                if (isPressed && originalBitmap == null) {
-                                    originalBitmap = requestIdentityPreview()
-                                }
-                            }
-
-                            Surface(
-                                onClick = { },
-                                interactionSource = interactionSource,
-                                shape = RoundedCornerShape(24.dp),
-                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
-                                contentColor = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(56.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Default.CompareArrows,
-                                        contentDescription = "Compare",
-                                        modifier = Modifier
-                                            .size(26.dp)
-                                            .rotate(45f)
-                                    )
-                                }
-                            }
-                        }
+                        // Legacy overlays replaced by animated variants below.
                     }
                 }
             }
@@ -3344,7 +3129,103 @@ internal fun EditorScreen(
                 )
             }
 
+            @Composable
+            fun UndoRedoOverlay(modifier: Modifier = Modifier) {
+                Surface(
+                    modifier = modifier,
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                    contentColor = Color.White
+                ) {
+                    Row(
+                        modifier = Modifier.height(IntrinsicSize.Min),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        IconButton(
+                            onClick = ::undo,
+                            enabled = canUndo,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            ),
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.Undo,
+                                contentDescription = "Undo",
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        VerticalDivider(
+                            thickness = 1.dp,
+                            color = Color.White.copy(alpha = 0.15f),
+                            modifier = Modifier
+                                .padding(vertical = 12.dp)
+                                .fillMaxHeight()
+                        )
+
+                        IconButton(
+                            onClick = ::redo,
+                            enabled = canRedo,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            ),
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.Redo,
+                                contentDescription = "Redo",
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            @Composable
+            fun CompareOverlay(modifier: Modifier = Modifier) {
+                val interactionSource = remember { MutableInteractionSource() }
+                val isPressed by interactionSource.collectIsPressedAsState()
+
+                LaunchedEffect(isPressed) {
+                    isComparingOriginal = isPressed
+                    if (isPressed && originalBitmap == null) {
+                        originalBitmap = requestIdentityPreview()
+                    }
+                }
+
+                Surface(
+                    onClick = { },
+                    interactionSource = interactionSource,
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    modifier = modifier.size(56.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.CompareArrows,
+                            contentDescription = "Compare",
+                            modifier = Modifier
+                                .size(26.dp)
+                                .rotate(45f)
+                        )
+                    }
+                }
+            }
+
             Box(modifier = Modifier.fillMaxSize()) {
+                val previewScale by animateFloatAsState(
+                    targetValue = if (isPreviewFullscreen) 1f else 0.97f,
+                    animationSpec = spring(
+                        stiffness = Spring.StiffnessMediumLow,
+                        dampingRatio = Spring.DampingRatioNoBouncy
+                    ),
+                    label = "PreviewScale"
+                )
 
                 Column(modifier = Modifier.fillMaxSize()) {
                     Box(
@@ -3353,68 +3234,323 @@ internal fun EditorScreen(
                             .weight(1f)
                     ) {
                         if (isTabletLayout) {
-                            if (isPreviewFullscreen) {
-                                PreviewPane(
-                                    Modifier
-                                        .fillMaxSize()
-                                )
-                            } else {
-                                Row(modifier = Modifier.fillMaxSize()) {
-                                    PreviewPane(
-                                        Modifier
-                                            .weight(1f)
-                                            .fillMaxHeight()
+                            AnimatedContent(
+                                targetState = isPreviewFullscreen,
+                                transitionSpec = {
+                                    (fadeIn(animationSpec = tween(240, easing = LinearOutSlowInEasing)) +
+                                        slideInVertically(
+                                            animationSpec = tween(240, easing = LinearOutSlowInEasing),
+                                            initialOffsetY = { it / 6 }
+                                        )).togetherWith(
+                                        fadeOut(animationSpec = tween(200, easing = LinearOutSlowInEasing)) +
+                                            slideOutVertically(
+                                                animationSpec = tween(200, easing = LinearOutSlowInEasing),
+                                                targetOffsetY = { it / 6 }
+                                            )
                                     )
-                                    Column(
+                                },
+                                label = "TabletFullscreenAnimation"
+                            ) { fullscreen ->
+                                if (fullscreen) {
+                                    Box(
                                         modifier = Modifier
-                                            .width(tabletControlsWidth)
-                                            .fillMaxHeight()
+                                            .fillMaxSize()
+                                            .graphicsLayer {
+                                                scaleX = previewScale
+                                                scaleY = previewScale
+                                            }
                                     ) {
-                                        ControlsPane(
+                                        PreviewPane(Modifier.fillMaxSize())
+                                        UndoRedoOverlay(
                                             Modifier
-                                                .weight(1f)
-                                                .fillMaxWidth()
+                                                .align(Alignment.BottomStart)
+                                                .padding(16.dp)
                                         )
-                                        TabletBottomBar(
+                                        CompareOverlay(
+                                            Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(16.dp)
+                                        )
+                                    }
+                                } else {
+                                    Row(modifier = Modifier.fillMaxSize()) {
+                                        Box(
                                             modifier = Modifier
-                                                .fillMaxWidth()
-                                        )
+                                                .weight(1f)
+                                                .fillMaxHeight()
+                                                .graphicsLayer {
+                                                    scaleX = previewScale
+                                                    scaleY = previewScale
+                                                }
+                                        ) {
+                                            PreviewPane(Modifier.fillMaxSize())
+                                            UndoRedoOverlay(
+                                                Modifier
+                                                    .align(Alignment.BottomStart)
+                                                    .padding(16.dp)
+                                            )
+                                            CompareOverlay(
+                                                Modifier
+                                                    .align(Alignment.BottomEnd)
+                                                    .padding(16.dp)
+                                            )
+                                        }
+                                        Column(
+                                            modifier = Modifier
+                                                .width(tabletControlsWidth)
+                                                .fillMaxHeight()
+                                        ) {
+                                            ControlsPane(
+                                                Modifier
+                                                    .weight(1f)
+                                                    .fillMaxWidth()
+                                            )
+                                            TabletBottomBar(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                            )
+                                        }
                                     }
                                 }
                             }
                         } else {
-                            Column(modifier = Modifier.fillMaxSize()) {
-                                PreviewPane(
-                                    Modifier
-                                        .weight(1f)
-                                        .fillMaxWidth()
-                                )
-                                if (!isPreviewFullscreen) {
-                                    ControlsPane(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .height(bottomControlsHeight)
-                                    )
-                                }
-                            }
-                            if (!isPreviewFullscreen) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .animateContentSize()
+                            ) {
                                 Box(
                                     modifier = Modifier
-                                        .align(Alignment.BottomCenter)
-                                        .padding(bottom = bottomToolbarPadding)
-                                        .windowInsetsPadding(WindowInsets.navigationBars)
-                                        .zIndex(1f)
+                                        .weight(1f)
+                                        .fillMaxWidth()
+                                        .graphicsLayer {
+                                            scaleX = previewScale
+                                            scaleY = previewScale
+                                        }
                                 ) {
-                                    PanelToolbar()
+                                    PreviewPane(Modifier.fillMaxSize())
+                                    UndoRedoOverlay(
+                                        Modifier
+                                            .align(Alignment.BottomStart)
+                                            .padding(16.dp)
+                                    )
+                                    CompareOverlay(
+                                        Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .padding(16.dp)
+                                    )
+                                }
+                                AnimatedContent(
+                                    targetState = isPreviewFullscreen,
+                                    transitionSpec = {
+                                        (slideInVertically(
+                                            animationSpec = tween(260, easing = LinearOutSlowInEasing),
+                                            initialOffsetY = { it / 2 }
+                                        ) + fadeIn(animationSpec = tween(200))).togetherWith(
+                                            slideOutVertically(
+                                                animationSpec = tween(220, easing = LinearOutSlowInEasing),
+                                                targetOffsetY = { it / 2 }
+                                            ) + fadeOut(animationSpec = tween(160))
+                                        )
+                                    },
+                                    label = "PhoneControlsVisibility"
+                                ) { fullscreen ->
+                                    if (!fullscreen) {
+                                        ControlsPane(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .height(bottomControlsHeight)
+                                        )
+                                    } else {
+                                        Spacer(Modifier.height(0.dp))
+                                    }
+                                }
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = bottomToolbarPadding)
+                                    .windowInsetsPadding(WindowInsets.navigationBars)
+                                    .zIndex(1f)
+                            ) {
+                                AnimatedContent(
+                                    targetState = isPreviewFullscreen,
+                                    transitionSpec = {
+                                        (slideInVertically(
+                                            animationSpec = tween(260, easing = LinearOutSlowInEasing),
+                                            initialOffsetY = { it }
+                                        ) + fadeIn(animationSpec = tween(200))).togetherWith(
+                                            slideOutVertically(
+                                                animationSpec = tween(220, easing = LinearOutSlowInEasing),
+                                                targetOffsetY = { it }
+                                            ) + fadeOut(animationSpec = tween(160))
+                                        )
+                                    },
+                                    label = "PanelToolbarVisibility"
+                                ) { fullscreen ->
+                                    if (!fullscreen) {
+                                        PanelToolbar()
+                                    }
                                 }
                             }
                         }
                     }
                 }
 
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 16.dp)
+                        .windowInsetsPadding(WindowInsets.statusBars),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        AnimatedContent(
+                            targetState = isPreviewFullscreen,
+                            transitionSpec = {
+                                (slideInVertically(
+                                    animationSpec = tween(220, easing = LinearOutSlowInEasing),
+                                    initialOffsetY = { -it / 2 }
+                                ) + fadeIn(animationSpec = tween(200))).togetherWith(
+                                    slideOutVertically(
+                                        animationSpec = tween(200, easing = LinearOutSlowInEasing),
+                                        targetOffsetY = { -it / 2 }
+                                    ) + fadeOut(animationSpec = tween(160))
+                                )
+                            },
+                            label = "TopChromeVisibility"
+                        ) { fullscreen ->
+                            if (!fullscreen) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    IconButton(
+                                        onClick = {
+                                            coroutineScope.launch {
+                                                val req = lastImmichSidecarSyncRequest
+                                                if (req != null) {
+                                                    uploadIridisSidecarToImmich(req, force = true, showToastOnFailure = true)
+                                                }
+                                                onBackClick()
+                                            }
+                                        },
+                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                                        )
+                                    ) {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.ArrowBack,
+                                            contentDescription = "Back",
+                                            tint = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
 
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
+                                        contentColor = MaterialTheme.colorScheme.onSurface,
+                                        shape = CircleShape
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = galleryItem.fileName,
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            if (immichDescriptionSyncEnabled && isImmichSidecarSyncing) {
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                LoadingIndicator(
+                                                    modifier = Modifier.size(12.dp),
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        if (isTabletLayout) {
+                                            ExportOverlayButton {
+                                                IconButton(
+                                                    enabled = sessionHandle != 0L && !isExporting,
+                                                    onClick = { },
+                                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                                                    )
+                                                ) {
+                                                    Icon(
+                                                        Icons.Filled.Download,
+                                                        contentDescription = "Export",
+                                                        tint = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        IconButton(
+                                            onClick = { openEditTimeline() },
+                                            colors = IconButtonDefaults.filledIconButtonColors(
+                                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                                            )
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.History,
+                                                contentDescription = "Edit timeline",
+                                                tint = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                        IconButton(
+                                            enabled = sessionHandle != 0L,
+                                            onClick = { showMetadataDialog = true },
+                                            colors = IconButtonDefaults.filledIconButtonColors(
+                                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                                            )
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Info,
+                                                contentDescription = "Info",
+                                                tint = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    IconButton(
+                        onClick = { isPreviewFullscreen = !isPreviewFullscreen },
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                        )
+                    ) {
+                        Icon(
+                            imageVector = if (isPreviewFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+                            contentDescription = if (isPreviewFullscreen) "Exit fullscreen" else "Enter fullscreen",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
                 Surface(
-                    modifier = Modifier.fillMaxWidth().windowInsetsTopHeight(WindowInsets.statusBars).align(Alignment.TopCenter),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .windowInsetsTopHeight(WindowInsets.statusBars)
+                        .align(Alignment.TopCenter),
                     color = MaterialTheme.colorScheme.surface
                 ) {}
             }
