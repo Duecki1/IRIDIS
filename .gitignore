@@ -11,6 +11,13 @@
 *.apk
 *.ap_
 *.aab
+*.dex
+
+# Build outputs
+app/build/
+build/
+*/build/
+out/
 
 # Android Studio Navigation editor temp files
 .navigation/
@@ -93,7 +100,9 @@ rust/Cargo.lock
 *.pdb
 
 # Generated JNI libs (built from Rust during Gradle builds)
-app/src/main/jniLibs/**/libkawaiiraweditor.so
+app/src/main/jniLibs/
+*.so
+*.a
 
 # OS
 .DS_Store
@@ -107,6 +116,10 @@ Thumbs.db
 # Kotlin
 .kotlin/
 *.kotlin_module
+*.kotlin_builtins
+
+# Compose
+.compose-cache/
 
 # Editor directories and files
 .vscode/*
