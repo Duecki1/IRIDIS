@@ -136,25 +136,25 @@ internal fun EditorControlsContent(
             }
 
             EditorPanelTab.Effects -> {
-                ScrollableControlsColumn(modifier = contentModifier) {
-                    ExpressiveSectionContainer(title = "Vignette", subtitle = "Post-crop styling") {
-                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            vignetteSection.forEach { control ->
-                                AdjustmentSlider(
-                                    label = control.label,
-                                    value = adjustments.valueFor(control.field),
-                                    range = control.range,
-                                    step = control.step,
-                                    defaultValue = control.defaultValue,
-                                    formatter = control.formatter,
-                                    onValueChange = { onAdjustmentsChange(adjustments.withValue(control.field, it)) },
-                                    onInteractionStart = onBeginEditInteraction,
-                                    onInteractionEnd = onEndEditInteraction
-                                )
-                            }
-                        }
-                    }
+                val effectSections = remember {
+                    listOf(
+                        LightToneSection(
+                            key = "Vignette",
+                            compactLabel = "Vignette",
+                            controls = vignetteSection
+                        )
+                    )
                 }
+
+                LightToneTabbedContent(
+                    sections = effectSections,
+                    adjustments = adjustments,
+                    onAdjustmentsChange = onAdjustmentsChange,
+                    onBeginEditInteraction = onBeginEditInteraction,
+                    onEndEditInteraction = onEndEditInteraction,
+                    showToneCurveProfileSwitcher = false,
+                    modifier = contentModifier
+                )
             }
 
             EditorPanelTab.Masks -> {

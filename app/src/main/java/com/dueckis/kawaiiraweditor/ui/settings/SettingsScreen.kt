@@ -5,6 +5,7 @@ package com.dueckis.kawaiiraweditor.ui.settings
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -112,6 +113,14 @@ internal fun SettingsScreen(
         SettingsSection.Immich -> "Immich Settings"
     }
     val isMainSection = activeSection == SettingsSection.Main
+
+    BackHandler {
+        if (!isMainSection) {
+            activeSection = SettingsSection.Main
+        } else {
+            onBackClick()
+        }
+    }
 
     @Composable
     fun MainSettings(contentPadding: PaddingValues) {
